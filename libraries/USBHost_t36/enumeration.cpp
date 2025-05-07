@@ -91,6 +91,8 @@ void USBHost::driver_ready_for_device(USBDriver *driver)
 		while (last->next) last = last->next;
 		last->next = driver;
 	}
+
+	printf("USBHost::driver_ready_for_device: driver %p registered\n", driver);
 }
 
 // Create a new device and begin the enumeration process

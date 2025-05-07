@@ -17,6 +17,37 @@
 #include <string.h>
 #include "debug/printf.h"
 
+#include "startup_usbhost.h" // For usb_proxy_info_t and g_proxy_info declaration
+extern usb_proxy_info_t g_proxy_info; 
+
+#ifndef USB_DESCRIPTOR_DEVICE
+#define USB_DESCRIPTOR_DEVICE 1
+#endif
+#ifndef USB_DESCRIPTOR_CONFIGURATION
+#define USB_DESCRIPTOR_CONFIGURATION 2
+#endif
+#ifndef USB_DESCRIPTOR_STRING
+#define USB_DESCRIPTOR_STRING 3
+#endif
+#ifndef USB_DESCRIPTOR_INTERFACE
+#define USB_DESCRIPTOR_INTERFACE 4
+#endif
+#ifndef USB_DESCRIPTOR_ENDPOINT
+#define USB_DESCRIPTOR_ENDPOINT 5
+#endif
+
+#ifndef LSB
+#define LSB(n) ((n) & 255)
+#endif
+#ifndef MSB
+#define MSB(n) (((n) >> 8) & 255)
+#endif
+
+#ifndef CONFIG_DESC_SIZE
+#warning "CONFIG_DESC_SIZE was not defined by usb_desc.h! Using a fallback value."
+#define CONFIG_DESC_SIZE 512 // A reasonably large fallback, but might be wrong.
+#endif
+
 //#define LOG_SIZE  20
 //uint32_t transfer_log_head=0;
 //uint32_t transfer_log_count=0;
@@ -409,21 +440,30 @@ transfer_t endpoint0_transfer_ack  __attribute__ ((aligned(32)));;
 
 static uint8_t reply_buffer[8];
 
+// This function is typically static within usb_dev.c
 static void endpoint0_setup(uint64_t setupdata)
 {
-	setup_t setup;
+	setup_t setup; // From usb_dev.h or local struct in usb_dev.c
 	uint32_t endpoint, dir, ctrl;
-	const usb_descriptor_list_t *list;
+	const usb_descriptor_list_t *list; // From usb_desc.h
+    // reply_buffer and usb_descriptor_buffer are global in usb_dev.c
+    // endpoint0_setupdata, endpoint0_buffer, usb_high_speed, usb_configuration are also global/static in usb_dev.c
 
 	setup.bothwords = setupdata;
-	switch (setup.wRequestAndType) {
-	  case 0x0500: // SET_ADDRESS
-		endpoint0_receive(NULL, 0, 0);
+
+	printf("EP0: RAW_SETUP Recv: Type=0x%02X Req=0x%02X wVal=0x%04X wIdx=0x%04X wLen=%u\n",
+		   setup.bmRequestType, setup.bRequest, setup.wValue, setup.wIndex, setup.wLength);
+
+	switch (setup.wRequestAndType) { 
+	  case 0x0500: // SET_ADDRESS 
+        printf("EP0: SET_ADDRESS, Val=0x%04X\n", setup.wValue);
+		endpoint0_receive(NULL, 0, 0); 
 		USB1_DEVICEADDR = USB_DEVICEADDR_USBADR(setup.wValue) | USB_DEVICEADDR_USBADRA;
 		return;
-	  case 0x0900: // SET_CONFIGURATION
+
+	  case 0x0900: // SET_CONFIGURATION 
+        printf("EP0: SET_CONFIGURATION, Val=0x%04X\n", setup.wValue);
 		usb_configuration = setup.wValue;
-		// configure all other endpoints
 		#if defined(ENDPOINT2_CONFIG)
 		USB1_ENDPTCTRL2 = ENDPOINT2_CONFIG;
 		#endif
@@ -442,9 +482,10 @@ static void endpoint0_setup(uint64_t setupdata)
 		#if defined(ENDPOINT7_CONFIG)
 		USB1_ENDPTCTRL7 = ENDPOINT7_CONFIG;
 		#endif
+		
 		#if defined(CDC_STATUS_INTERFACE) && defined(CDC_DATA_INTERFACE)
 		usb_serial_configure();
-		#elif defined(SEREMU_INTERFACE)
+		#elif defined(SEREMU_INTERFACE) 
 		usb_seremu_configure();
 		#endif
 		#if defined(CDC2_STATUS_INTERFACE) && defined(CDC2_DATA_INTERFACE)
@@ -480,100 +521,233 @@ static void endpoint0_setup(uint64_t setupdata)
 		#if defined(MTP_INTERFACE)
 		usb_mtp_configure();
 		#endif
-		#if defined(EXPERIMENTAL_INTERFACE)
-		memset(endpoint_queue_head + 2, 0, sizeof(endpoint_t) * 2);
-		endpoint_queue_head[2].pointer4 = 0xB8C6CF5D;
-		endpoint_queue_head[3].pointer4 = 0x74D59319;
-		#endif
-		endpoint0_receive(NULL, 0, 0);
+		endpoint0_receive(NULL, 0, 0); 
 		return;
-	  case 0x0880: // GET_CONFIGURATION
+
+	  case 0x0880: // GET_CONFIGURATION 
+        printf("EP0: GET_CONFIGURATION\n");
 		reply_buffer[0] = usb_configuration;
 		endpoint0_transmit(reply_buffer, 1, 0);
 		return;
-	  case 0x0080: // GET_STATUS (device)
-		reply_buffer[0] = 0;
-		reply_buffer[1] = 0;
-		endpoint0_transmit(reply_buffer, 2, 0);
-		return;
-	  case 0x0082: // GET_STATUS (endpoint)
-		endpoint = setup.wIndex & 0x7F;
-		if (endpoint > 7) break;
-		dir = setup.wIndex & 0x80;
-		ctrl = *((uint32_t *)&USB1_ENDPTCTRL0 + endpoint);
-		reply_buffer[0] = 0;
-		reply_buffer[1] = 0;
-		if ((dir && (ctrl & USB_ENDPTCTRL_TXS)) || (!dir && (ctrl & USB_ENDPTCTRL_RXS))) {
-			reply_buffer[0] = 1;
-		}
-		endpoint0_transmit(reply_buffer, 2, 0);
-		return;
-	  case 0x0302: // SET_FEATURE (endpoint)
-		endpoint = setup.wIndex & 0x7F;
-		if (endpoint > 7) break;
-		dir = setup.wIndex & 0x80;
-		if (dir) {
-			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) |= USB_ENDPTCTRL_TXS;
-		} else {
-			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) |= USB_ENDPTCTRL_RXS;
-		}
-		endpoint0_receive(NULL, 0, 0);
-		return;
-	  case 0x0102: // CLEAR_FEATURE (endpoint)
-		endpoint = setup.wIndex & 0x7F;
-		if (endpoint > 7) break;
-		dir = setup.wIndex & 0x80;
-		if (dir) {
-			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) &= ~USB_ENDPTCTRL_TXS;
-		} else {
-			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) &= ~USB_ENDPTCTRL_RXS;
-		}
-		endpoint0_receive(NULL, 0, 0);
-		return;
-#ifdef EXPERIMENTAL_INTERFACE
-	  case 0xF8C0: // GET_MS_DESCRIPTOR (bRequest=0xF8 because microsoft_os_string_desc)
-		if ((setup.wIndex & 0xFF00) != 0) break; // 1=Genre, 4=Compat ID, 5=Properties
-		setup.wIndex |= 0xEE00; // alter wIndex and treat as normal USB descriptor
-		__attribute__((fallthrough));
-#endif
-	  case 0x0680: // GET_DESCRIPTOR
-	  case 0x0681:
-		for (list = usb_descriptor_list; list->addr != NULL; list++) {
-			if (setup.wValue == list->wValue && setup.wIndex == list->wIndex) {
-				uint32_t datalen;
-				if ((setup.wValue >> 8) == 3) {
-					// for string descriptors, use the descriptor's
-					// length field, allowing runtime configured length.
-					datalen = *(list->addr);
-				} else {
-					datalen = list->length;
-				}
-				if (datalen > setup.wLength) datalen = setup.wLength;
 
-				// copy the descriptor, from PROGMEM to DMAMEM
-				if (setup.wValue == 0x200) {
-					// config descriptor needs to adapt to speed
-					const uint8_t *src = usb_config_descriptor_12;
-					if (usb_high_speed) src = usb_config_descriptor_480;
-					memcpy(usb_descriptor_buffer, src, datalen);
-				} else if (setup.wValue == 0x700) {
-					// other speed config also needs to adapt
-					const uint8_t *src = usb_config_descriptor_480;
-					if (usb_high_speed) src = usb_config_descriptor_12;
-					memcpy(usb_descriptor_buffer, src, datalen);
-					usb_descriptor_buffer[1] = 7;
-				} else {
-					memcpy(usb_descriptor_buffer, list->addr, datalen);
-				}
-				// prep transmit
-				arm_dcache_flush_delete(usb_descriptor_buffer, datalen);
-				endpoint0_transmit(usb_descriptor_buffer, datalen, 0);
-				return;
-			}
+	  case 0x0080: // GET_STATUS (Device) 
+        printf("EP0: GET_STATUS (Device)\n");
+		reply_buffer[0] = 0; 
+		reply_buffer[1] = 0; 
+		endpoint0_transmit(reply_buffer, 2, 0);
+		return;
+
+	  case 0x0082: // GET_STATUS (Endpoint) 
+		endpoint = setup.wIndex & 0x7F;
+        printf("EP0: GET_STATUS (Endpoint %u)\n", endpoint);
+		if (endpoint > NUM_ENDPOINTS) goto stall_ep0_printf; 
+		dir = setup.wIndex & 0x80; 
+		ctrl = *((uint32_t *)&USB1_ENDPTCTRL0 + endpoint); 
+		reply_buffer[0] = 0; 
+		reply_buffer[1] = 0; 
+		if (dir) { 
+			if (ctrl & USB_ENDPTCTRL_TXS) reply_buffer[0] = 1; 
+		} else { 
+			if (ctrl & USB_ENDPTCTRL_RXS) reply_buffer[0] = 1; 
 		}
-		break;
+		endpoint0_transmit(reply_buffer, 2, 0);
+		return;
+
+	  case 0x0302: // SET_FEATURE (Endpoint) - Halt 
+        printf("EP0: SET_FEATURE (Endpoint %u), wValue=0x%04X\n", setup.wIndex & 0x7F, setup.wValue);
+		if (setup.wValue != 0) goto stall_ep0_printf; 
+		endpoint = setup.wIndex & 0x7F;
+		if (endpoint == 0 || endpoint > NUM_ENDPOINTS) goto stall_ep0_printf;
+		dir = setup.wIndex & 0x80;
+		if (dir) { 
+			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) |= (USB_ENDPTCTRL_TXS | USB_ENDPTCTRL_TXR);
+		} else { 
+			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) |= (USB_ENDPTCTRL_RXS | USB_ENDPTCTRL_RXR);
+		}
+		endpoint0_receive(NULL, 0, 0); 
+		return;
+
+	  case 0x0102: // CLEAR_FEATURE (Endpoint) - Clear Halt 
+        printf("EP0: CLEAR_FEATURE (Endpoint %u), wValue=0x%04X\n", setup.wIndex & 0x7F, setup.wValue);
+		if (setup.wValue != 0) goto stall_ep0_printf;
+		endpoint = setup.wIndex & 0x7F;
+        if (endpoint == 0 || endpoint > NUM_ENDPOINTS) goto stall_ep0_printf;
+		dir = setup.wIndex & 0x80;
+		if (dir) { 
+			if (*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) & USB_ENDPTCTRL_TXS) {
+                 *((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) = 
+                    (*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) & ~USB_ENDPTCTRL_TXS) | USB_ENDPTCTRL_TXR;
+            }
+		} else { 
+             if (*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) & USB_ENDPTCTRL_RXS) {
+			    *((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) = 
+                    (*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) & ~USB_ENDPTCTRL_RXS) | USB_ENDPTCTRL_RXR;
+            }
+		}
+		endpoint0_receive(NULL, 0, 0); 
+		return;
+
+#ifdef EXPERIMENTAL_INTERFACE 
+	  case 0xC0F8: 
+        printf("EP0: GET_MS_DESCRIPTOR Attempt wIndex=0x%04X\n", setup.wIndex);
+        if (!g_proxy_info.valid) { 
+             for (list = usb_descriptor_list; list->addr != NULL; list++) {
+                if (setup.wIndex == list->wIndex && (list->wValue == 0x00EE || (list->wValue >> 8) == 0xF8) ) { 
+                    printf("EP0: Found MS OS Descriptor in list for wIndex 0x%04X\n", setup.wIndex);
+                    uint32_t datalen = list->length;
+                    if (datalen > setup.wLength) datalen = setup.wLength;
+                    if (datalen <= CONFIG_DESC_SIZE) { // Use CONFIG_DESC_SIZE for buffer check
+                        memcpy(usb_descriptor_buffer, list->addr, datalen);
+                        arm_dcache_flush_delete(usb_descriptor_buffer, datalen);
+                        endpoint0_transmit(usb_descriptor_buffer, datalen, 0);
+                    } else { printf("EP0: MS OS Desc too large!\n"); goto stall_ep0_printf; }
+                    return;
+                }
+            }
+        }
+        printf("EP0: GET_MS_DESCRIPTOR not handled/spoofing, STALL\n");
+        goto stall_ep0_printf; 
+#endif
+
+	  case 0x0680: 
+	  case 0x0681: 
+		{ 
+            printf("EP0: GET_DESCRIPTOR Entered. wValue=0x%04X, wIndex=0x%04X\n", setup.wValue, setup.wIndex);
+            uint8_t desc_type_val = (setup.wValue >> 8);
+            uint8_t desc_index_val = (setup.wValue & 0xFF);
+
+            if (g_proxy_info.valid) {
+                printf("EP0: g_proxy_info is valid. Checking for spoofable descriptor...\n");
+                if (desc_type_val == USB_DESCRIPTOR_DEVICE) { 
+                    printf("EP0: Matched Device Desc for spoofing. VID:0x%04X PID:0x%04X\n", 
+                           g_proxy_info.idVendor, g_proxy_info.idProduct);
+                    
+                    if (CONFIG_DESC_SIZE < 18) { // Use CONFIG_DESC_SIZE
+                        printf("EP0: FATAL - usb_descriptor_buffer (size %u) too small for device desc!\n", (unsigned int)CONFIG_DESC_SIZE);
+                        goto stall_ep0_printf;
+                    }
+
+                    usb_descriptor_buffer[0] = 18;    
+                    usb_descriptor_buffer[1] = USB_DESCRIPTOR_DEVICE;
+                    usb_descriptor_buffer[2] = 0x00; usb_descriptor_buffer[3] = 0x02; 
+                    usb_descriptor_buffer[4] = g_proxy_info.bDeviceClass;
+                    usb_descriptor_buffer[5] = g_proxy_info.bDeviceSubClass;
+                    usb_descriptor_buffer[6] = g_proxy_info.bDeviceProtocol;
+                    usb_descriptor_buffer[7] = g_proxy_info.bMaxPacketSize0;
+                    usb_descriptor_buffer[8] = LSB(g_proxy_info.idVendor);
+                    usb_descriptor_buffer[9] = MSB(g_proxy_info.idVendor);
+                    usb_descriptor_buffer[10] = LSB(g_proxy_info.idProduct);
+                    usb_descriptor_buffer[11] = MSB(g_proxy_info.idProduct);
+                    usb_descriptor_buffer[12] = LSB(g_proxy_info.bcdDevice);
+                    usb_descriptor_buffer[13] = MSB(g_proxy_info.bcdDevice);
+                    usb_descriptor_buffer[14] = 1; 
+                    usb_descriptor_buffer[15] = 2; 
+                    usb_descriptor_buffer[16] = 3; 
+                    usb_descriptor_buffer[17] = 1; 
+
+                    uint16_t len_to_send = 18;
+                    if (len_to_send > setup.wLength) len_to_send = setup.wLength;
+                    
+                    arm_dcache_flush_delete(usb_descriptor_buffer, len_to_send);
+                    endpoint0_transmit(usb_descriptor_buffer, len_to_send, 0);
+                    return; 
+                } 
+                else if (desc_type_val == USB_DESCRIPTOR_STRING) { 
+                    printf("EP0: Matched String Desc type for spoofing (index %u).\n", desc_index_val);
+                    const char* spoof_str_ptr = NULL;
+                    if (desc_index_val == 0) { 
+                        printf("EP0: GET_DESCRIPTOR - String 0 (LangIDs)\n");
+                        static const uint8_t lang_ids_desc[] = {4, USB_DESCRIPTOR_STRING, 0x09, 0x04}; 
+                        uint16_t len_to_send = sizeof(lang_ids_desc);
+                        if (len_to_send > setup.wLength) len_to_send = setup.wLength;
+                        if (len_to_send <= CONFIG_DESC_SIZE) { // Use CONFIG_DESC_SIZE
+                            memcpy(usb_descriptor_buffer, lang_ids_desc, len_to_send);
+                            arm_dcache_flush_delete(usb_descriptor_buffer, len_to_send);
+                            endpoint0_transmit(usb_descriptor_buffer, len_to_send, 0);
+                        } else { printf("EP0: LangID desc too large for buffer!\n"); goto stall_ep0_printf; }
+                        return; 
+                    }
+                    else if (desc_index_val == 1) spoof_str_ptr = g_proxy_info.manufacturerString;
+                    else if (desc_index_val == 2) spoof_str_ptr = g_proxy_info.productString;
+                    else if (desc_index_val == 3) spoof_str_ptr = g_proxy_info.serialNumberString;
+
+                    if (spoof_str_ptr != NULL && spoof_str_ptr[0] != '\0') {
+                        printf("EP0: GET_DESCRIPTOR - String %u (Spoofing '%s')\n", desc_index_val, spoof_str_ptr);
+                        uint16_t str_len_chars = strlen(spoof_str_ptr);
+                        uint16_t desc_payload_len_bytes = str_len_chars * 2;
+                        uint16_t total_desc_len_bytes = 2 + desc_payload_len_bytes;
+                        
+                        if (total_desc_len_bytes > CONFIG_DESC_SIZE) { // Use CONFIG_DESC_SIZE
+                            printf("EP0 WARN: Spoof string desc for index %u ('%s') too long! Truncating.\n", desc_index_val, spoof_str_ptr);
+                            str_len_chars = (CONFIG_DESC_SIZE - 2) / 2; // Use CONFIG_DESC_SIZE
+                            total_desc_len_bytes = 2 + str_len_chars * 2;
+                        }
+
+                        usb_descriptor_buffer[0] = total_desc_len_bytes; 
+                        usb_descriptor_buffer[1] = USB_DESCRIPTOR_STRING;   
+                        for (uint16_t k = 0; k < str_len_chars; ++k) {
+                            usb_descriptor_buffer[2 + k * 2] = spoof_str_ptr[k]; 
+                            usb_descriptor_buffer[3 + k * 2] = 0;                
+                        }
+                        
+                        uint16_t len_to_send = total_desc_len_bytes;
+                        if (len_to_send > setup.wLength) len_to_send = setup.wLength;
+
+                        arm_dcache_flush_delete(usb_descriptor_buffer, len_to_send);
+                        endpoint0_transmit(usb_descriptor_buffer, len_to_send, 0);
+                        return; 
+                    } else {
+                         printf("EP0: String index %u not spoofed or empty string. Falling to default.\n", desc_index_val);
+                    }
+                } else {
+                     printf("EP0: Not spoofing type 0x%X. Falling to default list.\n", desc_type_val);
+                }
+            } else { 
+                printf("EP0: g_proxy_info NOT valid. Using default usb_descriptor_list.\n");
+            }
+
+            printf("EP0: Searching usb_descriptor_list for wValue=0x%04X wIndex=0x%04X\n", setup.wValue, setup.wIndex);
+            for (list = usb_descriptor_list; list->addr != NULL; list++) {
+                if (setup.wValue == list->wValue && setup.wIndex == list->wIndex) {
+                    printf("EP0: Found in usb_descriptor_list! Addr: %p Len: %u\n", (void*)list->addr, list->length);
+                    uint32_t datalen;
+                    if ((setup.wValue >> 8) == 3) { 
+                        datalen = *(list->addr); 
+                    } else {
+                        datalen = list->length;
+                    }
+                    if (datalen > setup.wLength) datalen = setup.wLength;
+
+                    if (datalen > CONFIG_DESC_SIZE) { // General check against buffer size
+                        printf("EP0 ERROR: Requested list descriptor (len %u) too large for usb_descriptor_buffer (size %u)!\n", 
+                               (unsigned int)datalen, (unsigned int)CONFIG_DESC_SIZE);
+                        goto stall_ep0_printf;
+                    }
+
+                    if (setup.wValue == 0x0200) { 
+                        const uint8_t *src = usb_config_descriptor_12; 
+                        if (usb_high_speed) src = usb_config_descriptor_480; 
+                        memcpy(usb_descriptor_buffer, src, datalen);
+                    } else if (setup.wValue == 0x0700) { 
+                        const uint8_t *src = usb_config_descriptor_480;
+                        if (usb_high_speed) src = usb_config_descriptor_12;
+                        memcpy(usb_descriptor_buffer, src, datalen);
+                        usb_descriptor_buffer[1] = 7; 
+                    } else { 
+                        memcpy(usb_descriptor_buffer, list->addr, datalen);
+                    }
+                    arm_dcache_flush_delete(usb_descriptor_buffer, datalen);
+                    endpoint0_transmit(usb_descriptor_buffer, datalen, 0);
+                    return;
+                }
+            }
+            printf("EP0: Descriptor NOT FOUND in usb_descriptor_list for wVal=0x%04X wIdx=0x%04X\n", setup.wValue, setup.wIndex);
+		} 
+		break; 
+
 #if defined(CDC_STATUS_INTERFACE)
-	  case 0x2221: // CDC_SET_CONTROL_LINE_STATE
+	  case 0x2221: 
+        printf("EP0: CDC_SET_CONTROL_LINE_STATE, wValue=0x%04X, wIndex=0x%04X\n", setup.wValue, setup.wIndex);
 		#ifdef CDC_STATUS_INTERFACE
 		if (setup.wIndex == CDC_STATUS_INTERFACE) {
 			usb_cdc_line_rtsdtr_millis = systick_millis_count;
@@ -593,128 +767,136 @@ static void endpoint0_setup(uint64_t setupdata)
 		}
 		#endif
 		__attribute__((fallthrough));
-		// fall through to next case, to always send ZLP ACK
 	  case 0x2321: // CDC_SEND_BREAK
+        printf("EP0: CDC_SEND_BREAK, wValue=0x%04X, wIndex=0x%04X\n", setup.wValue, setup.wIndex);
 		endpoint0_receive(NULL, 0, 0);
 		return;
 	  case 0x2021: // CDC_SET_LINE_CODING
-		if (setup.wLength != 7) break;
-		endpoint0_setupdata.bothwords = setupdata;
-		endpoint0_receive(endpoint0_buffer, 7, 1);
+        printf("EP0: CDC_SET_LINE_CODING, wIndex=0x%04X, wLength=%u\n", setup.wIndex, setup.wLength);
+		if (setup.wLength != 7) { goto stall_ep0_printf;}
+		endpoint0_setupdata.bothwords = setupdata; 
+		endpoint0_receive(endpoint0_buffer, 7, 1); 
 		return;
-#endif
-#if defined(SEREMU_INTERFACE) || defined(KEYBOARD_INTERFACE)
-	  case 0x0921: // HID SET_REPORT
-		if (setup.wLength <= sizeof(endpoint0_buffer)) {
-			//printf("hid set report %x %x\n", setup.word1, setup.word2);
+#endif 
+
+#if defined(SEREMU_INTERFACE) || defined(KEYBOARD_INTERFACE) 
+	  case 0x0921: // HID SET_REPORT 
+		if (setup.wLength <= sizeof(endpoint0_buffer)) { // sizeof on global/static array is OK
+			printf("EP0: HID SET_REPORT (wVal=0x%X, wIdx=0x%X, wLen=%u)\n", setup.wValue, setup.wIndex, setup.wLength);
 			endpoint0_setupdata.bothwords = setup.bothwords;
-			endpoint0_buffer[0] = 0xE9;
-			endpoint0_receive(endpoint0_buffer, setup.wLength, 1);
+			endpoint0_receive(endpoint0_buffer, setup.wLength, 1); 
 			return;
 		}
-		break;
+        printf("EP0: HID SET_REPORT too long (%u > %u), STALL\n", setup.wLength, (unsigned int)sizeof(endpoint0_buffer));
+		break; 
 #endif
+
 #if defined(AUDIO_INTERFACE)
-	  case 0x0B01: // SET_INTERFACE (alternate setting)
+	  case 0x0B01: 
 		if (setup.wIndex == AUDIO_INTERFACE+1) {
 			usb_audio_transmit_setting = setup.wValue;
-			if (usb_audio_transmit_setting > 0) {
-				// TODO: set up AUDIO_TX_ENDPOINT to transmit
-			}
-			endpoint0_receive(NULL, 0, 0);
-			return;
+			endpoint0_receive(NULL, 0, 0); return;
 		} else if (setup.wIndex == AUDIO_INTERFACE+2) {
 			usb_audio_receive_setting = setup.wValue;
-			endpoint0_receive(NULL, 0, 0);
-			return;
+			endpoint0_receive(NULL, 0, 0); return;
 		}
+		printf("EP0: SET_INTERFACE for unknown audio iface %u, STALL\n", setup.wIndex);
 		break;
-	  case 0x0A81: // GET_INTERFACE (alternate setting)
+	  case 0x0A81: 
 		if (setup.wIndex == AUDIO_INTERFACE+1) {
 			endpoint0_buffer[0] = usb_audio_transmit_setting;
-			endpoint0_transmit(endpoint0_buffer, 1, 0);
-			return;
+			endpoint0_transmit(endpoint0_buffer, 1, 0); return;
 		} else if (setup.wIndex == AUDIO_INTERFACE+2) {
 			endpoint0_buffer[0] = usb_audio_receive_setting;
-			endpoint0_transmit(endpoint0_buffer, 1, 0);
-			return;
+			endpoint0_transmit(endpoint0_buffer, 1, 0); return;
 		}
+		printf("EP0: GET_INTERFACE for unknown audio iface %u, STALL\n", setup.wIndex);
 		break;
-	  case 0x0121: // SET FEATURE
-	  case 0x0221:
-	  case 0x0321:
-	  case 0x0421:
-		//printf("set_feature, word1=%x, len=%d\n", setup.word1, setup.wLength);
+	  case 0x0121: case 0x0221: case 0x0321: case 0x0421:
+		printf("EP0: Audio SET_FEATURE (type 0x%02X, wVal=0x%X, wIdx=0x%X, wLen=%u)\n", setup.bmRequestType, setup.wValue, setup.wIndex, setup.wLength);
 		if (setup.wLength <= sizeof(endpoint0_buffer)) {
 			endpoint0_setupdata.bothwords = setupdata;
 			endpoint0_receive(endpoint0_buffer, setup.wLength, 1);
-			return; // handle these after ACK
+			return; 
 		}
+        printf("EP0: Audio SET_FEATURE too long, STALL\n");
 		break;
-	  case 0x81A1: // GET FEATURE
-	  case 0x82A1:
-	  case 0x83A1:
-	  case 0x84A1:
+	  case 0x81A1: case 0x82A1: case 0x83A1: case 0x84A1:
+		printf("EP0: Audio GET_FEATURE (type 0x%02X, wVal=0x%X, wIdx=0x%X, wLen=%u)\n", setup.bmRequestType, setup.wValue, setup.wIndex, setup.wLength);
 		if (setup.wLength <= sizeof(endpoint0_buffer)) {
-			uint32_t len;
+			uint32_t len; 
 			if (usb_audio_get_feature(&setup, endpoint0_buffer, &len)) {
-				//printf("GET feature, len=%d\n", len);
 				endpoint0_transmit(endpoint0_buffer, len, 0);
 				return;
 			}
 		}
+        printf("EP0: Audio GET_FEATURE failed or too long, STALL\n");
 		break;
-	  case 0x81A2: // GET_CUR (wValue=0, wIndex=interface, wLength=len)
-		if (setup.wLength >= 3) {
-			endpoint0_buffer[0] = 44100 & 255;
-			endpoint0_buffer[1] = 44100 >> 8;
-			endpoint0_buffer[2] = 0;
+	  case 0x81A2: 
+	    printf("EP0: Audio GET_CUR (wVal=0x%X, wIdx=0x%X, wLen=%u)\n", setup.wValue, setup.wIndex, setup.wLength);
+		if (setup.wLength >= 3) { 
+			endpoint0_buffer[0] = LSB(44100); 
+			endpoint0_buffer[1] = MSB(44100);
+			endpoint0_buffer[2] = 0; 
 			endpoint0_transmit(endpoint0_buffer, 3, 0);
 			return;
 		}
+        printf("EP0: Audio GET_CUR bad len, STALL\n");
 		break;
-#endif
+#endif 
+
 #if defined(MULTITOUCH_INTERFACE)
-	  case 0x01A1:
-		if (setup.wValue == 0x0300 && setup.wIndex == MULTITOUCH_INTERFACE) {
-			endpoint0_buffer[0] = MULTITOUCH_FINGERS;
-			endpoint0_transmit(endpoint0_buffer, 1, 0);
-			return;
-		} else if (setup.wValue == 0x0100 && setup.wIndex == MULTITOUCH_INTERFACE) {
-			memset(endpoint0_buffer, 0, 8);
-			endpoint0_transmit(endpoint0_buffer, 8, 0);
-			return;
-		}
+	  case 0x01A1: 
+		if (setup.wIndex == MULTITOUCH_INTERFACE) {
+            if (setup.wValue == 0x0300) { 
+                endpoint0_buffer[0] = MULTITOUCH_FINGERS; 
+                endpoint0_transmit(endpoint0_buffer, 1, 0);
+                return;
+            } else if (setup.wValue == 0x0100) { 
+                memset(endpoint0_buffer, 0, 8); 
+                endpoint0_transmit(endpoint0_buffer, 8, 0); 
+                return;
+            }
+        }
+        printf("EP0: MULTITOUCH GET_REPORT unhandled wValue 0x%X, STALL\n", setup.wValue);
 		break;
-#endif
+#endif 
+
 #if defined(MTP_INTERFACE)
-	  case 0x6421: // Cancel Request, Still Image Class 1.0, 5.2.1, page 8
+	  case 0x6421: 
 		if (setup.wLength == 6) {
 			endpoint0_setupdata.bothwords = setupdata;
-			endpoint0_receive(endpoint0_buffer, setup.wLength, 1);
-			return;
+			endpoint0_receive(endpoint0_buffer, setup.wLength, 1); return;
 		}
+        printf("EP0: MTP Cancel bad len, STALL\n");
 		break;
-	  case 0x65A1: // Get Extended Event Data, Still Image Class 1.0, 5.2.2, page 9
-		break;
-	  case 0x6621: // Device Reset, Still Image Class 1.0, 5.2.3 page 10
-		break;
-	  case 0x67A1: // Get Device Status, Still Image Class 1.0, 5.2.4, page 10
-		if (setup.wLength >= 4) {
-			endpoint0_buffer[0] = 4;
+	  case 0x65A1: 
+        printf("EP0: MTP GetExtendedEventData - STALL (not implemented)\n");
+		break; 
+	  case 0x6621: 
+        printf("EP0: MTP DeviceReset - Acking, App should handle.\n");
+		endpoint0_receive(NULL, 0, 0);
+		return;
+	  case 0x67A1: 
+		if (setup.wLength >= 4) { 
+			endpoint0_buffer[0] = 4; 
 			endpoint0_buffer[1] = 0;
-			endpoint0_buffer[2] = usb_mtp_status;
-			endpoint0_buffer[3] = 0x20;
+			endpoint0_buffer[2] = usb_mtp_status; 
+			endpoint0_buffer[3] = 0x20; 
 			endpoint0_transmit(endpoint0_buffer, 4, 0);
-			//if (usb_mtp_status == 0x19) usb_mtp_status = 0x01; // testing only
 			return;
 		}
+        printf("EP0: MTP GetStatus bad len, STALL\n");
 		break;
-#endif
-	}
-	printf("endpoint 0 stall\n");
-	USB1_ENDPTCTRL0 = 0x000010001; // stall
+#endif 
+	} // end switch
+
+stall_ep0_printf: 
+	printf("EP0: STALLING Final (ReqType 0x%02X, Req 0x%02X, wVal 0x%04X, wIdx 0x%04X, wLen %u)\n",
+        setup.bmRequestType, setup.bRequest, setup.wValue, setup.wIndex, setup.wLength);
+	USB1_ENDPTCTRL0 = USB_ENDPTCTRL_TXS | USB_ENDPTCTRL_RXS; 
 }
+
 
 static void endpoint0_transmit(const void *data, uint32_t len, int notify)
 {

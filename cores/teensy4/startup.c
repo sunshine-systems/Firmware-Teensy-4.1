@@ -7,6 +7,8 @@
 
 #include "debug/printf.h"
 
+#include "startup_usbhost.h"
+
 // from the linker
 extern unsigned long _stextload;
 extern unsigned long _stext;
@@ -81,38 +83,17 @@ static void ResetHandler2(void)
 	__asm__ volatile("dsb":::"memory");
 #if 1
 	// Some optimization with LTO won't start without this delay, but why?
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
+	asm volatile("nop"); asm volatile("nop"); asm volatile("nop"); asm volatile("nop");
 #endif
 	startup_early_hook(); // must be in FLASHMEM, as ITCM is not yet initialized!
 	PMU_MISC0_SET = 1<<3; //Use bandgap-based bias currents for best performance (Page 1175)
 #if 1
 	// Some optimization with LTO won't start without this delay, but why?
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
-	asm volatile("nop");
+	asm volatile("nop"); asm volatile("nop"); asm volatile("nop"); asm volatile("nop");
+	asm volatile("nop"); asm volatile("nop"); asm volatile("nop"); asm volatile("nop");
+	asm volatile("nop"); asm volatile("nop"); asm volatile("nop"); asm volatile("nop");
+	asm volatile("nop"); asm volatile("nop"); asm volatile("nop"); asm volatile("nop");
 #endif
-	// pin 13 - if startup crashes, use this to turn on the LED early for troubleshooting
-	//IOMUXC_SW_MUX_CTL_PAD_GPIO_B0_03 = 5;
-	//IOMUXC_SW_PAD_CTL_PAD_GPIO_B0_03 = IOMUXC_PAD_DSE(7);
-	//IOMUXC_GPR_GPR27 = 0xFFFFFFFF;
-	//GPIO7_GDIR |= (1<<3);
-	//GPIO7_DR_SET = (1<<3); // digitalWrite(13, HIGH);
 
 	// Initialize memory
 	memory_copy(&_stext, &_stextload, &_etext);
@@ -133,10 +114,7 @@ static void ResetHandler2(void)
 	SCB_SHCSR |= SCB_SHCSR_MEMFAULTENA | SCB_SHCSR_BUSFAULTENA | SCB_SHCSR_USGFAULTENA;
 
 	// Configure clocks
-	// TODO: make sure all affected peripherals are turned off!
-	// PIT & GPT timers to run from 24 MHz clock (independent of CPU speed)
 	CCM_CSCMR1 = (CCM_CSCMR1 & ~CCM_CSCMR1_PERCLK_PODF(0x3F)) | CCM_CSCMR1_PERCLK_CLK_SEL;
-	// UARTs run from 24 MHz clock (works if PLL3 off or bypassed)
 	CCM_CSCDR1 = (CCM_CSCDR1 & ~CCM_CSCDR1_UART_CLK_PODF(0x3F)) | CCM_CSCDR1_UART_CLK_SEL;
 
 #if defined(__IMXRT1062__)
@@ -147,15 +125,15 @@ static void ResetHandler2(void)
 	IOMUXC_GPR_GPR29 = 0xFFFFFFFF;
 #endif
 
-	// must enable PRINT_DEBUG_STUFF in debug/print.h
+	// Initialize printf output (to Serial4, as per debug/printf.h & debugprintf.c setup)
 	printf_debug_init();
-	printf("\n***********IMXRT Startup**********\n");
-	printf("test %d %d %d\n", 1, -1234567, 3);
+	printf("\n***********IMXRT Startup (Serial4 Logs)**********\n");
+	printf("Test message from startup.c: %d %d %d\n", 1, -1234567, 3);
 
 	configure_cache();
-	configure_systick();
+	configure_systick(); // Initializes millis()
 	usb_pll_start();	
-	reset_PFD(); //TODO: is this really needed?
+	reset_PFD(); 
 #ifdef F_CPU
 	set_arm_clock(F_CPU);
 #endif
@@ -163,14 +141,10 @@ static void ResetHandler2(void)
 	// Undo PIT timer usage by ROM startup
 	CCM_CCGR1 |= CCM_CCGR1_PIT(CCM_CCGR_ON);
 	PIT_MCR = 0;
-	PIT_TCTRL0 = 0;
-	PIT_TCTRL1 = 0;
-	PIT_TCTRL2 = 0;
-	PIT_TCTRL3 = 0;
+	PIT_TCTRL0 = 0; PIT_TCTRL1 = 0; PIT_TCTRL2 = 0; PIT_TCTRL3 = 0;
 
 	// initialize RTC
 	if (!(SNVS_LPCR & SNVS_LPCR_SRTC_ENV)) {
-		// if SRTC isn't running, start it with default Jan 1, 2019
 		SNVS_LPSRTCLR = 1546300800u << 15;
 		SNVS_LPSRTCMR = 1546300800u >> 17;
 		SNVS_LPCR |= SNVS_LPCR_SRTC_ENV;
@@ -185,32 +159,49 @@ static void ResetHandler2(void)
 	tempmon_init();
 	startup_middle_hook();
 
+    printf("Before USB init delays (Log to Serial4)\n");
+
 #if !defined(TEENSY_INIT_USB_DELAY_BEFORE)
         #define TEENSY_INIT_USB_DELAY_BEFORE 20
 #endif
 #if !defined(TEENSY_INIT_USB_DELAY_AFTER)
         #define TEENSY_INIT_USB_DELAY_AFTER 280
 #endif
-	// for background about this startup delay, please see these conversations
-	// https://forum.pjrc.com/threads/36606?p=113980&viewfull=1#post113980
-	// https://forum.pjrc.com/threads/31290?p=87273&viewfull=1#post87273
+	
+	while (millis() < TEENSY_INIT_USB_DELAY_BEFORE) ; 
+	// usb_init(); // Original position - MOVED DOWN
 
-	while (millis() < TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
-	usb_init();
-	while (millis() < TEENSY_INIT_USB_DELAY_AFTER + TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
-	//printf("before C++ constructors\n");
+	while (millis() < TEENSY_INIT_USB_DELAY_AFTER + TEENSY_INIT_USB_DELAY_BEFORE) ; 
+	
+    printf("Before C++ ctors (Log to Serial4)\n");
 	startup_debug_reset();
 	startup_late_hook();
-	__libc_init_array();
-	//printf("after C++ constructors\n");
-	//printf("before setup\n");
-	main();
+	__libc_init_array(); // C++ CONSTRUCTORS RUN HERE
+    printf("After C++ ctors (Log to Serial4)\n");
+
+    // <<< START: STATIC SPOOF DATA POPULATION HOOK >>>
+    // This function is from startup_usbhost.cpp and just fills g_proxy_info with hardcoded data.
+    printf("Calling startup_populate_static_spoof_data()...\n");
+    if (startup_populate_static_spoof_data() == 0) { // Function name changed
+        printf("Static spoof data populated. g_proxy_info.valid = %d\n", g_proxy_info.valid);
+        if (g_proxy_info.valid) { // Print some of the spoofed data for confirmation
+            printf("  Spoofed VID:0x%04X PID:0x%04X\n", g_proxy_info.idVendor, g_proxy_info.idProduct);
+            printf("  Spoofed Mfr: '%s'\n", g_proxy_info.manufacturerString);
+            printf("  Spoofed Prd: '%s'\n", g_proxy_info.productString);
+        }
+    } else {
+        printf("Static spoof data population FAILED (This should not happen with the dummy function).\n");
+    }
+    printf("Returned from startup_populate_static_spoof_data().\n");
+    // <<< END: STATIC SPOOF DATA POPULATION HOOK >>>
+
+	usb_init(); // Initialize USB Device stack (will use g_proxy_info if usb_dev.c is modified)
+    printf("After usb_init() (Log to Serial4)\n");
 	
-	while (1) asm("WFI");
+	main(); // Call user's sketch setup() and loop()
+	
+	while (1) asm("WFI"); // Should not return from main
 }
-
-
-
 
 // ARM SysTick is used for most Ardiuno timing functions, delay(), millis(),
 // micros().  SysTick can run from either the ARM core clock, or from an

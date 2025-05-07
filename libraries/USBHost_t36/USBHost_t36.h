@@ -64,7 +64,7 @@
 
 
 // This can let you control where to send the debugging messages
-#define USBHDBGSerial Serial
+#define USBHDBGSerial Serial1
 #ifndef USBHDBGSerial
 #define USBHDBGSerial   Serial
 #endif
