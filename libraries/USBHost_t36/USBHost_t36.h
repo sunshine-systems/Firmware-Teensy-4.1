@@ -60,11 +60,11 @@
 
 
 // Uncomment this line to see lots of debugging info!
-#define USBHOST_PRINT_DEBUG
+//#define USBHOST_PRINT_DEBUG
 
 
 // This can let you control where to send the debugging messages
-#define USBHDBGSerial Serial1
+//#define USBHDBGSerial Serial1
 #ifndef USBHDBGSerial
 #define USBHDBGSerial   Serial
 #endif

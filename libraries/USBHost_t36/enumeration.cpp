@@ -91,28 +91,22 @@ void USBHost::driver_ready_for_device(USBDriver *driver)
 		while (last->next) last = last->next;
 		last->next = driver;
 	}
-
-	printf("USBHost::driver_ready_for_device: driver %p registered\n", driver);
 }
 
 // Create a new device and begin the enumeration process
 //
-// Original new_Device() from 1.59.0 + HS maxlen fix + QH Logging
 Device_t * USBHost::new_Device(uint32_t speed, uint32_t hub_addr, uint32_t hub_port)
 {
 	Device_t *dev;
 
-    // Log device speed (original didn't have this detailed log)
-	print_("--- new_Device (Original Code Base) ---\n");
-	print_("  Speed detected: ");
+	print("new_Device: ");
 	switch (speed) {
-	  case 0: print_("12 (FS)"); break;
-	  case 1: print_("1.5 (LS)"); break;
-	  case 2: print_("480 (HS)"); break;
-	  default: print_("??");
+	  case 0: print("12"); break;
+	  case 1: print("1.5"); break;
+	  case 2: print("480"); break;
+	  default: print("??");
 	}
-	println_(" Mbit/sec");
-
+	println(" Mbit/sec");
 	dev = allocate_Device();
 	if (!dev) return NULL;
 	memset(dev, 0, sizeof(Device_t));
@@ -120,68 +114,19 @@ Device_t * USBHost::new_Device(uint32_t speed, uint32_t hub_addr, uint32_t hub_p
 	dev->address = 0;
 	dev->hub_address = hub_addr;
 	dev->hub_port = hub_port;
-
-    // <<< MODIFIED: Adjust max packet size based on speed >>>
-    uint32_t control_max_packet_size = (speed == 2) ? 64 : 8;
-    print_("  Setting Control Pipe MaxLen to: "); println_(control_max_packet_size);
-	dev->control_pipe = new_Pipe(dev, 0, 0, 0, control_max_packet_size);
-    // <<< END MODIFICATION >>>
-
+	dev->control_pipe = new_Pipe(dev, 0, 0, 0, 8);
 	if (!dev->control_pipe) {
 		free_Device(dev);
 		return NULL;
 	}
-	dev->strbuf = allocate_string_buffer();
+	dev->strbuf = allocate_string_buffer();  // try to allocate a string buffer; 
 	dev->control_pipe->callback_function = &enumeration;
-	dev->control_pipe->direction = 1; // 1=IN for callback context
-
+	dev->control_pipe->direction = 1; // 1=IN
+	// Here is where the enumeration process officially begins.
+	// Only a single device can enumerate at a time.
 	USBHost::enumeration_busy = true;
-	mk_setup(enumsetup, 0x80, 6, 0x0100, 0, 8); // 6=GET_DESCRIPTOR (first 8 bytes)
-	bool queue_success = queue_Control_Transfer(dev, &enumsetup, enumbuf, NULL);
-
-    // <<< ADDED: QH State Logging Block >>>
-    if (queue_success && dev && dev->control_pipe) {
-        println_("  --- Checking QH State Post-Queue (Original Code Base) ---");
-        Pipe_t *pipe = dev->control_pipe;
-        delayMicroseconds(5); // Tiny delay before reading back
-
-        println_("    Invalidating QH & first qTD cache regions before read...");
-        // Use arm_dcache_delete as invalidate is not available
-        arm_dcache_delete((void*)&(pipe->qh), sizeof(pipe->qh));
-        Transfer_t* first_qtd_ptr = (Transfer_t*)(pipe->qh.next & 0xFFFFFFE0);
-        if (first_qtd_ptr != nullptr && (uint32_t)first_qtd_ptr != 1) {
-             arm_dcache_delete((void*)first_qtd_ptr, sizeof(Transfer_t));
-        }
-
-        println_("    Reading QH fields...");
-        volatile uint32_t qh_current = pipe->qh.current;
-        volatile uint32_t qh_next = pipe->qh.next;
-        volatile uint32_t qh_token = pipe->qh.token;
-
-        print_("    QH Addr: 0x"); println_((uint32_t)&(pipe->qh), HEX);
-        print_("    QH Current qTD: 0x"); println_(qh_current, HEX); // <<< THE KEY DIAGNOSTIC
-        print_("    QH Next qTD: 0x"); println_(qh_next, HEX);
-        print_("    QH Token: 0x"); println_(qh_token, HEX);
-
-         if ((qh_next & 0xFFFFFFE0) != 0) {
-            Transfer_t* first_qtd = (Transfer_t*)(qh_next & 0xFFFFFFE0);
-            print_("    Expected First qTD Addr (from QH.next): 0x"); println_((uint32_t)first_qtd, HEX);
-
-            println_("    Reading first qTD token...");
-            volatile uint32_t first_qtd_token_readback = first_qtd->qtd.token;
-            print_("      First qTD Token (read back): 0x"); print_(first_qtd_token_readback, HEX);
-            if (first_qtd_token_readback & 0x80) print_(" Active"); else print_(" Inactive");
-            // Add other token checks if needed
-            println_();
-         } else {
-            println_("    QH Next qTD does not appear to be a valid pointer.");
-         }
-        println_("  -----------------------------------------------------");
-    } else {
-         println_("  Skipping QH State Check (queue failed or pipe invalid)");
-    }
-    // <<< END ADDED BLOCK >>>
-
+	mk_setup(enumsetup, 0x80, 6, 0x0100, 0, 8); // 6=GET_DESCRIPTOR
+	queue_Control_Transfer(dev, &enumsetup, enumbuf, NULL);
 	if (devlist == NULL) {
 		devlist = dev;
 	} else {
@@ -189,7 +134,6 @@ Device_t * USBHost::new_Device(uint32_t speed, uint32_t hub_addr, uint32_t hub_p
 		for (p = devlist; p->next; p = p->next) ; // walk devlist
 		p->next = dev;
 	}
-    println_("--- new_Device End ---");
 	return dev;
 }
 
