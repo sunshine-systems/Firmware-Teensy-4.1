@@ -76,6 +76,101 @@ void ResetHandler(void)
 	__builtin_unreachable();
 }
 
+// <<< START: Full usb_host_phy_pll_start with Compiler Fixes for GPRs and CCM >>>
+
+// Include GPC defines (ensure these are correct for your imxrt.h or SDK)
+#ifndef PGC_MEGA_CTRL
+#define PGC_MEGA_CTRL   (*(volatile uint32_t *)(IMXRT_GPC_ADDRESS + 0x220))
+#define PGC_MEGA_CTRL_PCR (1U << 0) // Power Control Request/Status bit
+#endif
+#ifndef PGC_MEGA_SR
+#define PGC_MEGA_SR     (*(volatile uint32_t *)(IMXRT_GPC_ADDRESS + 0x22C))
+#define PGC_MEGA_SR_PSR   (1U << 0) // Power Status bit (1=Not Ready, 0=Ready)
+#endif
+
+// CCM bit masks/shifts (ensure these are correct for your imxrt.h)
+#ifndef CCM_CBCMR_USBOH3_CLK_SEL_MASK
+#define CCM_CBCMR_USBOH3_CLK_SEL_BIT (19) // Common for RT106x
+#define CCM_CBCMR_USBOH3_CLK_SEL_MASK (1U << CCM_CBCMR_USBOH3_CLK_SEL_BIT)
+#endif
+#ifndef CCM_CBCDR_USBOH3_PODF_MASK
+#define CCM_CBCDR_USBOH3_PODF_SHIFT (10) // Common for RT106x bits 10-12
+#define CCM_CBCDR_USBOH3_PODF_MASK (0x7U << CCM_CBCDR_USBOH3_PODF_SHIFT)
+#endif
+// Correct CCM_CCGR6 define name as per imxrt.h
+#ifndef CCM_CCGR6_USB_OTG2_CLK_ENABLE
+#define CCM_CCGR6_USB_OTG2_CLK_ENABLE(n) CCM_CCGR6_USBOH3(n)
+#endif
+
+
+FLASHMEM static void usb_host_phy_pll_start() {
+    printf(">>> usb_host_phy_pll_start() called [COMPILER FIXES 2]\n");
+    uint32_t wait_count = 0;
+    uint32_t wait_limit = 2000000;
+
+    // --- Stage 0: GPC Power Up ---
+    printf("  --- Stage 0: Requesting GPC MEGA Domain Power Up ---\n");
+    // (Condensed GPC logic for brevity, assuming it worked based on previous logs)
+    if (!(PGC_MEGA_CTRL & PGC_MEGA_CTRL_PCR)) { PGC_MEGA_CTRL |= PGC_MEGA_CTRL_PCR; wait_count = 0; while (PGC_MEGA_SR & PGC_MEGA_SR_PSR) { if (++wait_count > wait_limit) { printf("  ERROR: Timeout GPC MEGA power up!\n"); goto host_phy_pll_fail; } } } else { if (PGC_MEGA_SR & PGC_MEGA_SR_PSR) { wait_count = 0; while (PGC_MEGA_SR & PGC_MEGA_SR_PSR) { if (++wait_count > wait_limit) { printf("  ERROR: Timeout GPC MEGA ready (PSR=0)!\n"); goto host_phy_pll_fail; } } } } printf("  GPC MEGA domain ready. PGC_MEGA_CTRL:0x%08lX, PGC_MEGA_SR:0x%08lX\n", PGC_MEGA_CTRL, PGC_MEGA_SR);
+    printf("  --- End Stage 0 ---\n\n");
+
+    // --- Stage 1: Configure USBOH3 Clock ---
+    printf("  --- Stage 1: Configuring USBOH3 Clock ---\n");
+    uint32_t initial_cbcdr = CCM_CBCDR; uint32_t target_podf_val = 7; uint32_t cbcdr_current_podf_val = (initial_cbcdr & CCM_CBCDR_USBOH3_PODF_MASK) >> CCM_CBCDR_USBOH3_PODF_SHIFT; if (cbcdr_current_podf_val != target_podf_val) { CCM_CBCDR = (initial_cbcdr & ~CCM_CBCDR_USBOH3_PODF_MASK) | (target_podf_val << CCM_CBCDR_USBOH3_PODF_SHIFT); for (volatile int i = 0; i < 50; i++); }
+    printf("  Final CCM_CBCDR: 0x%08lX\n", CCM_CBCDR); // CCM_CBCMR bit 19 was not changing, so focusing on divider which did.
+    printf("  --- End Stage 1 ---\n\n");
+
+    // --- Stage 2: Enable Controller Clock Gate ---
+    printf("  --- Stage 2: Enable Controller Clock Gate ---\n");
+    CCM_CCGR6 |= CCM_CCGR6_USBOH3(CCM_CCGR_ON); // Use corrected define
+    printf("  USB_OTG2 clock gate enabled (CCM_CCGR6: 0x%08lX)\n", CCM_CCGR6);
+    printf("  --- End Stage 2 ---\n\n");
+
+    // --- Stage 2.5: Check SRC GPR5 Register ---
+    printf("  --- Stage 2.5: Checking SRC GPR5 value ---\n");
+    // Only log SRC_GPR5 as others caused compile errors (may not be enabled in this build environment)
+    printf("  SRC_GPR5:  0x%08lX\n", SRC_GPR5);
+    // SPECULATIVE: Try clearing bit 15 in GPR5, sometimes related to USB reset
+    if (SRC_GPR5 & (1U << 15)) {
+         printf("  SPECULATIVE: Clearing bit 15 in SRC_GPR5...\n");
+         SRC_GPR5 &= ~(1U << 15);
+         for (volatile int i=0; i<100; i++) { asm volatile ("nop"); }
+         printf("  SRC_GPR5 after clear attempt: 0x%08lX\n", SRC_GPR5);
+    } else {
+         printf("  SPECULATIVE: Bit 15 in SRC_GPR5 is already 0.\n");
+    }
+    printf("  --- End Stage 2.5 ---\n\n");
+
+    // --- Stage 3: Attempt Controller Register Access ---
+    printf("  --- Stage 3: Attempting Controller Register Read ---\n");
+    printf("  Attempting to read USB2_ID: "); volatile uint32_t temp_id = USB2_ID; printf("0x%08lX\n", temp_id); // <<< HANG POINT >>>
+    printf("  Attempting to read USB2_USBMODE: "); volatile uint32_t temp_mode = USB2_USBMODE; printf("0x%08lX\n", temp_mode);
+    printf("  Controller register reads attempted.\n");
+    printf("  --- End Stage 3 ---\n\n");
+
+    // --- If reads succeed, continue... ---
+    printf("  Register reads successful, proceeding with full init...\n");
+
+    // --- Stage 4: Configure USBPHY2 Control ---
+     printf("  --- Stage 4: Configure USBPHY2_CTRL ---\n"); USBPHY2_CTRL_CLR = USBPHY_CTRL_SFTRST | USBPHY_CTRL_CLKGATE; int phy_sftrst_wait = 0; while(USBPHY2_CTRL & USBPHY_CTRL_SFTRST) { if (++phy_sftrst_wait > 10000) break; } USBPHY2_CTRL_SET = USBPHY_CTRL_ENUTMILEVEL2 | USBPHY_CTRL_ENUTMILEVEL3; printf("  USBPHY2_CTRL after setup: 0x%08lX\n", USBPHY2_CTRL); printf("  --- End Stage 4 ---\n\n");
+    // --- Stage 5: Power Up USBPHY2 via PWD ---
+     printf("  --- Stage 5: USBPHY2_PWD Power Up ---\n"); USBPHY2_PWD = 0; for (volatile int i = 0; i < 500; i++); volatile uint32_t pwd_readback = USBPHY2_PWD; printf("  USBPHY2_PWD after write 0: 0x%08lX\n", pwd_readback); if (pwd_readback != 0) { printf("  ERROR: USBPHY2_PWD did not clear. Halting.\n"); goto host_phy_pll_fail; } printf("  SUCCESS: USBPHY2_PWD cleared.\n"); printf("  --- End Stage 5 ---\n\n");
+    // --- Stage 6: Configure and Enable USB2_PLL ---
+     printf("  --- Stage 6: Configure and Enable USB2_PLL ---\n"); if (!(CCM_ANALOG_PLL_USB2 & CCM_ANALOG_PLL_USB2_POWER)) { CCM_ANALOG_PLL_USB2_SET = CCM_ANALOG_PLL_USB2_POWER; for (volatile int i = 0; i < 1000; i++); } if (!(CCM_ANALOG_PLL_USB2 & CCM_ANALOG_PLL_USB2_ENABLE)) { CCM_ANALOG_PLL_USB2_SET = CCM_ANALOG_PLL_USB2_ENABLE; for (volatile int i = 0; i < 100; i++); } wait_count = 0; while (!(CCM_ANALOG_PLL_USB2 & CCM_ANALOG_PLL_USB2_LOCK)) { if (++wait_count > wait_limit) { printf("  ERROR: Timeout PLL_USB2 lock!\n"); goto host_phy_pll_fail; } } if (CCM_ANALOG_PLL_USB2 & CCM_ANALOG_PLL_USB2_BYPASS) { CCM_ANALOG_PLL_USB2_CLR = CCM_ANALOG_PLL_USB2_BYPASS; for (volatile int i = 0; i < 100; i++); } if (!(CCM_ANALOG_PLL_USB2 & CCM_ANALOG_PLL_USB2_EN_USB_CLKS)) { CCM_ANALOG_PLL_USB2_SET = CCM_ANALOG_PLL_USB2_EN_USB_CLKS; for (volatile int i = 0; i < 100; i++); } printf("  PLL_USB2 configured. Final CCM_ANALOG_PLL_USB2: 0x%08lX\n", CCM_ANALOG_PLL_USB2); printf("  --- End Stage 6 ---\n\n");
+    // --- Stage 7: USB Controller Reset ---
+    printf("  --- Stage 7: Reset USB_OTG2 Controller ---\n"); USB2_USBCMD |= USB_USBCMD_RST; for(volatile int d=0; d<10; d++) { asm volatile ("nop"); } wait_count = 0; while (USB2_USBCMD & USB_USBCMD_RST) { if (++wait_count > wait_limit) { printf("  ERROR: Timeout waiting USB_OTG2 reset clear! USBCMD: 0x%08lX\n", USB2_USBCMD); goto host_phy_pll_fail; } } printf("  USB_OTG2 controller reset complete. USBCMD: 0x%08lX\n", USB2_USBCMD); printf("  --- End Stage 7 ---\n\n");
+    // --- Stage 8: Set USBMODE to Host ---
+    printf("  --- Stage 8: Set USBMODE to Host ---\n"); volatile uint32_t current_usbmode_after_reset = USB2_USBMODE; if ((current_usbmode_after_reset & USB_USBMODE_CM(3)) != USB_USBMODE_CM(3)) { USB2_USBMODE = (current_usbmode_after_reset & ~USB_USBMODE_CM(3)) | USB_USBMODE_CM(3); for(volatile int d=0; d<100; d++); } printf("  Final USB2_USBMODE: 0x%08lX\n", USB2_USBMODE); printf("  --- End Stage 8 ---\n\n");
+    // --- Stage 9: Final Stop Controller ---
+    printf("  --- Stage 9: Final Stop Controller ---\n"); USB2_USBCMD &= ~USB_USBCMD_RS; printf("  Final USB2_USBCMD after RS clear: 0x%08lX\n", USB2_USBCMD); printf("  --- End Stage 9 ---\n\n");
+
+    printf("  Hardware setup appears complete. Ready for USBHost::begin().\n");
+
+host_phy_pll_fail:
+    printf("<<< usb_host_phy_pll_start() finished.\n");
+}
+
+// <<< END: Full usb_host_phy_pll_start function >>>
 __attribute__((section(".startup"), noinline, noreturn))
 static void ResetHandler2(void)
 {
@@ -108,12 +203,12 @@ static void ResetHandler2(void)
 	for (i=0; i < NVIC_NUM_INTERRUPTS; i++) NVIC_SET_PRIORITY(i, 128);
 	SCB_VTOR = (uint32_t)_VectorsRam;
 
-	reset_PFD();
+	reset_PFD(); // Initial PFD reset
 
 	// enable exception handling
 	SCB_SHCSR |= SCB_SHCSR_MEMFAULTENA | SCB_SHCSR_BUSFAULTENA | SCB_SHCSR_USGFAULTENA;
 
-	// Configure clocks
+	// Configure clocks (PIT/GPT/UART)
 	CCM_CSCMR1 = (CCM_CSCMR1 & ~CCM_CSCMR1_PERCLK_PODF(0x3F)) | CCM_CSCMR1_PERCLK_CLK_SEL;
 	CCM_CSCDR1 = (CCM_CSCDR1 & ~CCM_CSCDR1_UART_CLK_PODF(0x3F)) | CCM_CSCDR1_UART_CLK_SEL;
 
@@ -132,8 +227,11 @@ static void ResetHandler2(void)
 
 	configure_cache();
 	configure_systick(); // Initializes millis()
-	usb_pll_start();	
-	reset_PFD(); 
+
+	usb_pll_start();          // For Device Port (USBPHY1 / USB1)
+	usb_host_phy_pll_start(); // <<< OUR FUNCTION for Host Port (USBPHY2 / USB2) >>>
+
+	reset_PFD(); // Second call
 #ifdef F_CPU
 	set_arm_clock(F_CPU);
 #endif
@@ -157,7 +255,7 @@ static void ResetHandler2(void)
 	analog_init();
 	pwm_init();
 	tempmon_init();
-	startup_middle_hook();
+	startup_middle_hook(); // Default middle hook
 
     printf("Before USB init delays (Log to Serial4)\n");
 
@@ -167,39 +265,32 @@ static void ResetHandler2(void)
 #if !defined(TEENSY_INIT_USB_DELAY_AFTER)
         #define TEENSY_INIT_USB_DELAY_AFTER 280
 #endif
-	
-	while (millis() < TEENSY_INIT_USB_DELAY_BEFORE) ; 
-	// usb_init(); // Original position - MOVED DOWN
 
-	while (millis() < TEENSY_INIT_USB_DELAY_AFTER + TEENSY_INIT_USB_DELAY_BEFORE) ; 
-	
+	// Wait for USB startup delays (these relate to the *device* port)
+	while (millis() < TEENSY_INIT_USB_DELAY_BEFORE) ;
+	while (millis() < TEENSY_INIT_USB_DELAY_AFTER + TEENSY_INIT_USB_DELAY_BEFORE) ;
+
     printf("Before C++ ctors (Log to Serial4)\n");
-	startup_debug_reset();
-	startup_late_hook();
+	startup_debug_reset(); // Default nop
+	startup_late_hook();   // Default empty hook
+
 	__libc_init_array(); // C++ CONSTRUCTORS RUN HERE
     printf("After C++ ctors (Log to Serial4)\n");
 
-    // <<< START: STATIC SPOOF DATA POPULATION HOOK >>>
-    // This function is from startup_usbhost.cpp and just fills g_proxy_info with hardcoded data.
+    // Populate spoof data structure (Host init deferred to sketch)
     printf("Calling startup_populate_static_spoof_data()...\n");
-    if (startup_populate_static_spoof_data() == 0) { // Function name changed
+    if (startup_populate_static_spoof_data() == 0) {
         printf("Static spoof data populated. g_proxy_info.valid = %d\n", g_proxy_info.valid);
-        if (g_proxy_info.valid) { // Print some of the spoofed data for confirmation
-            printf("  Spoofed VID:0x%04X PID:0x%04X\n", g_proxy_info.idVendor, g_proxy_info.idProduct);
-            printf("  Spoofed Mfr: '%s'\n", g_proxy_info.manufacturerString);
-            printf("  Spoofed Prd: '%s'\n", g_proxy_info.productString);
-        }
     } else {
-        printf("Static spoof data population FAILED (This should not happen with the dummy function).\n");
+        printf("Static spoof data population FAILED.\n");
     }
     printf("Returned from startup_populate_static_spoof_data().\n");
-    // <<< END: STATIC SPOOF DATA POPULATION HOOK >>>
 
-	usb_init(); // Initialize USB Device stack (will use g_proxy_info if usb_dev.c is modified)
+	usb_init(); // Initialize USB Device stack (using modified version with wait loop)
     printf("After usb_init() (Log to Serial4)\n");
-	
+
 	main(); // Call user's sketch setup() and loop()
-	
+
 	while (1) asm("WFI"); // Should not return from main
 }
 
