@@ -3,8 +3,9 @@
 
 USBHostDriver::USBHostDriver(USBHost& host) 
     : usbHost(&host), device(nullptr), device_ready(false), device_claimed(false),
-      strings_fetched(false), connect_time(0), hid_descriptor_length(0),
-      hid_descriptor_available(false), in_pipe(nullptr), out_pipe(nullptr),
+      strings_fetched(false), connect_time(0), interface_count(0),
+      control_pending(false), control_complete(false), control_length_received(0),
+      control_success(false), in_pipe(nullptr), out_pipe(nullptr),
       in_endpoint_addr(0), out_endpoint_addr(0), in_endpoint_size(0),
       out_endpoint_size(0), in_endpoint_interval(1), out_endpoint_interval(1),
       last_rx_length(0), new_data_available(false),
@@ -20,11 +21,14 @@ USBHostDriver::USBHostDriver(USBHost& host)
     // Initialize buffers
     memset(rx_buffer, 0, sizeof(rx_buffer));
     memset(last_rx_buffer, 0, sizeof(last_rx_buffer));
-    memset(hid_descriptor, 0, sizeof(hid_descriptor));
+    memset(control_buffer, 0, sizeof(control_buffer));
     
     // Clear all pipes and transfers
     memset(mypipes, 0, sizeof(mypipes));
     memset(mytransfers, 0, sizeof(mytransfers));
+    
+    // Clear interface info
+    memset(interfaces, 0, sizeof(interfaces));
     
     // Contribute resources to USB Host - CRITICAL!
     Serial4.println("[STARTUP]: Contributing Pipes and Transfers to USB Host");
@@ -47,17 +51,12 @@ USBHostDriver::~USBHostDriver() {
 
 bool USBHostDriver::begin() {
     Serial4.println("[STARTUP]: SunBox Host Driver begin() called.");
-    
-    // Driver is already registered in constructor
-    // This method is now just for compatibility
-    
     Serial4.println("[STARTUP]: SunBox Host Driver ready to receive devices.");
-    
     return true;
 }
 
 bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, uint32_t len) {
-    Serial4.println();  // New line to separate from any ongoing output
+    Serial4.println();
     Serial4.print("[STARTUP]: USBHostDriver::claim() called - type: ");
     Serial4.print(type);
     Serial4.print(", len: ");
@@ -99,7 +98,7 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
         
         connect_time = millis();
         
-        // Parse descriptors to find HID interface and endpoints
+        // Parse descriptors to find HID interfaces and endpoints
         if (len > 0 && descriptors != nullptr) {
             parseDescriptors(descriptors, len);
         } else {
@@ -153,6 +152,7 @@ void USBHostDriver::disconnect() {
     in_pipe = nullptr;
     out_pipe = nullptr;
     strings_fetched = false;
+    interface_count = 0;
     
     // Clear endpoint info
     in_endpoint_addr = 0;
@@ -178,6 +178,9 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
     out_endpoint_size = 0;
     in_endpoint_interval = 1;
     out_endpoint_interval = 1;
+    interface_count = 0;
+    
+    uint8_t current_interface_idx = 0xFF;
     
     while (p < end) {
         uint8_t desc_len = p[0];
@@ -187,20 +190,52 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
         
         // Look for interface descriptor
         if (desc_type == 0x04 && desc_len >= 9) { // Interface descriptor
-            uint8_t interface_class = p[5];
-            Serial4.print("[STARTUP]: Found interface, class: 0x");
-            Serial4.println(interface_class, HEX);
-            
-            // Accept HID devices (class 3) or any device for testing
-            if (interface_class == 0x03) {
-                Serial4.println("[STARTUP]: HID interface found!");
+            if (interface_count < MAX_INTERFACES) {
+                current_interface_idx = interface_count;
+                InterfaceInfo* iface = &interfaces[interface_count];
+                
+                iface->interface_num = p[2];
+                iface->interface_class = p[5];
+                iface->interface_subclass = p[6];
+                iface->interface_protocol = p[7];
+                iface->is_hid = (iface->interface_class == 0x03);
+                iface->has_in_endpoint = false;
+                
+                Serial4.print("[STARTUP]: Found interface ");
+                Serial4.print(iface->interface_num);
+                Serial4.print(", class: 0x");
+                Serial4.print(iface->interface_class, HEX);
+                
+                if (iface->is_hid) {
+                    Serial4.print(" (HID");
+                    if (iface->interface_protocol == 1) Serial4.print(" Keyboard");
+                    else if (iface->interface_protocol == 2) Serial4.print(" Mouse");
+                    Serial4.print(")");
+                }
+                Serial4.println();
+                
+                interface_count++;
             }
         }
         
         // Look for HID class descriptor
-        if (desc_type == 0x21 && desc_len >= 9) { // HID descriptor
-            hid_descriptor_available = true;
-            Serial4.println("[STARTUP]: HID descriptor found!");
+        if (desc_type == 0x21 && desc_len >= 9 && current_interface_idx < interface_count) {
+            // HID descriptor format:
+            // [0] bLength
+            // [1] bDescriptorType (0x21)
+            // [2-3] bcdHID
+            // [4] bCountryCode
+            // [5] bNumDescriptors
+            // [6] bDescriptorType (0x22 = Report)
+            // [7-8] wDescriptorLength (little-endian)
+            
+            uint16_t report_length = p[7] | (p[8] << 8);
+            interfaces[current_interface_idx].hid_desc_length = report_length;
+            
+            Serial4.print("[STARTUP]: HID descriptor found! Report length: ");
+            Serial4.print(report_length);
+            Serial4.print(" for interface ");
+            Serial4.println(interfaces[current_interface_idx].interface_num);
         }
         
         // Look for endpoint descriptors
@@ -227,7 +262,16 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
                         in_endpoint_addr = ep_addr & 0x7F;
                         in_endpoint_size = ep_size;
                         in_endpoint_interval = ep_interval;
-                        Serial4.println("[STARTUP]: Using as IN endpoint");
+                        Serial4.println("[STARTUP]: Using as primary IN endpoint");
+                    }
+                    
+                    // Also store for current interface
+                    if (current_interface_idx < interface_count && 
+                        !interfaces[current_interface_idx].has_in_endpoint) {
+                        interfaces[current_interface_idx].in_endpoint_addr = ep_addr & 0x7F;
+                        interfaces[current_interface_idx].in_endpoint_size = ep_size;
+                        interfaces[current_interface_idx].in_endpoint_interval = ep_interval;
+                        interfaces[current_interface_idx].has_in_endpoint = true;
                     }
                 } else {
                     // OUT endpoint
@@ -244,7 +288,9 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
         p += desc_len;
     }
     
-    Serial4.print("[STARTUP]: Parsing complete - IN endpoint: ");
+    Serial4.print("[STARTUP]: Parsing complete - ");
+    Serial4.print(interface_count);
+    Serial4.print(" interfaces found, IN endpoint: ");
     Serial4.print(in_endpoint_addr);
     Serial4.print(", OUT endpoint: ");
     Serial4.println(out_endpoint_addr);
@@ -257,7 +303,6 @@ void USBHostDriver::claimEndpoints() {
         Serial4.println(in_endpoint_addr);
         
         // Create interrupt pipe (type 3) for IN endpoint
-        // Parameters: device, type, endpoint, direction (1=IN), maxPacketSize, interval
         in_pipe = new_Pipe(device, 3, in_endpoint_addr, 1, in_endpoint_size, in_endpoint_interval);
         if (in_pipe) {
             in_pipe->callback_function = in_callback;
@@ -273,7 +318,6 @@ void USBHostDriver::claimEndpoints() {
         Serial4.println(out_endpoint_addr);
         
         // Create interrupt pipe (type 3) for OUT endpoint
-        // Parameters: device, type, endpoint, direction (0=OUT), maxPacketSize, interval
         out_pipe = new_Pipe(device, 3, out_endpoint_addr, 0, out_endpoint_size, out_endpoint_interval);
         if (out_pipe) {
             Serial4.println("[STARTUP]: OUT pipe created successfully");
@@ -286,42 +330,174 @@ void USBHostDriver::claimEndpoints() {
 void USBHostDriver::startReading() {
     if (in_pipe) {
         Serial4.println("[STARTUP]: Starting data reading...");
-        // Queue initial transfer using USBHost_t36 API
-        // The callback is already set on the pipe in claimEndpoints()
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
         Serial4.println("[STARTUP]: Data transfer queued");
     }
 }
 
-void USBHostDriver::requestStringDescriptor(uint8_t index, char* buffer, uint8_t buflen) {
-    // String descriptor support would require control transfers
-    // For now, we'll skip this functionality
-}
-
-void USBHostDriver::control(const Transfer_t *transfer) {
-    // Control transfer callback - not used in this simplified version
-}
-
-void USBHostDriver::processStringDescriptor(const Transfer_t *transfer) {
-    // String descriptor processing - not used in this simplified version
-}
-
-bool USBHostDriver::getHIDDescriptor(const uint8_t** descriptor, uint16_t* length) {
-    if (!hid_descriptor_available || hid_descriptor_length == 0) {
-        // For now, return false to trigger boot protocol
-        // In a full implementation, we would request the HID report descriptor here
+// Control transfer implementation
+bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest, 
+                                   uint16_t wValue, uint16_t wIndex, uint16_t wLength,
+                                   uint8_t* data, uint16_t* actualLength, 
+                                   uint32_t timeout_ms) {
+    if (!device || !device_claimed) {
+        Serial4.println("[DRIVER]: Control transfer failed - no device");
         return false;
     }
     
-    *descriptor = hid_descriptor;
-    *length = hid_descriptor_length;
-    return true;
+    Serial4.print("[DRIVER]: Control transfer: bmRequestType=0x");
+    Serial4.print(bmRequestType, HEX);
+    Serial4.print(" bRequest=0x");
+    Serial4.print(bRequest, HEX);
+    Serial4.print(" wValue=0x");
+    Serial4.print(wValue, HEX);
+    Serial4.print(" wIndex=0x");
+    Serial4.print(wIndex, HEX);
+    Serial4.print(" wLength=");
+    Serial4.println(wLength);
+    
+    // Setup the control transfer
+    control_setup.bmRequestType = bmRequestType;
+    control_setup.bRequest = bRequest;
+    control_setup.wValue = wValue;
+    control_setup.wIndex = wIndex;
+    control_setup.wLength = min(wLength, (uint16_t)512);
+    
+    // Reset state
+    control_pending = true;
+    control_complete = false;
+    control_success = false;
+    control_length_received = 0;
+    
+    // Queue the transfer
+    queue_Control_Transfer(device, &control_setup, control_buffer, this);
+    
+    // Wait for completion
+    uint32_t start = millis();
+    while (!control_complete && (millis() - start) < timeout_ms) {
+        delay(1);
+    }
+    
+    if (control_complete && control_success && control_length_received > 0) {
+        Serial4.print("[DRIVER]: Control transfer complete, received ");
+        Serial4.print(control_length_received);
+        Serial4.println(" bytes");
+        
+        // Copy data to caller's buffer
+        if (data) {
+            uint16_t copy_len = min(control_length_received, wLength);
+            memcpy(data, control_buffer, copy_len);
+            if (actualLength) *actualLength = copy_len;
+        }
+        return true;
+    }
+    
+    if (!control_complete) {
+        Serial4.println("[DRIVER]: Control transfer timeout");
+    } else if (!control_success) {
+        Serial4.println("[DRIVER]: Control transfer failed");
+    } else {
+        Serial4.println("[DRIVER]: Control transfer returned no data");
+    }
+    return false;
 }
 
+void USBHostDriver::control(const Transfer_t *transfer) {
+    if (control_pending && transfer->buffer == control_buffer) {
+        control_pending = false;
+        control_complete = true;
+        control_length_received = transfer->length;
+        
+        // Check for errors in the transfer
+        uint32_t token = transfer->qtd.token;
+        control_success = ((token >> 0) & 0xFF) == 0;  // Status byte should be 0 for success
+        
+        if (!control_success) {
+            Serial4.print("[DRIVER]: Control transfer error, token=0x");
+            Serial4.println(token, HEX);
+        }
+    }
+}
+
+// Interface information methods
+uint8_t USBHostDriver::getInterfaceNumber(uint8_t index) const {
+    if (index < interface_count) {
+        return interfaces[index].interface_num;
+    }
+    return 0xFF;
+}
+
+uint8_t USBHostDriver::getInterfaceClass(uint8_t index) const {
+    if (index < interface_count) {
+        return interfaces[index].interface_class;
+    }
+    return 0;
+}
+
+uint8_t USBHostDriver::getInterfaceSubclass(uint8_t index) const {
+    if (index < interface_count) {
+        return interfaces[index].interface_subclass;
+    }
+    return 0;
+}
+
+uint8_t USBHostDriver::getInterfaceProtocol(uint8_t index) const {
+    if (index < interface_count) {
+        return interfaces[index].interface_protocol;
+    }
+    return 0;
+}
+
+uint16_t USBHostDriver::getHIDDescriptorLength(uint8_t interface_index) const {
+    if (interface_index < interface_count) {
+        return interfaces[interface_index].hid_desc_length;
+    }
+    return 0;
+}
+
+bool USBHostDriver::isHIDInterface(uint8_t interface_index) const {
+    if (interface_index < interface_count) {
+        return interfaces[interface_index].is_hid;
+    }
+    return false;
+}
+
+int8_t USBHostDriver::findInterface(uint8_t class_code, uint8_t subclass, uint8_t protocol) const {
+    for (uint8_t i = 0; i < interface_count; i++) {
+        if (interfaces[i].interface_class == class_code) {
+            if (subclass != 0xFF && interfaces[i].interface_subclass != subclass) continue;
+            if (protocol != 0xFF && interfaces[i].interface_protocol != protocol) continue;
+            return i;
+        }
+    }
+    return -1;
+}
+
+uint8_t USBHostDriver::getEndpointAddress(uint8_t interface_index) const {
+    if (interface_index < interface_count && interfaces[interface_index].has_in_endpoint) {
+        return interfaces[interface_index].in_endpoint_addr;
+    }
+    return 0;
+}
+
+uint16_t USBHostDriver::getEndpointSize(uint8_t interface_index) const {
+    if (interface_index < interface_count && interfaces[interface_index].has_in_endpoint) {
+        return interfaces[interface_index].in_endpoint_size;
+    }
+    return 0;
+}
+
+uint8_t USBHostDriver::getEndpointInterval(uint8_t interface_index) const {
+    if (interface_index < interface_count && interfaces[interface_index].has_in_endpoint) {
+        return interfaces[interface_index].in_endpoint_interval;
+    }
+    return 0;
+}
+
+// Data callbacks and transfer methods remain the same
 void USBHostDriver::in_callback(const Transfer_t *transfer) {
     if (!transfer) return;
     
-    // Get driver instance from transfer
     USBHostDriver* driver = (USBHostDriver*)transfer->driver;
     if (driver) {
         driver->processInData(transfer);
@@ -331,7 +507,7 @@ void USBHostDriver::in_callback(const Transfer_t *transfer) {
 void USBHostDriver::processInData(const Transfer_t *transfer) {
     if (!transfer || !transfer->buffer) return;
     
-    // Calculate actual received length (like USBProxyDriver does)
+    // Calculate actual received length
     uint32_t len = transfer->length;
     uint32_t token = transfer->qtd.token;
     uint32_t bytes_not_transferred = (token >> 16) & 0x7FFF;
@@ -380,7 +556,6 @@ bool USBHostDriver::sendData(const uint8_t* data, uint32_t length) {
     }
     
     // For now, just return false - implement when needed
-    // Would use queue_Data_Transfer with out_pipe
     return false;
 }
 

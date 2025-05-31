@@ -1,7 +1,7 @@
-// SunshineUSBProxy.ino - Using direct objects like original code
+// SunshineUSBProxy.ino - Using direct objects with HIDMouseDescriptorHandler
 #include <USBHost_t36.h>
 #include "USBHostDriver.h"
-#include "HIDReportParser.h"
+#include "HIDMouseDescriptorHandler.h"
 
 // USB device functions
 extern "C" {
@@ -11,14 +11,15 @@ extern "C" {
 
 // Global objects - created directly, not as pointers
 USBHost myusb;
-USBHostDriver usbHostDriver(myusb);  // Direct object creation
-HIDReportParser hidReportParser;      // Direct object creation
+USBHostDriver usbHostDriver(myusb);         // Direct object creation
+HIDMouseDescriptorHandler hidMouseHandler;   // Direct object creation
 
 // State machine
 enum State {
     INIT,
     WAIT_FOR_DEVICE,
     DEVICE_DETECTED,
+    HID_DESCRIPTOR_WAIT,
     HID_PARSED,
     USB_DEVICE_READY,
     PROXY_ACTIVE
@@ -42,10 +43,10 @@ uint32_t rawDataLength = 0;
 // Data callback for USBHostDriver
 void dataCallback(const uint8_t* data, uint32_t length) {
     // Handle incoming HID data
-    if (hidParsed) {
-        if (hidReportParser.parseMouseData(data, length, currentMouse)) {
+    if (hidParsed && hidMouseHandler.isReady()) {
+        if (hidMouseHandler.parseMouseData(data, length, currentMouse)) {
             if (debugMode) {
-                hidReportParser.printMouseState(currentMouse);
+                hidMouseHandler.printMouseState(currentMouse);
             }
             
             // TODO: Forward to USB device stack when ready
@@ -66,15 +67,15 @@ void setup() {
     Serial4.println("  SunBox USB Proxy Starting");
     Serial4.println("=======================================");
     
+    // Initialize HID handler with the USB driver
+    hidMouseHandler.begin(&usbHostDriver);
+    hidMouseHandler.setDebugOutput(true); // Enable debug output
+    
     // Note: USBHostDriver already registered itself in its constructor
     Serial4.println("[MAIN]: USB Host Driver created (registered in constructor)");
     
     // Configure the driver
     usbHostDriver.setDataCallback(dataCallback);
-    
-    // Configure HID parser
-    Serial4.println("[MAIN]: Configuring HID Report Parser...");
-    hidReportParser.setBootMouseFormat(); // Default to boot protocol
     
     // Start USB Host
     Serial4.println("[MAIN]: Starting USB Host...");
@@ -110,27 +111,42 @@ void loop() {
             break;
             
         case DEVICE_DETECTED:
-            // Try to get and parse HID descriptor
-            {
-                const uint8_t* descriptor = nullptr;
-                uint16_t descriptorLen = 0;
-                
-                Serial4.println("[MAIN]: Attempting to get HID descriptor...");
-                
-                if (usbHostDriver.getHIDDescriptor(&descriptor, &descriptorLen)) {
-                    Serial4.println("[MAIN]: Got HID descriptor, parsing...");
-                    if (hidReportParser.parseDescriptor(descriptor, descriptorLen)) {
-                        Serial4.println("[MAIN]: HID descriptor parsed successfully!");
-                        hidReportParser.printDescriptorInfo();
-                        hidParsed = true;
-                    }
-                } else {
-                    Serial4.println("[MAIN]: No HID descriptor available, using boot protocol");
-                    hidParsed = true; // Boot protocol is already set
-                }
-                
-                currentState = HID_PARSED;
+            // Setup mouse interface
+            Serial4.println("[MAIN]: Setting up HID mouse interface...");
+            
+            if (hidMouseHandler.setupMouseInterface()) {
+                Serial4.println("[MAIN]: Mouse interface found, requesting descriptor...");
+                currentState = HID_DESCRIPTOR_WAIT;
+            } else {
+                Serial4.println("[MAIN]: No HID mouse interface found!");
+                // For now, continue anyway - might be a non-standard device
+                currentState = HID_DESCRIPTOR_WAIT;
             }
+            break;
+            
+        case HID_DESCRIPTOR_WAIT:
+            // Request and parse HID descriptor
+            Serial4.println("[MAIN]: Requesting HID descriptor...");
+            
+            if (hidMouseHandler.requestHIDDescriptor(1000)) {  // 1 second timeout
+                Serial4.println("[MAIN]: HID descriptor processed!");
+                
+                if (hidMouseHandler.isReady()) {
+                    Serial4.println("[MAIN]: HID parser is ready!");
+                    hidMouseHandler.printDescriptorInfo();
+                    hidParsed = true;
+                } else {
+                    Serial4.println("[MAIN]: HID parser not ready - using boot protocol");
+                    hidMouseHandler.setBootMouseFormat();
+                    hidParsed = true;
+                }
+            } else {
+                Serial4.println("[MAIN]: Failed to get HID descriptor - using boot protocol");
+                hidMouseHandler.setBootMouseFormat();
+                hidParsed = true;
+            }
+            
+            currentState = HID_PARSED;
             break;
             
         case HID_PARSED:
@@ -174,9 +190,6 @@ void loop() {
                 hidParsed = false;
                 usbDeviceInitialized = false;
                 currentState = WAIT_FOR_DEVICE;
-                
-                // Reset parser to boot protocol
-                hidReportParser.setBootMouseFormat();
             }
             break;
     }
@@ -196,6 +209,7 @@ void handleSerialCommand(char cmd) {
         case 'd':
         case 'D':
             debugMode = !debugMode;
+            hidMouseHandler.setDebugOutput(debugMode);
             Serial4.print("[MAIN]: Debug mode ");
             Serial4.println(debugMode ? "ON" : "OFF");
             break;
@@ -203,6 +217,16 @@ void handleSerialCommand(char cmd) {
         case 's':
         case 'S':
             printStatus();
+            break;
+            
+        case 'i':
+        case 'I':
+            if (hidMouseHandler.isReady()) {
+                hidMouseHandler.printInterfaceInfo();
+                hidMouseHandler.printDescriptorInfo();
+            } else {
+                Serial4.println("[MAIN]: HID handler not ready");
+            }
             break;
             
         case 'h':
@@ -229,6 +253,7 @@ void printStatus() {
         case INIT: Serial4.println("INIT"); break;
         case WAIT_FOR_DEVICE: Serial4.println("WAIT_FOR_DEVICE"); break;
         case DEVICE_DETECTED: Serial4.println("DEVICE_DETECTED"); break;
+        case HID_DESCRIPTOR_WAIT: Serial4.println("HID_DESCRIPTOR_WAIT"); break;
         case HID_PARSED: Serial4.println("HID_PARSED"); break;
         case USB_DEVICE_READY: Serial4.println("USB_DEVICE_READY"); break;
         case PROXY_ACTIVE: Serial4.println("PROXY_ACTIVE"); break;
@@ -243,6 +268,25 @@ void printStatus() {
         Serial4.println(")");
     } else {
         Serial4.println("Not connected");
+    }
+    
+    Serial4.print("HID Handler: ");
+    if (hidMouseHandler.isReady()) {
+        Serial4.print("Ready (Interface ");
+        Serial4.print(hidMouseHandler.getInterfaceNumber());
+        Serial4.print(", EP 0x");
+        Serial4.print(hidMouseHandler.getEndpointAddress() | 0x80, HEX);
+        Serial4.println(")");
+    } else {
+        Serial4.print("Not ready (State: ");
+        switch (hidMouseHandler.getState()) {
+            case HID_STATE_IDLE: Serial4.print("IDLE"); break;
+            case HID_STATE_WAIT_DESCRIPTOR: Serial4.print("WAIT_DESCRIPTOR"); break;
+            case HID_STATE_PARSING: Serial4.print("PARSING"); break;
+            case HID_STATE_READY: Serial4.print("READY"); break;
+            case HID_STATE_ERROR: Serial4.print("ERROR"); break;
+        }
+        Serial4.println(")");
     }
     
     Serial4.print("HID Parser: ");
@@ -261,6 +305,7 @@ void printHelp() {
     Serial4.println("\n=== Commands ===");
     Serial4.println("d - Toggle debug mode");
     Serial4.println("s - Show status");
+    Serial4.println("i - Show interface/descriptor info");
     Serial4.println("h - Show help");
     Serial4.println("================");
 }
@@ -279,6 +324,7 @@ void updateStatusLED() {
             break;
             
         case DEVICE_DETECTED:
+        case HID_DESCRIPTOR_WAIT:
         case HID_PARSED:
         case USB_DEVICE_READY:
             // Fast blink

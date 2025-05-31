@@ -7,6 +7,7 @@
 
 #define MAX_ENDPOINTS 4
 #define RX_BUFFER_SIZE 64
+#define MAX_INTERFACES 8
 
 // Claim types from USBHost_t36
 #define CLAIM_REPORT        0
@@ -31,8 +32,28 @@ public:
     const char* getProduct() const { return product_string; }
     const char* getSerial() const { return serial_string; }
     
-    // HID descriptor access
-    bool getHIDDescriptor(const uint8_t** descriptor, uint16_t* length);
+    // Control transfer API
+    bool controlTransfer(uint8_t bmRequestType, uint8_t bRequest, 
+                        uint16_t wValue, uint16_t wIndex, uint16_t wLength,
+                        uint8_t* data, uint16_t* actualLength, 
+                        uint32_t timeout_ms = 100);
+    
+    // Interface information
+    uint8_t getInterfaceCount() const { return interface_count; }
+    uint8_t getInterfaceNumber(uint8_t index) const;
+    uint8_t getInterfaceClass(uint8_t index) const;
+    uint8_t getInterfaceSubclass(uint8_t index) const;
+    uint8_t getInterfaceProtocol(uint8_t index) const;
+    uint16_t getHIDDescriptorLength(uint8_t interface_index) const;
+    bool isHIDInterface(uint8_t interface_index) const;
+    
+    // Find interface by criteria
+    int8_t findInterface(uint8_t class_code, uint8_t subclass = 0xFF, uint8_t protocol = 0xFF) const;
+    
+    // Endpoint information for an interface
+    uint8_t getEndpointAddress(uint8_t interface_index) const;
+    uint16_t getEndpointSize(uint8_t interface_index) const;
+    uint8_t getEndpointInterval(uint8_t interface_index) const;
     
     // Data transfer
     bool sendData(const uint8_t* data, uint32_t length);
@@ -76,10 +97,29 @@ private:
     uint8_t pending_string_index;
     char* pending_string_buffer;
     
-    // HID descriptor
-    uint8_t hid_descriptor[512];
-    uint16_t hid_descriptor_length;
-    bool hid_descriptor_available;
+    // Interface tracking
+    struct InterfaceInfo {
+        uint8_t interface_num;
+        uint8_t interface_class;
+        uint8_t interface_subclass;
+        uint8_t interface_protocol;
+        uint16_t hid_desc_length;
+        bool is_hid;
+        // Store first IN endpoint info for each interface
+        uint8_t in_endpoint_addr;
+        uint16_t in_endpoint_size;
+        uint8_t in_endpoint_interval;
+        bool has_in_endpoint;
+    } interfaces[MAX_INTERFACES];
+    uint8_t interface_count;
+    
+    // Control transfer state
+    setup_t control_setup;
+    uint8_t control_buffer[512] __attribute__ ((aligned(32)));
+    volatile bool control_pending;
+    volatile bool control_complete;
+    volatile uint16_t control_length_received;
+    volatile bool control_success;
     
     // Endpoints
     Pipe_t* in_pipe;
@@ -100,9 +140,6 @@ private:
     uint8_t last_rx_buffer[RX_BUFFER_SIZE];
     uint32_t last_rx_length;
     bool new_data_available;
-    
-    // Control transfer
-    setup_t setup;
     
     // Data callback
     data_callback_t data_callback;

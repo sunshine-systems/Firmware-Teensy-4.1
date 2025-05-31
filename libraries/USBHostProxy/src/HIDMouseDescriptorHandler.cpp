@@ -1,34 +1,204 @@
-/**
- * @file HIDReportParser.cpp
- * @brief Proper HID Report Descriptor Parser Implementation
- */
+#include "HIDMouseDescriptorHandler.h"
 
-#include "HIDReportParser.h"
-
-HIDReportParser::HIDReportParser() {
-    valid = false;
-    report_id = 0;
-    report_size_bytes = 0;
-    total_bits = 0;
-    has_x = false;
-    has_y = false;
-    has_wheel = false;
-    has_buttons = false;
-    button_count = 0;
+HIDMouseDescriptorHandler::HIDMouseDescriptorHandler() 
+    : host_driver(nullptr), handler_state(HID_STATE_IDLE),
+      interface_index(0xFF), interface_number(0xFF), interface_protocol(0),
+      descriptor_length(0), endpoint_address(0), endpoint_size(0),
+      endpoint_interval(0), hid_descriptor_size(0),
+      valid(false), report_id(0), report_size_bytes(0), total_bits(0),
+      has_x(false), has_y(false), has_wheel(false), has_buttons(false),
+      button_count(0), debug_enabled(false) {
     
+    memset(hid_descriptor, 0, sizeof(hid_descriptor));
     memset(&x_field, 0, sizeof(x_field));
     memset(&y_field, 0, sizeof(y_field));
     memset(&wheel_field, 0, sizeof(wheel_field));
     memset(&buttons_field, 0, sizeof(buttons_field));
 }
 
-uint8_t HIDReportParser::getItemSize(uint8_t byte0) {
+void HIDMouseDescriptorHandler::begin(USBHostDriver* driver) {
+    host_driver = driver;
+    handler_state = HID_STATE_IDLE;
+    
+    if (debug_enabled) {
+        Serial4.println("[HID_HANDLER]: Initialized with USBHostDriver");
+    }
+}
+
+bool HIDMouseDescriptorHandler::setupMouseInterface() {
+    if (!host_driver || !host_driver->isReady()) {
+        if (debug_enabled) {
+            Serial4.println("[HID_HANDLER]: No driver or device not ready");
+        }
+        return false;
+    }
+    
+    // Find mouse interface
+    if (!findMouseInterface()) {
+        if (debug_enabled) {
+            Serial4.println("[HID_HANDLER]: No mouse interface found");
+        }
+        handler_state = HID_STATE_ERROR;
+        return false;
+    }
+    
+    if (debug_enabled) {
+        Serial4.print("[HID_HANDLER]: Found mouse interface ");
+        Serial4.print(interface_number);
+        Serial4.print(" at index ");
+        Serial4.println(interface_index);
+    }
+    
+    return true;
+}
+
+bool HIDMouseDescriptorHandler::findMouseInterface() {
+    // First, look for HID mouse interface (class=3, protocol=2)
+    int8_t idx = host_driver->findInterface(3, 0xFF, 2);
+    if (idx >= 0) {
+        interface_index = idx;
+        interface_number = host_driver->getInterfaceNumber(idx);
+        interface_protocol = host_driver->getInterfaceProtocol(idx);
+        descriptor_length = host_driver->getHIDDescriptorLength(idx);
+        endpoint_address = host_driver->getEndpointAddress(idx);
+        endpoint_size = host_driver->getEndpointSize(idx);
+        endpoint_interval = host_driver->getEndpointInterval(idx);
+        
+        if (debug_enabled) {
+            Serial4.println("[HID_HANDLER]: Found HID mouse interface (protocol=2)");
+        }
+        return true;
+    }
+    
+    // If not found, look for any HID interface
+    idx = host_driver->findInterface(3);
+    if (idx >= 0) {
+        interface_index = idx;
+        interface_number = host_driver->getInterfaceNumber(idx);
+        interface_protocol = host_driver->getInterfaceProtocol(idx);
+        descriptor_length = host_driver->getHIDDescriptorLength(idx);
+        endpoint_address = host_driver->getEndpointAddress(idx);
+        endpoint_size = host_driver->getEndpointSize(idx);
+        endpoint_interval = host_driver->getEndpointInterval(idx);
+        
+        if (debug_enabled) {
+            Serial4.print("[HID_HANDLER]: Found HID interface with protocol=");
+            Serial4.println(interface_protocol);
+        }
+        return true;
+    }
+    
+    return false;
+}
+
+bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
+    if (!host_driver || interface_index == 0xFF) {
+        if (debug_enabled) {
+            Serial4.println("[HID_HANDLER]: Cannot request descriptor - no interface");
+        }
+        return false;
+    }
+    
+    handler_state = HID_STATE_WAIT_DESCRIPTOR;
+    
+    if (debug_enabled) {
+        Serial4.print("[HID_HANDLER]: Requesting HID descriptor for interface ");
+        Serial4.print(interface_number);
+        Serial4.print(", expected length: ");
+        Serial4.println(descriptor_length);
+    }
+    
+    // Try to retrieve the HID descriptor
+    if (!retrieveHIDDescriptor(timeout_ms)) {
+        // If retrieval failed, use boot protocol
+        if (debug_enabled) {
+            Serial4.println("[HID_HANDLER]: Descriptor retrieval failed, using boot protocol");
+        }
+        setBootMouseFormat();
+        handler_state = HID_STATE_READY;
+        return true;  // Boot protocol is still valid
+    }
+    
+    // Parse the descriptor
+    handler_state = HID_STATE_PARSING;
+    if (!parseDescriptor(hid_descriptor, hid_descriptor_size)) {
+        // If parsing failed, try boot protocol
+        if (debug_enabled) {
+            Serial4.println("[HID_HANDLER]: Parse failed, using boot protocol");
+        }
+        setBootMouseFormat();
+    }
+    
+    handler_state = HID_STATE_READY;
+    
+    if (debug_enabled) {
+        Serial4.println("[HID_HANDLER]: HID descriptor ready!");
+    }
+    
+    return true;
+}
+
+bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
+    // If descriptor length is 0, we might not have a report descriptor
+    if (descriptor_length == 0) {
+        if (debug_enabled) {
+            Serial4.println("[HID_HANDLER]: No HID descriptor length, using boot protocol");
+        }
+        return false;
+    }
+    
+    uint16_t actual_length = 0;
+    uint16_t request_length = min(descriptor_length, (uint16_t)512);
+    
+    // USB HID Report Descriptor request
+    bool success = host_driver->controlTransfer(
+        0x81,                    // bmRequestType
+        0x06,                    // bRequest (GET_DESCRIPTOR)
+        0x2200,                  // wValue (Report descriptor)
+        interface_number,        // wIndex
+        request_length,          // wLength
+        hid_descriptor,          // data buffer
+        &actual_length,          // actual length received
+        timeout_ms
+    );
+    
+    if (success && actual_length > 0) {
+        hid_descriptor_size = actual_length;
+        
+        if (debug_enabled) {
+            Serial4.print("[HID_HANDLER]: Retrieved ");
+            Serial4.print(actual_length);
+            Serial4.println(" bytes of HID descriptor");
+            
+            // Print first few bytes for debugging
+            Serial4.print("[HID_HANDLER]: First bytes: ");
+            for (uint16_t i = 0; i < min(actual_length, (uint16_t)16); i++) {
+                if (hid_descriptor[i] < 0x10) Serial4.print("0");
+                Serial4.print(hid_descriptor[i], HEX);
+                Serial4.print(" ");
+            }
+            Serial4.println();
+        }
+        
+        return true;
+    }
+    
+    if (debug_enabled) {
+        Serial4.println("[HID_HANDLER]: Failed to retrieve HID descriptor");
+    }
+    
+    return false;
+}
+
+// ========== HID Report Parser Logic (from original HIDReportParser) ==========
+
+uint8_t HIDMouseDescriptorHandler::getItemSize(uint8_t byte0) {
     uint8_t size = byte0 & 0x03;
     if (size == 3) size = 4;  // Size 3 means 4 bytes
     return size;
 }
 
-bool HIDReportParser::parseDescriptor(const uint8_t* descriptor, uint16_t length) {
+bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint16_t length) {
     Serial4.println("\n=== Parsing HID Report Descriptor ===");
     
     ParseState state = {0};
@@ -279,7 +449,7 @@ bool HIDReportParser::parseDescriptor(const uint8_t* descriptor, uint16_t length
     return true;  // Return true because we have a valid format now
 }
 
-void HIDReportParser::setBootMouseFormat() {
+void HIDMouseDescriptorHandler::setBootMouseFormat() {
     // Standard USB boot mouse format
     valid = true;
     report_size_bytes = 3; // Can be 3-8 bytes
@@ -325,8 +495,8 @@ void HIDReportParser::setBootMouseFormat() {
     Serial4.println("[PARSER] Set boot mouse format");
 }
 
-int32_t HIDReportParser::extractValue(const uint8_t* data, uint16_t bit_offset, uint8_t bit_count,
-                                     int32_t logical_min, int32_t logical_max, bool is_signed) {
+int32_t HIDMouseDescriptorHandler::extractValue(const uint8_t* data, uint16_t bit_offset, uint8_t bit_count,
+                                               int32_t logical_min, int32_t logical_max, bool is_signed) {
     // Special handling for byte-aligned multi-byte values (common case)
     if ((bit_offset % 8) == 0 && (bit_count % 8) == 0) {
         uint8_t byte_offset = bit_offset / 8;
@@ -376,8 +546,8 @@ int32_t HIDReportParser::extractValue(const uint8_t* data, uint16_t bit_offset, 
     return (int32_t)value;
 }
 
-void HIDReportParser::insertValue(uint8_t* data, uint16_t bit_offset, uint8_t bit_count,
-                                 int32_t value, int32_t logical_min, int32_t logical_max) {
+void HIDMouseDescriptorHandler::insertValue(uint8_t* data, uint16_t bit_offset, uint8_t bit_count,
+                                          int32_t value, int32_t logical_min, int32_t logical_max) {
     // Clamp to logical range
     if (value < logical_min) value = logical_min;
     if (value > logical_max) value = logical_max;
@@ -424,7 +594,7 @@ void HIDReportParser::insertValue(uint8_t* data, uint16_t bit_offset, uint8_t bi
     }
 }
 
-bool HIDReportParser::parseMouseData(const uint8_t* raw_data, uint32_t length, MouseState& state) {
+bool HIDMouseDescriptorHandler::parseMouseData(const uint8_t* raw_data, uint32_t length, MouseState& state) {
     if (!valid) {
         return false;
     }
@@ -481,7 +651,7 @@ bool HIDReportParser::parseMouseData(const uint8_t* raw_data, uint32_t length, M
     return true;
 }
 
-bool HIDReportParser::formatMouseData(const MouseState& state, uint8_t* raw_data, uint32_t& length) {
+bool HIDMouseDescriptorHandler::formatMouseData(const MouseState& state, uint8_t* raw_data, uint32_t& length) {
     if (!valid) {
         return false;
     }
@@ -526,7 +696,62 @@ bool HIDReportParser::formatMouseData(const MouseState& state, uint8_t* raw_data
     return true;
 }
 
-void HIDReportParser::printDescriptorInfo() {
+void HIDMouseDescriptorHandler::printInterfaceInfo() {
+    Serial4.println("\n=== HID Mouse Interface Info ===");
+    
+    if (interface_index == 0xFF) {
+        Serial4.println("No mouse interface found");
+        return;
+    }
+    
+    Serial4.print("Interface Index: ");
+    Serial4.println(interface_index);
+    Serial4.print("Interface Number: ");
+    Serial4.println(interface_number);
+    Serial4.print("Protocol: ");
+    Serial4.print(interface_protocol);
+    
+    switch (interface_protocol) {
+        case 0: Serial4.println(" (None)"); break;
+        case 1: Serial4.println(" (Keyboard)"); break;
+        case 2: Serial4.println(" (Mouse)"); break;
+        default: Serial4.println(" (Unknown)"); break;
+    }
+    
+    Serial4.print("HID Descriptor Length: ");
+    Serial4.println(descriptor_length);
+    
+    Serial4.print("Endpoint: 0x");
+    if (endpoint_address < 0x10) Serial4.print("0");
+    Serial4.print(endpoint_address | 0x80, HEX);  // IN endpoint
+    Serial4.print(" (");
+    Serial4.print(endpoint_size);
+    Serial4.print(" bytes, interval ");
+    Serial4.print(endpoint_interval);
+    Serial4.println("ms)");
+    
+    Serial4.print("State: ");
+    switch (handler_state) {
+        case HID_STATE_IDLE: Serial4.println("IDLE"); break;
+        case HID_STATE_WAIT_DESCRIPTOR: Serial4.println("WAIT_DESCRIPTOR"); break;
+        case HID_STATE_PARSING: Serial4.println("PARSING"); break;
+        case HID_STATE_READY: Serial4.println("READY"); break;
+        case HID_STATE_ERROR: Serial4.println("ERROR"); break;
+    }
+    
+    Serial4.print("Descriptor Valid: ");
+    Serial4.println(valid ? "Yes" : "No");
+    
+    if (valid && hid_descriptor_size > 0) {
+        Serial4.print("Descriptor Size: ");
+        Serial4.print(hid_descriptor_size);
+        Serial4.println(" bytes");
+    }
+    
+    Serial4.println("===============================");
+}
+
+void HIDMouseDescriptorHandler::printDescriptorInfo() {
     Serial4.println("\n=== HID Report Structure ===");
     Serial4.print("Valid: ");
     Serial4.println(valid ? "Yes" : "No");
@@ -612,7 +837,7 @@ void HIDReportParser::printDescriptorInfo() {
     Serial4.println("==========================\n");
 }
 
-void HIDReportParser::printMouseState(const MouseState& state) {
+void HIDMouseDescriptorHandler::printMouseState(const MouseState& state) {
     Serial4.print("Mouse: Buttons=0x");
     Serial4.print(state.buttons, HEX);
     Serial4.print(" (");

@@ -1,8 +1,8 @@
-// HIDReportParser.h
-#ifndef _HIDREPORTPARSER_H_
-#define _HIDREPORTPARSER_H_
+#ifndef _HIDMOUSEDESCRIPTORHANDLER_H_
+#define _HIDMOUSEDESCRIPTORHANDLER_H_
 
 #include <Arduino.h>
+#include "USBHostDriver.h"
 
 // HID item types
 #define HID_ITEM_TYPE_MAIN      0x00
@@ -89,12 +89,27 @@ struct ParseState {
     uint8_t report_id;
 };
 
-class HIDReportParser {
+// Handler states
+enum HIDHandlerState {
+    HID_STATE_IDLE,
+    HID_STATE_WAIT_DESCRIPTOR,
+    HID_STATE_PARSING,
+    HID_STATE_READY,
+    HID_STATE_ERROR
+};
+
+class HIDMouseDescriptorHandler {
 public:
-    HIDReportParser();
+    HIDMouseDescriptorHandler();
     
-    // Parse HID report descriptor
-    bool parseDescriptor(const uint8_t* descriptor, uint16_t length);
+    // Initialize with a USBHostDriver
+    void begin(USBHostDriver* driver);
+    
+    // Find and setup mouse interface
+    bool setupMouseInterface();
+    
+    // Request and parse HID descriptor from USB device
+    bool requestHIDDescriptor(uint32_t timeout_ms = 500);
     
     // Set to standard boot mouse format (fallback)
     void setBootMouseFormat();
@@ -103,9 +118,12 @@ public:
     bool parseMouseData(const uint8_t* raw_data, uint32_t length, MouseState& state);
     bool formatMouseData(const MouseState& state, uint8_t* raw_data, uint32_t& length);
     
-    // Get parsed information
+    // State and status
+    HIDHandlerState getState() const { return handler_state; }
+    bool isReady() const { return handler_state == HID_STATE_READY && valid; }
     bool isValid() const { return valid; }
     uint8_t getReportID() const { return report_id; }
+    uint8_t getReportSize() const { return report_size_bytes; }
     uint8_t getReportSizeBytes() const { return report_size_bytes; }
     bool hasX() const { return has_x; }
     bool hasY() const { return has_y; }
@@ -113,7 +131,14 @@ public:
     bool hasButtons() const { return has_buttons; }
     uint8_t getButtonCount() const { return button_count; }
     
+    // Interface information
+    uint8_t getInterfaceIndex() const { return interface_index; }
+    uint8_t getInterfaceNumber() const { return interface_number; }
+    uint8_t getEndpointAddress() const { return endpoint_address; }
+    uint16_t getEndpointSize() const { return endpoint_size; }
+    
     // Debug output
+    void printInterfaceInfo();
     void printDescriptorInfo();
     void printMouseState(const MouseState& state);
     
@@ -122,7 +147,33 @@ public:
     bool getDebugOutput() const { return debug_enabled; }
     
 private:
-    // Helper functions
+    // USB Host Driver reference
+    USBHostDriver* host_driver;
+    
+    // Handler state
+    HIDHandlerState handler_state;
+    
+    // Interface information
+    uint8_t interface_index;     // Index in driver's interface array
+    uint8_t interface_number;    // USB interface number
+    uint8_t interface_protocol;  // 1=keyboard, 2=mouse
+    uint16_t descriptor_length;  // Expected HID descriptor length
+    
+    // Endpoint information
+    uint8_t endpoint_address;
+    uint16_t endpoint_size;
+    uint8_t endpoint_interval;
+    
+    // HID descriptor storage
+    uint8_t hid_descriptor[512];
+    uint16_t hid_descriptor_size;
+    
+    // Helper methods for USB communication
+    bool findMouseInterface();
+    bool retrieveHIDDescriptor(uint32_t timeout_ms);
+    
+    // HID Report Parser functionality (from original HIDReportParser)
+    bool parseDescriptor(const uint8_t* descriptor, uint16_t length);
     uint8_t getItemSize(uint8_t byte0);
     int32_t extractValue(const uint8_t* data, uint16_t bit_offset, uint8_t bit_count,
                         int32_t logical_min, int32_t logical_max, bool is_signed);
@@ -152,4 +203,4 @@ private:
     bool debug_enabled;
 };
 
-#endif // _HIDREPORTPARSER_H_
+#endif // _HIDMOUSEDESCRIPTORHANDLER_H_
