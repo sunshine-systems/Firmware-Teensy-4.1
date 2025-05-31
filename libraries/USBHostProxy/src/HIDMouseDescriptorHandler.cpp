@@ -199,66 +199,12 @@ bool HIDMouseDescriptorHandler::activateInterface() {
     }
     
     if (debug_enabled) {
-        Serial4.println("[HID_HANDLER]: Activating HID interface...");
+        Serial4.println("[HID_HANDLER]: Interface activation complete");
     }
     
-    // Set Idle to 0 (infinite) - this tells the device to send all reports
-    // bmRequestType: 0x21 (Host-to-Device, Class, Interface)
-    // bRequest: 0x0A (SET_IDLE)
-    // wValue: 0x0000 (Duration=0, ReportID=0)
-    // wIndex: interface number
-    // wLength: 0
-    uint16_t dummy;
-    bool success = host_driver->controlTransfer(
-        0x21,                    // bmRequestType (Host-to-Device, Class, Interface)
-        0x0A,                    // bRequest (SET_IDLE)
-        0x0000,                  // wValue (Duration=0, ReportID=0)
-        interface_number,        // wIndex
-        0,                       // wLength
-        nullptr,                 // data buffer
-        &dummy,                  // actual length received
-        100                      // timeout
-    );
-    
-    if (success) {
-        if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: SET_IDLE command sent successfully");
-        }
-    } else {
-        if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: SET_IDLE command failed");
-        }
-    }
-    
-    // For boot protocol devices, also try SET_PROTOCOL
-    if (interface_protocol == 2) {  // Mouse
-        // Set Protocol to Report Protocol (1)
-        // bmRequestType: 0x21 (Host-to-Device, Class, Interface)
-        // bRequest: 0x0B (SET_PROTOCOL)
-        // wValue: 0x0001 (Report Protocol)
-        // wIndex: interface number
-        // wLength: 0
-        success = host_driver->controlTransfer(
-            0x21,                    // bmRequestType
-            0x0B,                    // bRequest (SET_PROTOCOL)
-            0x0001,                  // wValue (1 = Report Protocol)
-            interface_number,        // wIndex
-            0,                       // wLength
-            nullptr,                 // data buffer
-            &dummy,                  // actual length received
-            100                      // timeout
-        );
-        
-        if (success) {
-            if (debug_enabled) {
-                Serial4.println("[HID_HANDLER]: SET_PROTOCOL (Report) command sent successfully");
-            }
-        } else {
-            if (debug_enabled) {
-                Serial4.println("[HID_HANDLER]: SET_PROTOCOL command failed");
-            }
-        }
-    }
+    // Note: SET_IDLE and SET_PROTOCOL are optional HID commands that many devices
+    // don't support. We've removed them since they often return STALL.
+    // The device will work fine without them.
     
     return true;
 }

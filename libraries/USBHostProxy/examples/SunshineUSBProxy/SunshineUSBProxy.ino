@@ -207,9 +207,10 @@ void loop() {
                     hidParsed = true;
                 }
                 
-                // Activate the HID interface
+                // Activate the HID interface (simplified - no longer sends optional HID commands)
                 Serial4.println("[MAIN]: Activating HID interface...");
                 hidMouseHandler.activateInterface();
+                Serial4.println("[MAIN]: HID interface activated");
                 
             } else {
                 Serial4.println("[MAIN]: Failed to get HID descriptor - using boot protocol");
@@ -219,6 +220,7 @@ void loop() {
                 // Still try to activate even with boot protocol
                 Serial4.println("[MAIN]: Activating HID interface...");
                 hidMouseHandler.activateInterface();
+                Serial4.println("[MAIN]: HID interface activated");
             }
             
             currentState = HID_PARSED;

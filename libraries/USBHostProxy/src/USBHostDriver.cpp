@@ -477,9 +477,9 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     control_last_token = 0;
     
     // Queue the transfer
-    Serial4.println("[DRIVER]: Queuing control transfer...");
-    queue_Control_Transfer(device, &control_setup, control_buffer, this);
-    Serial4.println("[DRIVER]: Control transfer queued");
+    Serial4.print("[DRIVER]: Queuing control transfer");
+    bool queue_result = queue_Control_Transfer(device, &control_setup, control_buffer, this);
+    Serial4.println(queue_result ? "...success" : "...failed");
     
     // Wait for completion
     uint32_t start = millis();
@@ -526,6 +526,9 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
 }
 
 void USBHostDriver::control(const Transfer_t *transfer) {
+    // Small delay to ensure previous Serial4 operations complete
+    delayMicroseconds(100);
+    
     Serial4.println("[DRIVER]: control() callback called");
     
     if (control_pending && transfer->buffer == control_buffer) {
