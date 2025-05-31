@@ -330,8 +330,25 @@ void USBHostDriver::claimEndpoints() {
 void USBHostDriver::startReading() {
     if (in_pipe) {
         Serial4.println("[STARTUP]: Starting data reading...");
+        Serial4.print("[STARTUP]: IN pipe address: 0x");
+        Serial4.println((uint32_t)in_pipe, HEX);
+        Serial4.print("[STARTUP]: Buffer address: 0x");
+        Serial4.println((uint32_t)rx_buffer, HEX);
+        Serial4.print("[STARTUP]: Endpoint size: ");
+        Serial4.println(in_endpoint_size);
+        
+        // Clear the buffer first
+        memset(rx_buffer, 0, sizeof(rx_buffer));
+        
+        // Queue the transfer
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
         Serial4.println("[STARTUP]: Data transfer queued");
+        
+        // Verify the transfer was queued
+        Serial4.print("[STARTUP]: Pipe callback function: 0x");
+        Serial4.println((uint32_t)in_pipe->callback_function, HEX);
+    } else {
+        Serial4.println("[STARTUP]: ERROR - No IN pipe available!");
     }
 }
 
@@ -505,7 +522,12 @@ void USBHostDriver::in_callback(const Transfer_t *transfer) {
 }
 
 void USBHostDriver::processInData(const Transfer_t *transfer) {
-    if (!transfer || !transfer->buffer) return;
+    Serial4.println("[DRIVER]: processInData called!");  // Add this line
+    
+    if (!transfer || !transfer->buffer) {
+        Serial4.println("[DRIVER]: Invalid transfer or buffer!");
+        return;
+    }    
     
     // Calculate actual received length
     uint32_t len = transfer->length;

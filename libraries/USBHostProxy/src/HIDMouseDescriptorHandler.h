@@ -76,6 +76,11 @@ struct MouseState {
     bool leftButton() const { return buttons & 0x01; }
     bool rightButton() const { return buttons & 0x02; }
     bool middleButton() const { return buttons & 0x04; }
+    bool button4() const { return buttons & 0x08; }
+    bool button5() const { return buttons & 0x10; }
+    bool button6() const { return buttons & 0x20; }
+    bool button7() const { return buttons & 0x40; }
+    bool button8() const { return buttons & 0x80; }
 };
 
 // Parse state for descriptor parsing

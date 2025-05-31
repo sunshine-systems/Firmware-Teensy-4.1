@@ -839,11 +839,20 @@ void HIDMouseDescriptorHandler::printDescriptorInfo() {
 
 void HIDMouseDescriptorHandler::printMouseState(const MouseState& state) {
     Serial4.print("Mouse: Buttons=0x");
+    if (state.buttons < 0x10) Serial4.print("0");
     Serial4.print(state.buttons, HEX);
     Serial4.print(" (");
-    if (state.leftButton()) Serial4.print("L");
-    if (state.rightButton()) Serial4.print("R"); 
-    if (state.middleButton()) Serial4.print("M");
+    
+    // Check all possible buttons
+    if (state.buttons & 0x01) Serial4.print("L");
+    if (state.buttons & 0x02) Serial4.print("R"); 
+    if (state.buttons & 0x04) Serial4.print("M");
+    if (state.buttons & 0x08) Serial4.print("B4");  // Button 4 (thumb back)
+    if (state.buttons & 0x10) Serial4.print("B5");  // Button 5 (thumb forward)
+    if (state.buttons & 0x20) Serial4.print("B6");  // Button 6 (if exists)
+    if (state.buttons & 0x40) Serial4.print("B7");  // Button 7 (if exists)
+    if (state.buttons & 0x80) Serial4.print("B8");  // Button 8 (if exists)
+    
     Serial4.print(") X=");
     Serial4.print(state.x);
     Serial4.print(" Y=");

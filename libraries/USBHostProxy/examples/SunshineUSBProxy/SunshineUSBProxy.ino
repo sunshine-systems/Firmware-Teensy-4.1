@@ -32,8 +32,8 @@ bool deviceClaimed = false;
 bool hidParsed = false;
 bool usbDeviceInitialized = false;
 
-// Debug control
-bool debugMode = false;
+// Debug default mode control
+bool debugMode = true;
 
 // Mouse state
 MouseState currentMouse;
@@ -42,10 +42,39 @@ uint32_t rawDataLength = 0;
 
 // Data callback for USBHostDriver
 void dataCallback(const uint8_t* data, uint32_t length) {
+    // Diagnostic: print if we're getting zero-length callbacks
+    static uint32_t callback_count = 0;
+    callback_count++;
+    
+    if (debugMode && length == 0) {
+        Serial4.print("[DATA]: Empty callback #");
+        Serial4.println(callback_count);
+    }
+    
+    // Store raw data for potential use
+    if (length > 0 && length <= sizeof(rawDataBuffer)) {
+        memcpy(rawDataBuffer, data, length);
+        rawDataLength = length;
+    }
+    
+    // Debug raw data if enabled
+    if (debugMode && length > 0) {
+        Serial4.print("[DATA]: Raw HID data (");
+        Serial4.print(length);
+        Serial4.print(" bytes): ");
+        for (uint32_t i = 0; i < length; i++) {
+            if (data[i] < 0x10) Serial4.print("0");
+            Serial4.print(data[i], HEX);
+            if (i < length - 1) Serial4.print(" ");
+        }
+        Serial4.println();
+    }
+    
     // Handle incoming HID data
     if (hidParsed && hidMouseHandler.isReady()) {
         if (hidMouseHandler.parseMouseData(data, length, currentMouse)) {
             if (debugMode) {
+                Serial4.print("[DATA]: Parsed - ");
                 hidMouseHandler.printMouseState(currentMouse);
             }
             
@@ -53,6 +82,8 @@ void dataCallback(const uint8_t* data, uint32_t length) {
             if (usbDeviceInitialized) {
                 // Forward the data through USB device
             }
+        } else if (debugMode) {
+            Serial4.println("[DATA]: Failed to parse mouse data");
         }
     }
 }
@@ -180,6 +211,21 @@ void loop() {
         case PROXY_ACTIVE:
             // Normal operation - data is forwarded via callbacks
             
+            // Diagnostic: periodically check if we're getting data
+            static unsigned long lastDataCheck = 0;
+            if (debugMode && millis() - lastDataCheck > 5000) {
+                lastDataCheck = millis();
+                Serial4.println("[MAIN]: Still in PROXY_ACTIVE, checking data flow...");
+                
+                // Try to manually check for data
+                uint8_t testBuffer[64];
+                uint32_t testLength = 0;
+                if (usbHostDriver.getLastData(testBuffer, testLength)) {
+                    Serial4.print("[MAIN]: Found pending data! Length: ");
+                    Serial4.println(testLength);
+                }
+            }
+            
             // Check if device disconnected
             if (!usbHostDriver.isReady()) {
                 Serial4.println("\n[MAIN]: Device disconnected!");
@@ -212,6 +258,9 @@ void handleSerialCommand(char cmd) {
             hidMouseHandler.setDebugOutput(debugMode);
             Serial4.print("[MAIN]: Debug mode ");
             Serial4.println(debugMode ? "ON" : "OFF");
+            if (debugMode) {
+                Serial4.println("[MAIN]: Move the mouse to see data...");
+            }
             break;
             
         case 's':

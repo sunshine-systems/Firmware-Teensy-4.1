@@ -357,3 +357,44 @@ All USB buffers are 32-byte aligned as required by the USB controller:
 ```cpp
 uint8_t buffer[64] __attribute__ ((aligned(32)));
 ```
+
+## Device Compatibility
+
+The following devices have been tested with the SunBox USB Proxy System:
+
+| Device | VID | PID | Reading Data | Full Proxy Passthrough | Max Polling Rate | Requires Powered Hub | Notes |
+|--------|-----|-----|--------------|----------------------|------------------|---------------------|-------|
+| Glorious Model O Wireless | 0x258A | 0x2022 | ✅ Yes | Unknown | Unknown | ❌ No | 5 buttons, 16-bit X/Y |
+| BenQ Zowie | 0x3662 | 0x2004 | ✅ Yes | Unknown | Unknown | ❌ No | 5 buttons, 16-bit X/Y |
+| Pwnage StormBreaker CF | 0x04A5 | 0x8001 | ✅ Yes | Unknown | Unknown | ❌ No | 6 buttons, 16-bit X/Y |
+| Beast X Mini | 0x3662 | 0x2004 | ✅ Yes | Unknown | Unknown | ❌ No | 5 buttons, 16-bit X/Y |
+
+### Device Details
+
+#### Glorious Model O Wireless
+- **Interface Count**: 3 (Mouse, Keyboard, Generic HID)
+- **HID Descriptor Length**: 91 bytes
+- **Report Size**: 8 bytes
+- **Features**: L/R/M buttons, 2 thumb buttons (B4/B5), scroll wheel, 16-bit precision movement
+
+#### BenQ Zowie / Beast X Mini
+- **Interface Count**: 3 (Mouse, Keyboard, Generic HID)
+- **HID Descriptor Length**: 91 bytes  
+- **Report Size**: 8 bytes
+- **Features**: L/R/M buttons, 2 thumb buttons (B4/B5), scroll wheel, 16-bit precision movement
+- **Note**: Both devices share the same VID/PID
+
+#### Pwnage StormBreaker CF
+- **Interface Count**: 1 (Mouse only)
+- **HID Descriptor Length**: 69 bytes
+- **Report Size**: 6 bytes
+- **Features**: L/R/M buttons, 2 thumb buttons (B4/B5), scroll wheel, 16-bit precision movement
+- **Note**: More compact HID report format (6 bytes vs 8)
+
+### Compatibility Notes
+
+- All tested devices support the standard HID mouse protocol
+- No devices required special initialization beyond standard HID commands
+- All devices work without a powered USB hub
+- Movement data uses 16-bit signed integers for precise tracking
+- Button layouts are consistent across devices (bits 0-4 for buttons, bit 5+ unused)
