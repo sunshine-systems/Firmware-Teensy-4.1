@@ -187,8 +187,10 @@ void USBHost::begin()
 	USBHS_FRINDEX = 0;
 	USBHS_ASYNCLISTADDR = 0;
 
-	// Set USBCMD (original - including RS bit)
-	USBHS_USBCMD = USBHS_USBCMD_ITC(1) | USBHS_USBCMD_RS |
+	// CRITICAL FIX: Change ITC from 1 to 0 for proper polling rates
+	// ITC(0) = interrupt every microframe (125μs)
+	// ITC(1) = interrupt every 2 microframes (250μs) - causes half polling rate!
+	USBHS_USBCMD = USBHS_USBCMD_ITC(0) | USBHS_USBCMD_RS |
 		USBHS_USBCMD_ASP(3) | USBHS_USBCMD_ASPE | USBHS_USBCMD_PSE |
 		#if PERIODIC_LIST_SIZE == 8
 		USBHS_USBCMD_FS2 | USBHS_USBCMD_FS(3);
@@ -213,10 +215,6 @@ void USBHost::begin()
 	// Turn on port power (original)
 	USBHS_PORTSC1 |= USBHS_PORTSC_PP;
 
-	// println("USBHS_ASYNCLISTADDR = ", USBHS_ASYNCLISTADDR, HEX); // Original debug prints commented out
-	// println("USBHS_PERIODICLISTBASE = ", USBHS_PERIODICLISTBASE, HEX);
-	// println("periodictable = ", (uint32_t)periodictable, HEX);
-
 	// Enable interrupts (original)
 	attachInterruptVector(IRQ_USBHS, isr);
 	NVIC_ENABLE_IRQ(IRQ_USBHS);
@@ -224,6 +222,7 @@ void USBHost::begin()
 	USBHS_USBINTR |= USBHS_USBINTR_UEE | USBHS_USBINTR_SEE;
 	USBHS_USBINTR |= USBHS_USBINTR_UPIE | USBHS_USBINTR_UAIE;
 
+    // Final state logging
     // <<< ADDED: Final state logging >>>
     println_("\n--- USBHost::begin() Complete ---");
     print_("Final USBCMD: 0x"); println_(USBHS_USBCMD, HEX);
@@ -258,7 +257,7 @@ void USBHost::isr()
 {
 	uint32_t cmd_entry = USBHS_USBCMD; // Capture USBCMD on entry for logging
     uint32_t stat = USBHS_USBSTS;
-    print_("--- ISR Entry --- USBCMD: 0x"); print_(cmd_entry, HEX); print_(", USBSTS: 0x"); println_(stat, HEX);
+    //print_("--- ISR Entry --- USBCMD: 0x"); print_(cmd_entry, HEX); print_(", USBSTS: 0x"); println_(stat, HEX);
 
     // --- Check for HCH ---
     if (stat & USBHS_USBSTS_HCH) {
@@ -276,7 +275,7 @@ void USBHost::isr()
     // Original debug block removed for clarity
 
 	if (stat & USBHS_USBSTS_UAI) { // completed qTD(s) from the async schedule
-        println_("--- ISR: Async Completion/Error (UAI) ---"); // Basic log
+        //println_("--- ISR: Async Completion/Error (UAI) ---"); // Basic log
 		Transfer_t *p = async_followup_first;
 		while (p) {
 			if (followup_Transfer(p)) {
@@ -290,7 +289,7 @@ void USBHost::isr()
 		}
 	}
 	if (stat & USBHS_USBSTS_UPI) { // completed qTD(s) from the periodic schedule
-        println_("--- ISR: Periodic Completion/Error (UPI) ---"); // Basic log
+        //println_("--- ISR: Periodic Completion/Error (UPI) ---"); // Basic log
 		Transfer_t *p = periodic_followup_first;
 		while (p) {
 			if (followup_Transfer(p)) {
@@ -304,13 +303,13 @@ void USBHost::isr()
 		}
 	}
 	if (stat & USBHS_USBSTS_UEI) {
-        println_("--- ISR: USB Error Interrupt (UEI) ---"); // Basic log
+        //println_("--- ISR: USB Error Interrupt (UEI) ---"); // Basic log
 		followup_Error();
 	}
 
 	if (stat & USBHS_USBSTS_PCI) { // port change detected
 		const uint32_t portstat = USBHS_PORTSC1;
-        print_("--- ISR: Port Change (PCI) --- PortStat: 0x"); println_(portstat, HEX); // Basic log
+        //print_("--- ISR: Port Change (PCI) --- PortStat: 0x"); println_(portstat, HEX); // Basic log
 		USBHS_PORTSC1 = portstat | (USBHS_PORTSC_OCC|USBHS_PORTSC_PEC|USBHS_PORTSC_CSC); // Original clear bits
 		if (portstat & USBHS_PORTSC_OCC) {
 			println("  overcurrent change"); // Original log
@@ -353,7 +352,7 @@ void USBHost::isr()
 		}
 	}
 	if (stat & USBHS_USBSTS_TI0) { // timer 0 - built-in port events
-        println_("--- ISR: Timer 0 (TI0) ---"); // Basic log
+        //println_("--- ISR: Timer 0 (TI0) ---"); // Basic log
 		if (port_state == PORT_STATE_DEBOUNCE) {
 			port_state = PORT_STATE_RESET;
 			USBHS_PORTSC1 |= USBHS_PORTSC_PR; // Start reset
@@ -634,14 +633,14 @@ bool USBHost::queue_Control_Transfer(Device_t *dev, setup_t *setup, void *buf, U
 	uint32_t status_direction;
 
     // <<< ADDED: Log setup packet details >>>
-    println_("--- queue_Control_Transfer (Original Code Base) ---");
-    print_("  Device Addr: "); println_(dev->address);
-	print_("  Setup: ReqType=0x"); print_(setup->bmRequestType, HEX);
-	print_(", Req=0x"); print_(setup->bRequest, HEX);
-	print_(", Val=0x"); print_(setup->wValue, HEX);
-	print_(", Idx=0x"); print_(setup->wIndex, HEX);
-	print_(", Len="); println_(setup->wLength);
-    print_("  Setup Packet Raw Data (8 bytes): "); print_hexbytes((void*)setup, 8);
+    // println_("--- queue_Control_Transfer (Original Code Base) ---");
+    // print_("  Device Addr: "); println_(dev->address);
+	// print_("  Setup: ReqType=0x"); print_(setup->bmRequestType, HEX);
+	// print_(", Req=0x"); print_(setup->bRequest, HEX);
+	// print_(", Val=0x"); print_(setup->wValue, HEX);
+	// print_(", Idx=0x"); print_(setup->wIndex, HEX);
+	// print_(", Len="); println_(setup->wLength);
+    // print_("  Setup Packet Raw Data (8 bytes): "); print_hexbytes((void*)setup, 8);
     // <<< END ADDED LOGGING >>>
 
 	if (setup->wLength > 16384) return false; // max 16K data for control
@@ -672,10 +671,10 @@ bool USBHost::queue_Control_Transfer(Device_t *dev, setup_t *setup, void *buf, U
 	status->driver = driver;
 	status->qtd.next = 1; // Terminate status qTD
 
-    println_("  Attempting queue_Transfer()...");
+    // println_("  Attempting queue_Transfer()...");
 	bool result = queue_Transfer(dev->control_pipe, transfer);
-    print_("  queue_Transfer() result: "); println_(result ? "Success" : "Failure");
-    println_("--- queue_Control_Transfer End ---");
+    // print_("  queue_Transfer() result: "); println_(result ? "Success" : "Failure");
+    // println_("--- queue_Control_Transfer End ---");
     return result;
 }
 
