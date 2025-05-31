@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "debug/printf.h"
-#include "../../libraries/USBHostProxy/src/USBHostProxy.h"
+#include "../../libraries/USBHostProxy/src/SunBoxStartup.h"
 
 // from the linker
 extern unsigned long _stextload;
@@ -64,35 +64,8 @@ volatile uint8_t readyForProxy = 0;
 static uint32_t proxy_start_time = 0;
 static uint8_t proxy_sequence_started = 0;
 
-FLASHMEM void USBHostProxy_startSequence(void)
-{
-    if (!proxy_sequence_started) {
-        printf("USBHostProxy: Starting proxy sequence...\n");
-        proxy_start_time = millis();
-        proxy_sequence_started = 1;
-        readyForProxy = 0;
-    }
-    
-    if (proxy_sequence_started && !readyForProxy) {
-        uint32_t elapsed = millis() - proxy_start_time;
-        
-        static uint32_t last_print = 0;
-        if (elapsed / 1000 > last_print) {
-            last_print = elapsed / 1000;
-            printf("USBHostProxy: Waiting... %lu seconds\n", last_print);
-        }
-        
-        if (elapsed >= 4000) {
-            printf("USBHostProxy: Proxy initialization complete!\n");
-            readyForProxy = 1;
-        }
-    }
-}
-
-FLASHMEM uint8_t USBHostProxy_isReady(void)
-{
-    return readyForProxy;
-}
+FLASHMEM void SunBoxStartup_begin(void);
+FLASHMEM uint8_t SunBoxStartup_isReady(void);
 // ==== End USB Host Proxy Implementation ====
 
 
@@ -238,19 +211,7 @@ static void ResetHandler2(void)
 	// Wait for initial delay
 	while (millis() < TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
 
-	// Start USB Host Proxy sequence - ALWAYS run this
-	printf("Starting USB Host Proxy initialization...\n");
-	
-	// Keep calling startSequence until proxy is ready
-	while (!USBHostProxy_isReady()) {
-		USBHostProxy_startSequence();
-		// Small delay to prevent tight polling
-		delay(10);
-	}
-	
-	// Now that proxy is ready, initialize USB
-	printf("USB Host Proxy ready, initializing USB...\n");
-	usb_init();
+	SunBoxStartup_begin();
 
 	while (millis() < TEENSY_INIT_USB_DELAY_AFTER + TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
 
