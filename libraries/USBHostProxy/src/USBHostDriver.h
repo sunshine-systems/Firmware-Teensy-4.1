@@ -8,6 +8,7 @@
 #define MAX_ENDPOINTS 4
 #define RX_BUFFER_SIZE 64
 #define MAX_INTERFACES 8
+#define MAX_CONFIG_DESCRIPTOR_SIZE 2048  // Maximum size for configuration descriptor
 
 // Claim types from USBHost_t36
 #define CLAIM_REPORT        0
@@ -28,9 +29,6 @@ public:
     // Device information
     uint16_t getVendorID() const { return device ? device->idVendor : 0; }
     uint16_t getProductID() const { return device ? device->idProduct : 0; }
-    const char* getManufacturer() const { return manufacturer_string; }
-    const char* getProduct() const { return product_string; }
-    const char* getSerial() const { return serial_string; }
     
     // Control transfer API
     bool controlTransfer(uint8_t bmRequestType, uint8_t bRequest, 
@@ -60,6 +58,13 @@ public:
     void setDataCallback(data_callback_t callback) { data_callback = callback; }
     bool getLastData(uint8_t* buffer, uint32_t& length);
     
+    // Debug methods
+    void dumpDeviceInfo();
+    
+    // Transfer control
+    void pauseDataTransfers();
+    void resumeDataTransfers();
+    
 protected:
     // USBDriver interface implementation
     virtual bool claim(Device_t *dev, int type, const uint8_t *descriptors, uint32_t len) override;
@@ -67,17 +72,17 @@ protected:
     virtual void control(const Transfer_t *transfer) override;
     
 private:
+    // Descriptor parsing
     void parseDescriptors(const uint8_t* descriptors, uint32_t len);
     void claimEndpoints();
     void startReading();
     
-    // String descriptor helpers (simplified for now)
-    void requestStringDescriptor(uint8_t index, char* buffer, uint8_t buflen);
-    void processStringDescriptor(const Transfer_t *transfer);
-    
     // Data transfer callbacks
     static void in_callback(const Transfer_t *transfer);
     void processInData(const Transfer_t *transfer);
+    
+    // Helper for displaying stored descriptors
+    void displayStoredDescriptors();
     
     // USB Host reference
     USBHost* usbHost;
@@ -86,16 +91,18 @@ private:
     Device_t* device;
     bool device_ready;
     bool device_claimed;
-    bool strings_fetched;
     uint32_t connect_time;
     
-    // Device strings
-    char manufacturer_string[64];
-    char product_string[64];
-    char serial_string[64];
-    uint8_t string_buffer[256];
-    uint8_t pending_string_index;
-    char* pending_string_buffer;
+    // Stored configuration descriptor data
+    uint8_t config_descriptor[MAX_CONFIG_DESCRIPTOR_SIZE];
+    uint16_t config_descriptor_len;
+    bool config_descriptor_valid;
+    
+    // Configuration descriptor header info (reconstructed)
+    uint8_t config_num_interfaces;
+    uint8_t config_value;
+    uint8_t config_attributes;
+    uint8_t config_max_power;
     
     // Interface tracking
     struct InterfaceInfo {
@@ -120,6 +127,7 @@ private:
     volatile bool control_complete;
     volatile uint16_t control_length_received;
     volatile bool control_success;
+    volatile uint32_t control_last_token;
     
     // Endpoints
     Pipe_t* in_pipe;
@@ -144,8 +152,9 @@ private:
     // Data callback
     data_callback_t data_callback;
     
-    // Transfer tracking
-    uint8_t rx_transfer_index;
+    // Transfer control
+    volatile bool data_transfers_paused;
+    volatile bool pending_in_transfer;  // Track if an interrupt transfer is pending
 };
 
 #endif // _USBHOSTDRIVER_H_

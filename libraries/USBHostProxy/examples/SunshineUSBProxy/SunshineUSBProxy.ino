@@ -1,5 +1,6 @@
 // SunshineUSBProxy.ino - Using direct objects with HIDMouseDescriptorHandler
 #include <USBHost_t36.h>
+#include <EEPROM.h>
 #include "USBHostDriver.h"
 #include "HIDMouseDescriptorHandler.h"
 
@@ -8,6 +9,19 @@ extern "C" {
     #include "usb_dev.h"
     void usb_init(void);
 }
+
+// EEPROM structure for forced interface selection
+struct ForceClaimConfig {
+    uint32_t magic;      // 0xDEADBEEF for valid data
+    uint16_t vid;
+    uint16_t pid;
+    uint8_t interface_num;
+    uint8_t endpoint_addr;
+    uint16_t endpoint_size;
+};
+
+#define EEPROM_MAGIC 0xDEADBEEF
+#define EEPROM_CONFIG_ADDR 0
 
 // Global objects - created directly, not as pointers
 USBHost myusb;
@@ -32,13 +46,17 @@ bool deviceClaimed = false;
 bool hidParsed = false;
 bool usbDeviceInitialized = false;
 
-// Debug default mode control
-bool debugMode = true;
+// Debug control
+bool debugMode = false;
 
 // Mouse state
 MouseState currentMouse;
 uint8_t rawDataBuffer[64];
 uint32_t rawDataLength = 0;
+
+// Command buffer
+String commandBuffer = "";
+unsigned long lastCommandChar = 0;
 
 // Data callback for USBHostDriver
 void dataCallback(const uint8_t* data, uint32_t length) {
@@ -68,6 +86,18 @@ void dataCallback(const uint8_t* data, uint32_t length) {
             if (i < length - 1) Serial4.print(" ");
         }
         Serial4.println();
+        
+        // Additional debug - show bits for first byte
+        if (length > 0) {
+            Serial4.print("[DATA]: Button byte bits: ");
+            for (int i = 7; i >= 0; i--) {
+                Serial4.print((data[0] >> i) & 1);
+            }
+            Serial4.print(" (0x");
+            if (data[0] < 0x10) Serial4.print("0");
+            Serial4.print(data[0], HEX);
+            Serial4.println(")");
+        }
     }
     
     // Handle incoming HID data
@@ -120,6 +150,7 @@ void setup() {
     
     Serial4.println("[MAIN]: Setup complete - waiting for device...");
     currentState = WAIT_FOR_DEVICE;
+    lastCommandChar = millis(); // Initialize timer
 }
 
 void loop() {
@@ -128,6 +159,10 @@ void loop() {
     
     // State machine
     switch (currentState) {
+        case INIT:
+            // Should not reach here after setup()
+            break;
+            
         case WAIT_FOR_DEVICE:
             if (usbHostDriver.isReady()) {
                 Serial4.println("\n[MAIN]: Device detected and claimed!");
@@ -171,10 +206,19 @@ void loop() {
                     hidMouseHandler.setBootMouseFormat();
                     hidParsed = true;
                 }
+                
+                // Activate the HID interface
+                Serial4.println("[MAIN]: Activating HID interface...");
+                hidMouseHandler.activateInterface();
+                
             } else {
                 Serial4.println("[MAIN]: Failed to get HID descriptor - using boot protocol");
                 hidMouseHandler.setBootMouseFormat();
                 hidParsed = true;
+                
+                // Still try to activate even with boot protocol
+                Serial4.println("[MAIN]: Activating HID interface...");
+                hidMouseHandler.activateInterface();
             }
             
             currentState = HID_PARSED;
@@ -241,58 +285,153 @@ void loop() {
     }
     
     // Handle Serial commands
-    if (Serial4.available()) {
-        char cmd = Serial4.read();
-        handleSerialCommand(cmd);
+    while (Serial4.available()) {
+        char c = Serial4.read();
+        handleSerialCharacter(c);
+        lastCommandChar = millis();
+    }
+    
+    // Execute command after 1 second of no input (fallback for terminals without line endings)
+    if (commandBuffer.length() > 0 && (millis() - lastCommandChar > 1000)) {
+        Serial4.println(); // New line
+        handleSerialCommand(commandBuffer);
+        commandBuffer = "";
     }
     
     // Status LED
     updateStatusLED();
 }
 
-void handleSerialCommand(char cmd) {
-    switch (cmd) {
-        case 'd':
-        case 'D':
-            debugMode = !debugMode;
-            hidMouseHandler.setDebugOutput(debugMode);
-            Serial4.print("[MAIN]: Debug mode ");
-            Serial4.println(debugMode ? "ON" : "OFF");
-            if (debugMode) {
-                Serial4.println("[MAIN]: Move the mouse to see data...");
-            }
-            break;
-            
-        case 's':
-        case 'S':
-            printStatus();
-            break;
-            
-        case 'i':
-        case 'I':
-            if (hidMouseHandler.isReady()) {
-                hidMouseHandler.printInterfaceInfo();
-                hidMouseHandler.printDescriptorInfo();
-            } else {
-                Serial4.println("[MAIN]: HID handler not ready");
-            }
-            break;
-            
-        case 'h':
-        case 'H':
-        case '?':
-            printHelp();
-            break;
-            
-        case '\r':
-        case '\n':
-            break;
-            
-        default:
-            Serial4.print("[MAIN]: Unknown command: ");
-            Serial4.println(cmd);
-            break;
+void handleSerialCharacter(char c) {
+    // Simple approach - process on Enter or specific trigger
+    if (c == '\n' || c == '\r' || c == '!') {  // Added '!' as manual trigger
+        if (commandBuffer.length() > 0) {
+            Serial4.println(); // New line
+            handleSerialCommand(commandBuffer);
+            commandBuffer = "";
+        }
+    } else if (c == '\b' || c == 127) { // Backspace
+        if (commandBuffer.length() > 0) {
+            commandBuffer.remove(commandBuffer.length() - 1);
+            Serial4.print("\b \b"); // Erase character on screen
+        }
+    } else if (c >= ' ' && c <= '~') { // Printable characters
+        Serial4.print(c); // Echo
+        commandBuffer += c;
     }
+}
+
+void handleSerialCommand(String cmd) {
+    cmd.trim();
+    if (cmd.length() == 0) return;
+    
+    // Parse command and arguments
+    int spaceIndex = cmd.indexOf(' ');
+    String command = (spaceIndex > 0) ? cmd.substring(0, spaceIndex) : cmd;
+    String args = (spaceIndex > 0) ? cmd.substring(spaceIndex + 1) : "";
+    
+    // Process commands - check longer commands first
+    if (command == "dump") {
+        Serial4.println("[MAIN]: Device descriptor dump:");
+        usbHostDriver.dumpDeviceInfo();
+    }
+    else if (command == "debug") {
+        debugMode = !debugMode;
+        hidMouseHandler.setDebugOutput(debugMode);
+        Serial4.print("[MAIN]: Debug mode ");
+        Serial4.println(debugMode ? "ON" : "OFF");
+        if (debugMode) {
+            Serial4.println("[MAIN]: Move the mouse to see data...");
+        }
+    }
+    else if (command == "force") {
+        handleForceClaimCommand(args);
+    }
+    else if (command == "clear") {
+        clearForceClaim();
+    }
+    else if (command == "status") {
+        printStatus();
+    }
+    else if (command == "info") {
+        if (hidMouseHandler.isReady()) {
+            hidMouseHandler.printInterfaceInfo();
+            hidMouseHandler.printDescriptorInfo();
+        } else {
+            Serial4.println("[MAIN]: HID handler not ready");
+        }
+    }
+    else if (command == "help" || command == "?") {
+        printHelp();
+    }
+    else {
+        Serial4.print("[MAIN]: Unknown command: ");
+        Serial4.println(command);
+        Serial4.println("[MAIN]: Type 'help' for available commands");
+    }
+}
+
+void handleForceClaimCommand(String args) {
+    // Parse fc arguments: vid,pid,interface,endpoint
+    // Example: fc 046d,c53f,1,82
+    
+    int commas[3];
+    int commaCount = 0;
+    
+    // Find comma positions
+    for (unsigned int i = 0; i < args.length() && commaCount < 3; i++) {
+        if (args.charAt(i) == ',') {
+            commas[commaCount++] = i;
+        }
+    }
+    
+    if (commaCount != 3) {
+        Serial4.println("[MAIN]: Invalid format! Use: force vid,pid,interface,endpoint");
+        Serial4.println("[MAIN]: Example: force 046d,c53f,1,82");
+        return;
+    }
+    
+    // Parse values
+    String vidStr = args.substring(0, commas[0]);
+    String pidStr = args.substring(commas[0] + 1, commas[1]);
+    String ifaceStr = args.substring(commas[1] + 1, commas[2]);
+    String epStr = args.substring(commas[2] + 1);
+    
+    // Convert to numbers
+    uint16_t vid = strtoul(vidStr.c_str(), NULL, 16);
+    uint16_t pid = strtoul(pidStr.c_str(), NULL, 16);
+    uint8_t iface = strtoul(ifaceStr.c_str(), NULL, 10);
+    uint8_t ep = strtoul(epStr.c_str(), NULL, 16);
+    
+    // Create config
+    ForceClaimConfig config;
+    config.magic = EEPROM_MAGIC;
+    config.vid = vid;
+    config.pid = pid;
+    config.interface_num = iface;
+    config.endpoint_addr = ep;
+    config.endpoint_size = 64; // Default, will be updated from descriptor
+    
+    // Write to EEPROM
+    EEPROM.put(EEPROM_CONFIG_ADDR, config);
+    
+    Serial4.println("[MAIN]: Force claim configuration saved:");
+    Serial4.print("[MAIN]: VID=0x");
+    Serial4.print(vid, HEX);
+    Serial4.print(" PID=0x");
+    Serial4.print(pid, HEX);
+    Serial4.print(" Interface=");
+    Serial4.print(iface);
+    Serial4.print(" Endpoint=0x");
+    Serial4.println(ep, HEX);
+    Serial4.println("[MAIN]: Configuration will be used on next device connection");
+}
+
+void clearForceClaim() {
+    ForceClaimConfig config;
+    config.magic = 0; // Invalid magic number
+    EEPROM.put(EEPROM_CONFIG_ADDR, config);
+    Serial4.println("[MAIN]: Force claim configuration cleared");
 }
 
 void printStatus() {
@@ -347,15 +486,38 @@ void printStatus() {
     Serial4.print("Debug Mode: ");
     Serial4.println(debugMode ? "ON" : "OFF");
     
+    // Check for force claim config
+    ForceClaimConfig config;
+    EEPROM.get(EEPROM_CONFIG_ADDR, config);
+    if (config.magic == EEPROM_MAGIC) {
+        Serial4.print("Force Claim: VID=0x");
+        Serial4.print(config.vid, HEX);
+        Serial4.print(" PID=0x");
+        Serial4.print(config.pid, HEX);
+        Serial4.print(" Interface=");
+        Serial4.print(config.interface_num);
+        Serial4.print(" Endpoint=0x");
+        Serial4.println(config.endpoint_addr, HEX);
+    } else {
+        Serial4.println("Force Claim: Not configured");
+    }
+    
     Serial4.println("====================");
 }
 
 void printHelp() {
     Serial4.println("\n=== Commands ===");
-    Serial4.println("d - Toggle debug mode");
-    Serial4.println("s - Show status");
-    Serial4.println("i - Show interface/descriptor info");
-    Serial4.println("h - Show help");
+    Serial4.println("debug  - Toggle debug mode");
+    Serial4.println("dump   - Dump device descriptors");
+    Serial4.println("force vid,pid,interface,endpoint - Force claim specific interface");
+    Serial4.println("         Example: force 046d,c53f,1,82");
+    Serial4.println("clear  - Clear force claim configuration");
+    Serial4.println("status - Show system status");
+    Serial4.println("info   - Show interface/descriptor info");
+    Serial4.println("help   - Show this help");
+    Serial4.println("");
+    Serial4.println("Note: Commands execute on Enter, '!' key, or after 1 second");
+    Serial4.println("If using Arduino Serial Monitor, set to 'Newline' or 'Carriage return'");
     Serial4.println("================");
 }
 

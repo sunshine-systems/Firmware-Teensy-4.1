@@ -76,8 +76,8 @@ struct MouseState {
     bool leftButton() const { return buttons & 0x01; }
     bool rightButton() const { return buttons & 0x02; }
     bool middleButton() const { return buttons & 0x04; }
-    bool button4() const { return buttons & 0x08; }
-    bool button5() const { return buttons & 0x10; }
+    bool button4() const { return buttons & 0x08; }  // Thumb back/side button 1
+    bool button5() const { return buttons & 0x10; }  // Thumb forward/side button 2
     bool button6() const { return buttons & 0x20; }
     bool button7() const { return buttons & 0x40; }
     bool button8() const { return buttons & 0x80; }
@@ -115,6 +115,9 @@ public:
     
     // Request and parse HID descriptor from USB device
     bool requestHIDDescriptor(uint32_t timeout_ms = 500);
+    
+    // Activate the HID interface (send SET_IDLE and SET_PROTOCOL)
+    bool activateInterface();
     
     // Set to standard boot mouse format (fallback)
     void setBootMouseFormat();
