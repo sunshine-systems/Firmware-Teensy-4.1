@@ -195,9 +195,24 @@ static void ResetHandler2(void)
 	// https://forum.pjrc.com/threads/36606?p=113980&viewfull=1#post113980
 	// https://forum.pjrc.com/threads/31290?p=87273&viewfull=1#post87273
 
+	// External flags from USB passthrough system
+	extern volatile uint8_t g_passthrough_ready;
+	extern volatile uint8_t g_need_passthrough_init;
+
 	while (millis() < TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
-	usb_init();
+
+	// Check if we need to wait for passthrough initialization
+	if (g_need_passthrough_init && !g_passthrough_ready) {
+		// Don't initialize USB yet - the main program will handle it
+		printf("Deferring USB init for passthrough mode\n");
+	} else {
+		// Normal USB initialization
+		usb_init();
+	}
+
 	while (millis() < TEENSY_INIT_USB_DELAY_AFTER + TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
+
+	
 	//printf("before C++ constructors\n");
 	startup_debug_reset();
 	startup_late_hook();
