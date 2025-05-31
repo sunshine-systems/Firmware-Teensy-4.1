@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "debug/printf.h"
+#include "../../libraries/USBHostProxy/src/USBHostProxy.h"
 
 // from the linker
 extern unsigned long _stextload;
@@ -57,6 +58,44 @@ void startup_late_hook(void)	__attribute__ ((weak, alias("startup_default_late_h
 extern void startup_debug_reset(void) __attribute__((noinline));
 FLASHMEM void startup_debug_reset(void) { __asm__ volatile("nop"); }
 
+
+// ==== USB Host Proxy Implementation ====
+volatile uint8_t readyForProxy = 0;
+static uint32_t proxy_start_time = 0;
+static uint8_t proxy_sequence_started = 0;
+
+FLASHMEM void USBHostProxy_startSequence(void)
+{
+    if (!proxy_sequence_started) {
+        printf("USBHostProxy: Starting proxy sequence...\n");
+        proxy_start_time = millis();
+        proxy_sequence_started = 1;
+        readyForProxy = 0;
+    }
+    
+    if (proxy_sequence_started && !readyForProxy) {
+        uint32_t elapsed = millis() - proxy_start_time;
+        
+        static uint32_t last_print = 0;
+        if (elapsed / 1000 > last_print) {
+            last_print = elapsed / 1000;
+            printf("USBHostProxy: Waiting... %lu seconds\n", last_print);
+        }
+        
+        if (elapsed >= 4000) {
+            printf("USBHostProxy: Proxy initialization complete!\n");
+            readyForProxy = 1;
+        }
+    }
+}
+
+FLASHMEM uint8_t USBHostProxy_isReady(void)
+{
+    return readyForProxy;
+}
+// ==== End USB Host Proxy Implementation ====
+
+
 static void ResetHandler2(void);
 
 __attribute__((section(".startup"), naked))
@@ -73,6 +112,7 @@ void ResetHandler(void)
 	ResetHandler2();
 	__builtin_unreachable();
 }
+
 
 __attribute__((section(".startup"), noinline, noreturn))
 static void ResetHandler2(void)
@@ -195,20 +235,22 @@ static void ResetHandler2(void)
 	// https://forum.pjrc.com/threads/36606?p=113980&viewfull=1#post113980
 	// https://forum.pjrc.com/threads/31290?p=87273&viewfull=1#post87273
 
-	// External flags from USB passthrough system
-	extern volatile uint8_t g_passthrough_ready;
-	extern volatile uint8_t g_need_passthrough_init;
-
+	// Wait for initial delay
 	while (millis() < TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
 
-	// Check if we need to wait for passthrough initialization
-	if (g_need_passthrough_init && !g_passthrough_ready) {
-		// Don't initialize USB yet - the main program will handle it
-		printf("Deferring USB init for passthrough mode\n");
-	} else {
-		// Normal USB initialization
-		usb_init();
+	// Start USB Host Proxy sequence - ALWAYS run this
+	printf("Starting USB Host Proxy initialization...\n");
+	
+	// Keep calling startSequence until proxy is ready
+	while (!USBHostProxy_isReady()) {
+		USBHostProxy_startSequence();
+		// Small delay to prevent tight polling
+		delay(10);
 	}
+	
+	// Now that proxy is ready, initialize USB
+	printf("USB Host Proxy ready, initializing USB...\n");
+	usb_init();
 
 	while (millis() < TEENSY_INIT_USB_DELAY_AFTER + TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
 
@@ -223,8 +265,6 @@ static void ResetHandler2(void)
 	
 	while (1) asm("WFI");
 }
-
-
 
 
 // ARM SysTick is used for most Ardiuno timing functions, delay(), millis(),
