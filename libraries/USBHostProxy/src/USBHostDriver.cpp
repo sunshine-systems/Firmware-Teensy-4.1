@@ -65,8 +65,6 @@ bool USBHostDriver::begin() {
 }
 
 bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, uint32_t len) {
-    bool debug_enabled = SunBoxStartup::isDebugEnabled();
-    
     Serial4.println();
     Serial4.print("S: USBHostDriver::claim() called - type: ");
     Serial4.print(type);
@@ -240,7 +238,6 @@ void USBHostDriver::disconnect() {
 //=============================================================================
 
 void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
-    bool debug_enabled = SunBoxStartup::isDebugEnabled();
     const uint8_t* p = descriptors;
     const uint8_t* end = descriptors + len;
     
@@ -370,8 +367,6 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
 //=============================================================================
 
 void USBHostDriver::claimEndpoints() {
-    bool debug_enabled = SunBoxStartup::isDebugEnabled();
-    
     // Claim IN endpoint
     if (in_endpoint_addr) {
         Serial4.print("S: Creating IN pipe for endpoint ");
@@ -403,8 +398,6 @@ void USBHostDriver::claimEndpoints() {
 }
 
 void USBHostDriver::startReading() {
-    bool debug_enabled = SunBoxStartup::isDebugEnabled();
-    
     if (in_pipe && !data_transfers_paused && !pending_in_transfer) {
         Serial4.println("S: Starting data reading...");
         Serial4.print("S: IN pipe address: 0x");
@@ -431,17 +424,12 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
                                    uint16_t wValue, uint16_t wIndex, uint16_t wLength,
                                    uint8_t* data, uint16_t* actualLength, 
                                    uint32_t timeout_ms) {
-    bool debug_enabled = SunBoxStartup::isDebugEnabled();
-    
     if (!device || !device_claimed) {
         Serial4.println("S: Control transfer failed - no device");
         return false;
     }
     
-    // Only print debug for non-descriptor requests
-    bool is_descriptor_request = (bRequest == 0x06 && (wValue >> 8) == 0x22);
-    
-    // Always print debug for descriptor requests during dump
+    // Always print debug for descriptor requests
     Serial4.print("S: Control transfer: bmRequestType=0x");
     Serial4.print(bmRequestType, HEX);
     Serial4.print(" bRequest=0x");
@@ -796,17 +784,15 @@ uint8_t USBHostDriver::getEndpointInterval(uint8_t interface_index) const {
 //=============================================================================
 
 void USBHostDriver::dumpDeviceInfo() {
-    bool debug_enabled = SunBoxStartup::isDebugEnabled();
-    
-    Serial4.println("\n=== USB Device Descriptor Dump ===");
+    Serial4.println("\nI: === USB Device Descriptor Dump ===");
     
     if (!device) {
-        Serial4.println("No device connected!");
+        Serial4.println("I: No device connected!");
         return;
     }
     
     // Device info
-    Serial4.print("Device VID: 0x");
+    Serial4.print("I: Device VID: 0x");
     if (device->idVendor < 0x10) Serial4.print("0");
     if (device->idVendor < 0x100) Serial4.print("0");
     if (device->idVendor < 0x1000) Serial4.print("0");
@@ -817,29 +803,29 @@ void USBHostDriver::dumpDeviceInfo() {
     if (device->idProduct < 0x1000) Serial4.print("0");
     Serial4.println(device->idProduct, HEX);
     
-    Serial4.print("Device Class: 0x");
+    Serial4.print("I: Device Class: 0x");
     if (device->bDeviceClass < 0x10) Serial4.print("0");
     Serial4.println(device->bDeviceClass, HEX);
     
     // Interface summary
-    Serial4.print("\nTotal Interfaces: ");
+    Serial4.print("\nI: Total Interfaces: ");
     Serial4.println(interface_count);
     
     // If we have stored configuration descriptor, parse it for display
     if (config_descriptor_valid && config_descriptor_len > 0) {
-        Serial4.println("\n[Using stored configuration descriptor]");
+        Serial4.println("\nI: [Using stored configuration descriptor]");
         displayStoredDescriptors();
     } else {
         // Fall back to basic interface info from our structures
-        Serial4.println("\n[No stored descriptors available - showing parsed data only]");
+        Serial4.println("\nI: [No stored descriptors available - showing parsed data only]");
         
         // Dump each interface
         for (uint8_t i = 0; i < interface_count; i++) {
-            Serial4.print("\n--- Interface ");
+            Serial4.print("\nI: --- Interface ");
             Serial4.print(interfaces[i].interface_num);
             Serial4.println(" ---");
             
-            Serial4.print("  Class: 0x");
+            Serial4.print("I:   Class: 0x");
             if (interfaces[i].interface_class < 0x10) Serial4.print("0");
             Serial4.print(interfaces[i].interface_class, HEX);
             
@@ -855,22 +841,22 @@ void USBHostDriver::dumpDeviceInfo() {
             }
             Serial4.println();
             
-            Serial4.print("  Subclass: 0x");
+            Serial4.print("I:   Subclass: 0x");
             if (interfaces[i].interface_subclass < 0x10) Serial4.print("0");
             Serial4.println(interfaces[i].interface_subclass, HEX);
             
-            Serial4.print("  Protocol: 0x");
+            Serial4.print("I:   Protocol: 0x");
             if (interfaces[i].interface_protocol < 0x10) Serial4.print("0");
             Serial4.println(interfaces[i].interface_protocol, HEX);
             
             if (interfaces[i].is_hid && interfaces[i].hid_desc_length > 0) {
-                Serial4.print("  HID Descriptor Length: ");
+                Serial4.print("I:   HID Descriptor Length: ");
                 Serial4.print(interfaces[i].hid_desc_length);
                 Serial4.println(" bytes");
             }
             
             if (interfaces[i].has_in_endpoint) {
-                Serial4.print("  IN Endpoint: 0x");
+                Serial4.print("I:   IN Endpoint: 0x");
                 if ((interfaces[i].in_endpoint_addr | 0x80) < 0x10) Serial4.print("0");
                 Serial4.print(interfaces[i].in_endpoint_addr | 0x80, HEX);
                 Serial4.print(" (");
@@ -879,14 +865,14 @@ void USBHostDriver::dumpDeviceInfo() {
                 Serial4.print(interfaces[i].in_endpoint_interval);
                 Serial4.println("ms)");
             } else {
-                Serial4.println("  No IN endpoint");
+                Serial4.println("I:   No IN endpoint");
             }
         }
     }
     
     // Current configuration
-    Serial4.println("\n--- Current Configuration ---");
-    Serial4.print("Primary IN Endpoint: ");
+    Serial4.println("\nI: --- Current Configuration ---");
+    Serial4.print("I: Primary IN Endpoint: ");
     if (in_endpoint_addr) {
         Serial4.print("0x");
         if ((in_endpoint_addr | 0x80) < 0x10) Serial4.print("0");
@@ -899,7 +885,7 @@ void USBHostDriver::dumpDeviceInfo() {
     }
     Serial4.println();
     
-    Serial4.print("Primary OUT Endpoint: ");
+    Serial4.print("I: Primary OUT Endpoint: ");
     if (out_endpoint_addr) {
         Serial4.print("0x");
         if (out_endpoint_addr < 0x10) Serial4.print("0");
@@ -912,31 +898,30 @@ void USBHostDriver::dumpDeviceInfo() {
     }
     Serial4.println();
     
-    Serial4.println("\n=================================");
+    Serial4.println("\nI: =================================");
 }
 
 void USBHostDriver::displayStoredDescriptors() {
     bool debug_enabled = SunBoxStartup::isDebugEnabled();
     
     // First, display the reconstructed Configuration Descriptor header
-    Serial4.println("\n--- Configuration Descriptor (Reconstructed) ---");
-    Serial4.print("  Total Length: ");
+    Serial4.println("\nI: --- Configuration Descriptor (Reconstructed) ---");
+    Serial4.print("I:   Total Length: ");
     Serial4.print(config_descriptor_len + 9);  // Add 9 for config descriptor header
     Serial4.println(" bytes");
-    Serial4.print("  Number of Interfaces: ");
+    Serial4.print("I:   Number of Interfaces: ");
     Serial4.println(config_num_interfaces);
-    Serial4.print("  Configuration Value: ");
+    Serial4.print("I:   Configuration Value: ");
     Serial4.println(config_value);
-    Serial4.print("  Configuration String: 0");  // We don't store this
-    Serial4.println();
-    Serial4.print("  Attributes: 0x");
+    Serial4.println("I:   Configuration String: 0");  // We don't store this
+    Serial4.print("I:   Attributes: 0x");
     Serial4.print(config_attributes, HEX);
     Serial4.print(" (");
     if (config_attributes & 0x80) Serial4.print("Bus Powered ");
     if (config_attributes & 0x40) Serial4.print("Self Powered ");
     if (config_attributes & 0x20) Serial4.print("Remote Wakeup ");
     Serial4.println(")");
-    Serial4.print("  Max Power: ");
+    Serial4.print("I:   Max Power: ");
     Serial4.print(config_max_power * 2);
     Serial4.println(" mA");
     
@@ -954,14 +939,14 @@ void USBHostDriver::displayStoredDescriptors() {
         // Interface descriptor
         if (desc_type == 0x04 && desc_len >= 9) {
             current_interface = p[2];
-            Serial4.print("\n--- Interface ");
+            Serial4.print("\nI: --- Interface ");
             Serial4.print(current_interface);
             Serial4.println(" ---");
-            Serial4.print("  Alternate Setting: ");
+            Serial4.print("I:   Alternate Setting: ");
             Serial4.println(p[3]);
-            Serial4.print("  Number of Endpoints: ");
+            Serial4.print("I:   Number of Endpoints: ");
             Serial4.println(p[4]);
-            Serial4.print("  Class: 0x");
+            Serial4.print("I:   Class: 0x");
             if (p[5] < 0x10) Serial4.print("0");
             Serial4.print(p[5], HEX);
             
@@ -977,35 +962,35 @@ void USBHostDriver::displayStoredDescriptors() {
             }
             Serial4.println();
             
-            Serial4.print("  Subclass: 0x");
+            Serial4.print("I:   Subclass: 0x");
             if (p[6] < 0x10) Serial4.print("0");
             Serial4.println(p[6], HEX);
             
-            Serial4.print("  Protocol: 0x");
+            Serial4.print("I:   Protocol: 0x");
             if (p[7] < 0x10) Serial4.print("0");
             Serial4.println(p[7], HEX);
             
-            Serial4.print("  Interface String: ");
+            Serial4.print("I:   Interface String: ");
             Serial4.println(p[8]);
         }
         
         // HID class descriptor
         else if (desc_type == 0x21 && desc_len >= 9) {
-            Serial4.println("  HID Class Descriptor:");
-            Serial4.print("    HID Version: ");
+            Serial4.println("I:   HID Class Descriptor:");
+            Serial4.print("I:     HID Version: ");
             Serial4.print(p[3]);
             Serial4.print(".");
             Serial4.println(p[2]);
-            Serial4.print("    Country Code: ");
+            Serial4.print("I:     Country Code: ");
             Serial4.println(p[4]);
-            Serial4.print("    Number of Descriptors: ");
+            Serial4.print("I:     Number of Descriptors: ");
             Serial4.println(p[5]);
             
             // Parse descriptor info
             for (uint8_t i = 0; i < p[5] && (6 + i*3 + 2) < desc_len; i++) {
                 uint8_t dtype = p[6 + i*3];
                 uint16_t dlen = p[7 + i*3] | (p[8 + i*3] << 8);
-                Serial4.print("    Descriptor ");
+                Serial4.print("I:     Descriptor ");
                 Serial4.print(i);
                 Serial4.print(": Type=0x");
                 Serial4.print(dtype, HEX);
@@ -1019,14 +1004,14 @@ void USBHostDriver::displayStoredDescriptors() {
         
         // Endpoint descriptor
         else if (desc_type == 0x05 && desc_len >= 7) {
-            Serial4.print("  Endpoint 0x");
+            Serial4.print("I:   Endpoint 0x");
             if (p[2] < 0x10) Serial4.print("0");
             Serial4.print(p[2], HEX);
             Serial4.print(" (");
             if (p[2] & 0x80) Serial4.print("IN"); else Serial4.print("OUT");
             Serial4.println("):");
             
-            Serial4.print("    Attributes: 0x");
+            Serial4.print("I:     Attributes: 0x");
             if (p[3] < 0x10) Serial4.print("0");
             Serial4.print(p[3], HEX);
             Serial4.print(" (");
@@ -1038,18 +1023,18 @@ void USBHostDriver::displayStoredDescriptors() {
             }
             Serial4.println(")");
             
-            Serial4.print("    Max Packet Size: ");
+            Serial4.print("I:     Max Packet Size: ");
             Serial4.print(p[4] | (p[5] << 8));
             Serial4.println(" bytes");
             
-            Serial4.print("    Interval: ");
+            Serial4.print("I:     Interval: ");
             Serial4.print(p[6]);
             Serial4.println(" ms");
         }
         
         // Unknown descriptor
         else {
-            Serial4.print("\n  Unknown Descriptor Type 0x");
+            Serial4.print("\nI:   Unknown Descriptor Type 0x");
             if (desc_type < 0x10) Serial4.print("0");
             Serial4.print(desc_type, HEX);
             Serial4.print(", Length=");
@@ -1061,11 +1046,11 @@ void USBHostDriver::displayStoredDescriptors() {
     
     // Display raw hex dump at the end - now with reconstructed header
     if (debug_enabled) {
-        Serial4.println("\n--- Raw Configuration Descriptor Hex Dump ---");
-        Serial4.println("  [Reconstructed header + stored descriptors]");
+        Serial4.println("\nI: --- Raw Configuration Descriptor Hex Dump ---");
+        Serial4.println("I:   [Reconstructed header + stored descriptors]");
         
         // First show the reconstructed configuration descriptor header
-        Serial4.print("  000: 09 02 ");
+        Serial4.print("I:   000: 09 02 ");
         uint16_t total_len = config_descriptor_len + 9;
         if ((total_len & 0xFF) < 0x10) Serial4.print("0");
         Serial4.print(total_len & 0xFF, HEX);
@@ -1083,11 +1068,11 @@ void USBHostDriver::displayStoredDescriptors() {
         Serial4.print(" ");
         Serial4.print(config_max_power, HEX);
         Serial4.print("                  ");  // Padding
-        Serial4.println("[Config Header]");
+        Serial4.println(" [Config Header]");
         
         // Then show the stored descriptors
         for (uint16_t i = 0; i < config_descriptor_len; i += 16) {
-            Serial4.print("  ");
+            Serial4.print("I:   ");
             uint16_t addr = i + 9;  // Account for header
             if (addr < 0x10) Serial4.print("0");
             if (addr < 0x100) Serial4.print("0");
@@ -1120,12 +1105,31 @@ void USBHostDriver::displayStoredDescriptors() {
                 }
             }
             
+            // Padding if last line
+            if (config_descriptor_len - i < 16) {
+                for (uint16_t j = config_descriptor_len - i; j < 16; j++) {
+                    Serial4.print("   ");
+                }
+            }
+            
+            Serial4.print(" ");
+            
+            // ASCII representation
+            for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
+                char c = config_descriptor[i + j];
+                if (c >= ' ' && c <= '~') {
+                    Serial4.print(c);
+                } else {
+                    Serial4.print(".");
+                }
+            }
+            
             Serial4.println();
         }
         
-        Serial4.print("Total bytes: ");
+        Serial4.print("I: Total bytes: ");
         Serial4.print(total_len);
-        Serial4.println(" (9 header + ");
+        Serial4.print(" (9 header + ");
         Serial4.print(config_descriptor_len);
         Serial4.println(" descriptors)");
     }

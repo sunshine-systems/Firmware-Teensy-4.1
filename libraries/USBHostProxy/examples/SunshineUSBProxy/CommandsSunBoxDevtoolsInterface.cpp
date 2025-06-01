@@ -50,22 +50,22 @@ void CommandsSunBoxDevtoolsInterface::handleCommand(const String& cmd) {
 }
 
 void CommandsSunBoxDevtoolsInterface::handleHelp() {
-    Serial4.println("\n=== SunBox DevTools Commands ===");
-    Serial4.println("help           - Show this help");
-    Serial4.println("status         - Show system status");
-    Serial4.println("debug          - Toggle debug mode (persistent)");
-    Serial4.println("dump           - Dump USB device descriptors");
-    Serial4.println("claimcorrection vid,pid,interface,endpoint - Force specific interface");
-    Serial4.println("               Example: claimcorrection 046d,c53f,1,82");
-    Serial4.println("claimclear     - Clear forced interface configuration");
-    Serial4.println("=================================");
+    Serial4.println("\nI: === SunBox DevTools Commands ===");
+    Serial4.println("I: help           - Show this help");
+    Serial4.println("I: status         - Show system status");
+    Serial4.println("I: debug          - Toggle debug mode (persistent)");
+    Serial4.println("I: dump           - Dump USB device descriptors");
+    Serial4.println("I: claimcorrection vid,pid,interface,endpoint - Force specific interface");
+    Serial4.println("I:                Example: claimcorrection 046d,c53f,1,82");
+    Serial4.println("I: claimclear     - Clear forced interface configuration");
+    Serial4.println("I: =================================");
 }
 
 void CommandsSunBoxDevtoolsInterface::handleStatus() {
-    Serial4.println("\n=== System Status ===");
+    Serial4.println("\nI: === System Status ===");
     
     // USB Device status
-    Serial4.print("USB Device: ");
+    Serial4.print("I: USB Device: ");
     if (usbHostDriver && usbHostDriver->isReady()) {
         Serial4.print("Connected (VID:0x");
         Serial4.print(usbHostDriver->getVendorID(), HEX);
@@ -77,7 +77,7 @@ void CommandsSunBoxDevtoolsInterface::handleStatus() {
     }
     
     // HID Handler status
-    Serial4.print("HID Handler: ");
+    Serial4.print("I: HID Handler: ");
     if (hidHandler && hidHandler->isReady()) {
         Serial4.print("Ready (Interface ");
         Serial4.print(hidHandler->getInterfaceNumber());
@@ -89,14 +89,14 @@ void CommandsSunBoxDevtoolsInterface::handleStatus() {
     }
     
     // Debug mode
-    Serial4.print("Debug Mode: ");
+    Serial4.print("I: Debug Mode: ");
     Serial4.print(debugEnabled ? "ON" : "OFF");
     Serial4.println(" (persistent)");
     
     // Force claim config
     ClaimConfig config;
     if (sunboxEEPROM.loadClaimConfig(config)) {
-        Serial4.print("Claim Correction: VID=0x");
+        Serial4.print("I: Claim Correction: VID=0x");
         Serial4.print(config.vid, HEX);
         Serial4.print(" PID=0x");
         Serial4.print(config.pid, HEX);
@@ -105,10 +105,10 @@ void CommandsSunBoxDevtoolsInterface::handleStatus() {
         Serial4.print(" Endpoint=0x");
         Serial4.println(config.endpoint_addr, HEX);
     } else {
-        Serial4.println("Claim Correction: Not configured");
+        Serial4.println("I: Claim Correction: Not configured");
     }
     
-    Serial4.println("====================");
+    Serial4.println("I: ====================");
 }
 
 void CommandsSunBoxDevtoolsInterface::handleDebug() {

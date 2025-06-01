@@ -220,7 +220,11 @@ uint8_t HIDMouseDescriptorHandler::getItemSize(uint8_t byte0) {
 }
 
 bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint16_t length) {
-    Serial4.println("\n=== Parsing HID Report Descriptor ===");
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
+    if (debug_enabled) {
+        Serial4.println("\nI: === Parsing HID Report Descriptor ===");
+    }
     
     ParseState state = {0};
     uint16_t offset = 0;
@@ -262,10 +266,10 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
         }
         
         // Debug each item
-        if ((type == HID_GLOBAL_USAGE_PAGE) || 
+        if (debug_enabled && ((type == HID_GLOBAL_USAGE_PAGE) || 
             (type == HID_LOCAL_USAGE) || 
-            (type == HID_MAIN_INPUT)) {
-            Serial4.print("  [");
+            (type == HID_MAIN_INPUT))) {
+            Serial4.print("I:   [");
             Serial4.print(offset, HEX);
             Serial4.print("] ");
             
@@ -364,7 +368,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             x_field.is_signed = state.logical_min < 0;
                             has_x = true;
                             
-                            Serial4.print(">>> Found X: offset=");
+                            Serial4.print("S: >>> Found X: offset=");
                             Serial4.print(x_field.bit_offset);
                             Serial4.print(" bits=");
                             Serial4.print(x_field.bit_count);
@@ -384,7 +388,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             y_field.is_signed = state.logical_min < 0;
                             has_y = true;
                             
-                            Serial4.print(">>> Found Y: offset=");
+                            Serial4.print("S: >>> Found Y: offset=");
                             Serial4.print(y_field.bit_offset);
                             Serial4.print(" bits=");
                             Serial4.print(y_field.bit_count);
@@ -404,7 +408,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             wheel_field.is_signed = state.logical_min < 0;
                             has_wheel = true;
                             
-                            Serial4.print(">>> Found Wheel: offset=");
+                            Serial4.print("S: >>> Found Wheel: offset=");
                             Serial4.print(wheel_field.bit_offset);
                             Serial4.print(" bits=");
                             Serial4.println(wheel_field.bit_count);
@@ -420,7 +424,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                         button_count = state.report_count;
                         has_buttons = true;
                         
-                        Serial4.print(">>> Found Buttons: offset=");
+                        Serial4.print("S: >>> Found Buttons: offset=");
                         Serial4.print(buttons_field.bit_offset);
                         Serial4.print(" count=");
                         Serial4.print(button_count);
@@ -718,18 +722,18 @@ bool HIDMouseDescriptorHandler::formatMouseData(const MouseState& state, uint8_t
 }
 
 void HIDMouseDescriptorHandler::printInterfaceInfo() {
-    Serial4.println("\n=== HID Mouse Interface Info ===");
+    Serial4.println("\nI: === HID Mouse Interface Info ===");
     
     if (interface_index == 0xFF) {
-        Serial4.println("No mouse interface found");
+        Serial4.println("I: No mouse interface found");
         return;
     }
     
-    Serial4.print("Interface Index: ");
+    Serial4.print("I: Interface Index: ");
     Serial4.println(interface_index);
-    Serial4.print("Interface Number: ");
+    Serial4.print("I: Interface Number: ");
     Serial4.println(interface_number);
-    Serial4.print("Protocol: ");
+    Serial4.print("I: Protocol: ");
     Serial4.print(interface_protocol);
     
     switch (interface_protocol) {
@@ -739,10 +743,10 @@ void HIDMouseDescriptorHandler::printInterfaceInfo() {
         default: Serial4.println(" (Unknown)"); break;
     }
     
-    Serial4.print("HID Descriptor Length: ");
+    Serial4.print("I: HID Descriptor Length: ");
     Serial4.println(descriptor_length);
     
-    Serial4.print("Endpoint: 0x");
+    Serial4.print("I: Endpoint: 0x");
     if (endpoint_address < 0x10) Serial4.print("0");
     Serial4.print(endpoint_address | 0x80, HEX);  // IN endpoint
     Serial4.print(" (");
@@ -751,7 +755,7 @@ void HIDMouseDescriptorHandler::printInterfaceInfo() {
     Serial4.print(endpoint_interval);
     Serial4.println("ms)");
     
-    Serial4.print("State: ");
+    Serial4.print("I: State: ");
     switch (handler_state) {
         case HID_STATE_IDLE: Serial4.println("IDLE"); break;
         case HID_STATE_WAIT_DESCRIPTOR: Serial4.println("WAIT_DESCRIPTOR"); break;
@@ -760,102 +764,102 @@ void HIDMouseDescriptorHandler::printInterfaceInfo() {
         case HID_STATE_ERROR: Serial4.println("ERROR"); break;
     }
     
-    Serial4.print("Descriptor Valid: ");
+    Serial4.print("I: Descriptor Valid: ");
     Serial4.println(valid ? "Yes" : "No");
     
     if (valid && hid_descriptor_size > 0) {
-        Serial4.print("Descriptor Size: ");
+        Serial4.print("I: Descriptor Size: ");
         Serial4.print(hid_descriptor_size);
         Serial4.println(" bytes");
     }
     
-    Serial4.println("===============================");
+    Serial4.println("I: ===============================");
 }
 
 void HIDMouseDescriptorHandler::printDescriptorInfo() {
-    Serial4.println("\n=== HID Report Structure ===");
-    Serial4.print("Valid: ");
+    Serial4.println("\nI: === HID Report Structure ===");
+    Serial4.print("I: Valid: ");
     Serial4.println(valid ? "Yes" : "No");
     
     if (!valid) return;
     
-    Serial4.print("Report ID: ");
+    Serial4.print("I: Report ID: ");
     Serial4.println(report_id);
-    Serial4.print("Report Size: ");
+    Serial4.print("I: Report Size: ");
     Serial4.print(report_size_bytes);
     Serial4.print(" bytes (");
     Serial4.print(total_bits);
     Serial4.println(" bits)");
     
     if (has_buttons) {
-        Serial4.print("\nButtons: ");
+        Serial4.print("\nI: Buttons: ");
         Serial4.print(button_count);
         Serial4.println(" buttons");
-        Serial4.print("  Bit offset: ");
+        Serial4.print("I:   Bit offset: ");
         Serial4.println(buttons_field.bit_offset);
-        Serial4.print("  Total bits: ");
+        Serial4.print("I:   Total bits: ");
         Serial4.println(buttons_field.bit_count);
     }
     
     if (has_x) {
-        Serial4.println("\nX Axis:");
-        Serial4.print("  Bit offset: ");
+        Serial4.println("\nI: X Axis:");
+        Serial4.print("I:   Bit offset: ");
         Serial4.print(x_field.bit_offset);
         Serial4.print(" (byte ");
         Serial4.print(x_field.bit_offset / 8);
         Serial4.print(" bit ");
         Serial4.print(x_field.bit_offset % 8);
         Serial4.println(")");
-        Serial4.print("  Size: ");
+        Serial4.print("I:   Size: ");
         Serial4.print(x_field.bit_count);
         Serial4.println(" bits");
-        Serial4.print("  Range: ");
+        Serial4.print("I:   Range: ");
         Serial4.print(x_field.logical_min);
         Serial4.print(" to ");
         Serial4.println(x_field.logical_max);
-        Serial4.print("  Type: ");
+        Serial4.print("I:   Type: ");
         Serial4.print(x_field.is_relative ? "Relative" : "Absolute");
         Serial4.print(", ");
         Serial4.println(x_field.is_signed ? "Signed" : "Unsigned");
     }
     
     if (has_y) {
-        Serial4.println("\nY Axis:");
-        Serial4.print("  Bit offset: ");
+        Serial4.println("\nI: Y Axis:");
+        Serial4.print("I:   Bit offset: ");
         Serial4.print(y_field.bit_offset);
         Serial4.print(" (byte ");
         Serial4.print(y_field.bit_offset / 8);
         Serial4.print(" bit ");
         Serial4.print(y_field.bit_offset % 8);
         Serial4.println(")");
-        Serial4.print("  Size: ");
+        Serial4.print("I:   Size: ");
         Serial4.print(y_field.bit_count);
         Serial4.println(" bits");
-        Serial4.print("  Range: ");
+        Serial4.print("I:   Range: ");
         Serial4.print(y_field.logical_min);
         Serial4.print(" to ");
         Serial4.println(y_field.logical_max);
-        Serial4.print("  Type: ");
+        Serial4.print("I:   Type: ");
         Serial4.print(y_field.is_relative ? "Relative" : "Absolute");
         Serial4.print(", ");
         Serial4.println(y_field.is_signed ? "Signed" : "Unsigned");
     }
     
     if (has_wheel) {
-        Serial4.println("\nWheel:");
-        Serial4.print("  Bit offset: ");
+        Serial4.println("\nI: Wheel:");
+        Serial4.print("I:   Bit offset: ");
         Serial4.print(wheel_field.bit_offset);
         Serial4.print(" (byte ");
         Serial4.print(wheel_field.bit_offset / 8);
         Serial4.print(" bit ");
         Serial4.print(wheel_field.bit_offset % 8);
         Serial4.println(")");
-        Serial4.print("  Size: ");
+        Serial4.print("I:   Size: ");
         Serial4.print(wheel_field.bit_count);
         Serial4.println(" bits");
     }
     
-    Serial4.println("==========================\n");
+    Serial4.println("I: ==========================\n");
 }
 
 void HIDMouseDescriptorHandler::printMouseState(const MouseState& state) {

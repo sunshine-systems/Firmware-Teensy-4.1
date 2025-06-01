@@ -124,16 +124,16 @@ void loop() {
 
 void printBanner() {
     Serial4.println("\n\n");
-    Serial4.println("=======================================");
-    Serial4.println("       SunBox USB Proxy v3.0");
-    Serial4.println("=======================================");
-    Serial4.println("Clean Architecture Implementation");
-    Serial4.println("Features:");
-    Serial4.println("  - USB HID Mouse Proxy");
-    Serial4.println("  - Sunshine Legacy Protocol");
-    Serial4.println("  - KMBox B+ Protocol");
-    Serial4.println("  - Intelligent Command Routing");
-    Serial4.println("=======================================\n");
+    Serial4.println("I: =======================================");
+    Serial4.println("I:        SunBox USB Proxy v3.0");
+    Serial4.println("I: =======================================");
+    Serial4.println("I: Clean Architecture Implementation");
+    Serial4.println("I: Features:");
+    Serial4.println("I:   - USB HID Mouse Proxy");
+    Serial4.println("I:   - Sunshine Legacy Protocol");
+    Serial4.println("I:   - KMBox B+ Protocol");
+    Serial4.println("I:   - Intelligent Command Routing");
+    Serial4.println("I: =======================================\n");
 }
 
 void initializeUSBDevice() {
