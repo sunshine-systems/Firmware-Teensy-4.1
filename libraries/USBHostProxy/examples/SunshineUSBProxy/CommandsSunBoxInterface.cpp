@@ -1,4 +1,5 @@
 #include "CommandsSunBoxInterface.h"
+#include "SunBoxStartup.h"
 
 // FirmwareSettings implementation
 void FirmwareSettings::updateSettings(const uint8_t* data) {
@@ -43,7 +44,7 @@ void CommandsSunBoxInterface::processSerial(Stream& serial) {
         } else if (expectedLength == 3) {
             // If the length byte is 3, it's a settings message
             firmwareSettings.updateSettings(commandBuffer);
-            Serial4.println("[LEGACY]: Settings updated");
+            Serial4.println("S: Settings updated");
         }
     }
 }
@@ -56,6 +57,8 @@ void CommandsSunBoxInterface::processLegacyData(const uint8_t* data, uint8_t len
 }
 
 void CommandsSunBoxInterface::processAndSetHIDReportData(const uint8_t* data) {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     previousMouseButtons = mouseButtons;
     mouseButtons = data[0];
     scrollWheel = data[3];
@@ -64,15 +67,17 @@ void CommandsSunBoxInterface::processAndSetHIDReportData(const uint8_t* data) {
     isDataAvailable = true;  // Set dataReceived to true when new data is set
     
     // Debug output
-    Serial4.print("[LEGACY]: Mouse data - Buttons:0x");
-    if (mouseButtons < 0x10) Serial4.print("0");
-    Serial4.print(mouseButtons, HEX);
-    Serial4.print(" X:");
-    Serial4.print(xMovement);
-    Serial4.print(" Y:");
-    Serial4.print(yMovement);
-    Serial4.print(" Wheel:");
-    Serial4.println(scrollWheel);
+    if (debug_enabled) {
+        Serial4.print("I: Mouse data - Buttons:0x");
+        if (mouseButtons < 0x10) Serial4.print("0");
+        Serial4.print(mouseButtons, HEX);
+        Serial4.print(" X:");
+        Serial4.print(xMovement);
+        Serial4.print(" Y:");
+        Serial4.print(yMovement);
+        Serial4.print(" Wheel:");
+        Serial4.println(scrollWheel);
+    }
 }
 
 int16_t CommandsSunBoxInterface::parseX_00A6(const uint8_t* data) {

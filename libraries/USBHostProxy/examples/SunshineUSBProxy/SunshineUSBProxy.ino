@@ -76,12 +76,12 @@ void setup() {
     }
     
     // Start USB Host
-    Serial4.println("[MAIN]: Starting USB Host...");
+    Serial4.println("S: Starting USB Host...");
     myusb.begin();
     
     // Initialize USB driver
     if (!usbHostDriver.begin()) {
-        Serial4.println("[MAIN]: ERROR - Failed to initialize USB Host Driver!");
+        Serial4.println("E: Failed to initialize USB Host Driver!");
         while(1) {
             digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
             delay(100);
@@ -89,7 +89,7 @@ void setup() {
     }
     
     systemInitialized = true;
-    Serial4.println("[MAIN]: System initialized - type 'help' for commands");
+    Serial4.println("S: System initialized - type 'help' for commands");
 }
 
 // =============================================================================
@@ -145,14 +145,14 @@ void initializeUSBDevice() {
         lastCheckTime = millis();
         
         if (usbMouseHandler.isReady()) {
-            Serial4.println("[MAIN]: USB device detected and ready");
-            Serial4.println("[MAIN]: Initializing USB device stack...");
+            Serial4.println("S: USB device detected and ready");
+            Serial4.println("S: Initializing USB device stack...");
             
             // Initialize USB device stack
             usb_init();
             
             usbDeviceInitialized = true;
-            Serial4.println("[MAIN]: USB device stack initialized");
+            Serial4.println("S: USB device stack initialized");
             
             // Flash LED to indicate ready
             for (int i = 0; i < 5; i++) {

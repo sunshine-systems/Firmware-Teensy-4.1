@@ -1,4 +1,5 @@
 #include "SunBoxUSBMouseDataHandler.h"
+#include "SunBoxStartup.h"
 
 // Static instance for callback
 SunBoxUSBMouseDataHandler* SunBoxUSBMouseDataHandler::instance = nullptr;
@@ -26,22 +27,22 @@ void SunBoxUSBMouseDataHandler::check() {
     // Check if device is ready
     if (!deviceReady && hostDriver.isReady()) {
         deviceReady = true;
-        Serial4.println("[USB_HANDLER]: Device detected");
+        Serial4.println("S: Device detected");
         
         // Setup HID interface
         if (hidHandler.setupMouseInterface()) {
-            Serial4.println("[USB_HANDLER]: Mouse interface found");
+            Serial4.println("S: Mouse interface found");
             
             // Request HID descriptor
             if (hidHandler.requestHIDDescriptor(1000)) {
                 if (hidHandler.isReady()) {
                     hidReady = true;
-                    Serial4.println("[USB_HANDLER]: HID ready");
+                    Serial4.println("S: HID ready");
                 } else {
                     // Use boot protocol
                     hidHandler.setBootMouseFormat();
                     hidReady = true;
-                    Serial4.println("[USB_HANDLER]: Using boot protocol");
+                    Serial4.println("S: Using boot protocol");
                 }
                 
                 // Activate interface
@@ -56,7 +57,7 @@ void SunBoxUSBMouseDataHandler::check() {
         hidReady = false;
         dataAvailable = false;
         currentMouseState.clear();
-        Serial4.println("[USB_HANDLER]: Device disconnected");
+        Serial4.println("S: Device disconnected");
     }
 }
 

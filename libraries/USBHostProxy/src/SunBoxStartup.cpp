@@ -1,10 +1,13 @@
 // SunBoxStartup.cpp
 #include "SunBoxStartup.h"
 #include "Arduino.h"
+#include <EEPROM.h>
+#include "SunBoxEEPROM.h"  // For the struct definitions and constants
 
 // Static member initialization
 bool SunBoxStartup::initialized = false;
 bool SunBoxStartup::ready = false;
+bool SunBoxStartup::debugEnabled = false;
 
 void SunBoxStartup::begin() {
     if (initialized) {
@@ -13,10 +16,21 @@ void SunBoxStartup::begin() {
     
     initialized = true;
     
-    // Just initialize Serial4 here - that's all we need early on
+    // Initialize Serial4 first
     Serial4.begin(115200);
     delay(100);
-    Serial4.println("[STARTUP]: SunBox early initialization complete.");
+    
+    // Load debug mode from EEPROM directly (can't use sunboxEEPROM object yet)
+    DebugConfig config;
+    EEPROM.get(EEPROM_DEBUG_ADDR, config);
+    
+    if (config.magic == EEPROM_DEBUG_MAGIC) {
+        debugEnabled = config.debugEnabled;
+    } else {
+        debugEnabled = false;
+    }
+    
+    Serial4.println("S: SunBox early initialization complete.");
     
     // Don't create any USB objects here - let the main sketch do it
     ready = true;
@@ -24,6 +38,14 @@ void SunBoxStartup::begin() {
 
 bool SunBoxStartup::isReady() {
     return ready;
+}
+
+bool SunBoxStartup::isDebugEnabled() {
+    return debugEnabled;
+}
+
+void SunBoxStartup::setDebugEnabled(bool enabled) {
+    debugEnabled = enabled;
 }
 
 // C-callable wrapper functions
@@ -34,5 +56,9 @@ extern "C" {
     
     uint8_t SunBoxStartup_isReady(void) {
         return SunBoxStartup::isReady() ? 1 : 0;
+    }
+    
+    uint8_t SunBoxStartup_isDebugEnabled(void) {
+        return SunBoxStartup::isDebugEnabled() ? 1 : 0;
     }
 }

@@ -1,4 +1,5 @@
 #include "CommandsSunBoxKMBoxInterface.h"
+#include "SunBoxStartup.h"
 
 CommandsSunBoxKMBoxInterface::CommandsSunBoxKMBoxInterface()
     : commandBuffer(""), lastCharTime(0), dataAvailable(false) {
@@ -38,9 +39,13 @@ void CommandsSunBoxKMBoxInterface::processSerial(Stream& serial) {
 }
 
 void CommandsSunBoxKMBoxInterface::processCommand(const String& command) {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     // For now, just print what we received
-    Serial4.print("[KMBOX]: Received command: ");
-    Serial4.println(command);
+    if (debug_enabled) {
+        Serial4.print("I: Received command: ");
+        Serial4.println(command);
+    }
     
     // TODO: Implement actual KMBox B+ command parsing
     // Examples:

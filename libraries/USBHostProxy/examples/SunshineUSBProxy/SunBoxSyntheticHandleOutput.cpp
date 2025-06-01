@@ -1,6 +1,7 @@
 #include "SunBoxSyntheticHandleOutput.h"
 #include "SunBoxCommands.h"
 #include "SunBoxUSBMouseDataHandler.h"
+#include "SunBoxStartup.h"
 
 extern "C" {
     // TODO: Include your USB device mouse functions here
@@ -85,6 +86,8 @@ void SunBoxSyntheticHandleOutput::mixMouseData(const MouseState& usbState, const
 }
 
 void SunBoxSyntheticHandleOutput::outputMouseData(const MouseState& state) {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     // Always output debug info when buttons change or there's movement
     static MouseState lastOutputState;
     static unsigned long lastDebugTime = 0;
@@ -95,10 +98,10 @@ void SunBoxSyntheticHandleOutput::outputMouseData(const MouseState& state) {
                         state.y != lastOutputState.y ||
                         state.wheel != lastOutputState.wheel);
     
-    if (stateChanged) {
+    if (stateChanged && debug_enabled) {
         // Rate limit debug output to prevent flooding
         if (millis() - lastDebugTime > 50) {  // 50ms minimum between outputs
-            Serial4.print("[OUTPUT]: Mouse - Buttons:0x");
+            Serial4.print("I: Mouse - Buttons:0x");
             if (state.buttons < 0x10) Serial4.print("0");
             Serial4.print(state.buttons, HEX);
             Serial4.print(" X:");

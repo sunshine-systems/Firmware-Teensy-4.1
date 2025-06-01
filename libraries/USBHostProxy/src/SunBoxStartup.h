@@ -11,6 +11,7 @@ extern "C" {
 // C-callable functions for startup.c
 void SunBoxStartup_begin(void);
 uint8_t SunBoxStartup_isReady(void);
+uint8_t SunBoxStartup_isDebugEnabled(void);
 
 #ifdef __cplusplus
 }
@@ -20,12 +21,15 @@ uint8_t SunBoxStartup_isReady(void);
 // C++ class definition
 class SunBoxStartup {
 public:
-    static void begin();      // Just initializes Serial4
+    static void begin();      // Initializes Serial4 and loads EEPROM settings
     static bool isReady();    // Returns true after begin()
+    static bool isDebugEnabled(); // Returns debug mode state from EEPROM
+    static void setDebugEnabled(bool enabled); // Update debug state (for runtime changes)
     
 private:
     static bool initialized;
     static bool ready;
+    static bool debugEnabled;
 };
 #endif
 

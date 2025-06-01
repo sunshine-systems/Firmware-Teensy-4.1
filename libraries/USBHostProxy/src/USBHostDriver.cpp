@@ -1,19 +1,7 @@
 // USBHostDriver.cpp
 #include "USBHostDriver.h"
-#include <EEPROM.h>
-
-// EEPROM structure for forced interface selection
-struct ForceClaimConfig {
-    uint32_t magic;      // 0xDEADBEEF for valid data
-    uint16_t vid;
-    uint16_t pid;
-    uint8_t interface_num;
-    uint8_t endpoint_addr;
-    uint16_t endpoint_size;
-};
-
-#define EEPROM_MAGIC 0xDEADBEEF
-#define EEPROM_CONFIG_ADDR 0
+#include "SunBoxEEPROM.h"
+#include "SunBoxStartup.h"
 
 //=============================================================================
 // Constructor/Destructor
@@ -32,7 +20,7 @@ USBHostDriver::USBHostDriver(USBHost& host)
       data_callback(nullptr), data_transfers_paused(false), 
       pending_in_transfer(false) {  // Added new member
     
-    Serial4.println("[STARTUP]: USBHostDriver constructor called");
+    Serial4.println("S: USBHostDriver constructor called");
     
     // Initialize buffers
     memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -48,19 +36,19 @@ USBHostDriver::USBHostDriver(USBHost& host)
     memset(interfaces, 0, sizeof(interfaces));
     
     // Contribute resources to USB Host - CRITICAL!
-    Serial4.println("[STARTUP]: Contributing Pipes and Transfers to USB Host");
+    Serial4.println("S: Contributing Pipes and Transfers to USB Host");
     contribute_Pipes(mypipes, sizeof(mypipes)/sizeof(Pipe_t));
     contribute_Transfers(mytransfers, sizeof(mytransfers)/sizeof(Transfer_t));
     
     // Register with USB Host BEFORE it starts - CRITICAL!
-    Serial4.println("[STARTUP]: Registering driver with USB Host (in constructor)");
+    Serial4.println("S: Registering driver with USB Host (in constructor)");
     driver_ready_for_device(this);
     
-    Serial4.println("[STARTUP]: USBHostDriver constructor complete");
+    Serial4.println("S: USBHostDriver constructor complete");
 }
 
 USBHostDriver::~USBHostDriver() {
-    Serial4.println("[STARTUP]: USBHostDriver destructor called - THIS SHOULD NOT HAPPEN!");
+    Serial4.println("S: USBHostDriver destructor called - THIS SHOULD NOT HAPPEN!");
     if (device_claimed) {
         disconnect();
     }
@@ -71,23 +59,25 @@ USBHostDriver::~USBHostDriver() {
 //=============================================================================
 
 bool USBHostDriver::begin() {
-    Serial4.println("[STARTUP]: SunBox Host Driver begin() called.");
-    Serial4.println("[STARTUP]: SunBox Host Driver ready to receive devices.");
+    Serial4.println("S: SunBox Host Driver begin() called.");
+    Serial4.println("S: SunBox Host Driver ready to receive devices.");
     return true;
 }
 
 bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, uint32_t len) {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     Serial4.println();
-    Serial4.print("[STARTUP]: USBHostDriver::claim() called - type: ");
+    Serial4.print("S: USBHostDriver::claim() called - type: ");
     Serial4.print(type);
     Serial4.print(", len: ");
     Serial4.println(len);
     
     // Type 0 = Device level (store reference but don't claim)
     if (type == CLAIM_REPORT) {
-        Serial4.println("[STARTUP]: Device level claim (type 0) - storing device reference");
+        Serial4.println("S: Device level claim (type 0) - storing device reference");
         device = dev;
-        Serial4.print("[STARTUP]: Device VID: 0x");
+        Serial4.print("S: Device VID: 0x");
         Serial4.print(dev->idVendor, HEX);
         Serial4.print(", PID: 0x");
         Serial4.println(dev->idProduct, HEX);
@@ -107,24 +97,24 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
     // Type 1 = Interface level (actual claiming)
     if (type == CLAIM_INTERFACE) {
         if (device_claimed) {
-            Serial4.println("[STARTUP]: Already have a claimed device, skipping");
+            Serial4.println("S: Already have a claimed device, skipping");
             return false;
         }
         
         if (!dev || dev != device) {
-            Serial4.println("[STARTUP]: Invalid device pointer or mismatch");
+            Serial4.println("S: Invalid device pointer or mismatch");
             return false;
         }
         
-        Serial4.println("[STARTUP]: Interface level claim (type 1) - claiming device!");
-        Serial4.println("[STARTUP]: SunBox Host Driver beginning claim process...");
+        Serial4.println("S: Interface level claim (type 1) - claiming device!");
+        Serial4.println("S: SunBox Host Driver beginning claim process...");
         
-        Serial4.print("[STARTUP]: Device VID: 0x");
+        Serial4.print("S: Device VID: 0x");
         Serial4.print(dev->idVendor, HEX);
         Serial4.print(", PID: 0x");
         Serial4.println(dev->idProduct, HEX);
         
-        Serial4.print("[STARTUP]: Descriptors length: ");
+        Serial4.print("S: Descriptors length: ");
         Serial4.println(len);
         
         // STORE THE RAW CONFIGURATION DESCRIPTOR DATA
@@ -132,11 +122,11 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
             memcpy(config_descriptor, descriptors, len);
             config_descriptor_len = len;
             config_descriptor_valid = true;
-            Serial4.print("[STARTUP]: Stored ");
+            Serial4.print("S: Stored ");
             Serial4.print(len);
             Serial4.println(" bytes of configuration descriptor data");
         } else {
-            Serial4.println("[STARTUP]: WARNING: Descriptor data too large or invalid!");
+            Serial4.println("S: WARNING: Descriptor data too large or invalid!");
             config_descriptor_valid = false;
         }
         
@@ -152,7 +142,7 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
         if (len > 0 && descriptors != nullptr) {
             parseDescriptors(descriptors, len);
         } else {
-            Serial4.println("[STARTUP]: No descriptors provided, using defaults");
+            Serial4.println("S: No descriptors provided, using defaults");
             // Set some default endpoints for testing
             in_endpoint_addr = 1;
             in_endpoint_size = 64;
@@ -160,15 +150,14 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
         }
         
         // Check for forced interface selection in EEPROM
-        ForceClaimConfig config;
-        EEPROM.get(EEPROM_CONFIG_ADDR, config);
+        ClaimConfig config;
         
-        if (config.magic == EEPROM_MAGIC && 
+        if (sunboxEEPROM.loadClaimConfig(config) && 
             config.vid == dev->idVendor && 
             config.pid == dev->idProduct) {
             
-            Serial4.println("[OVERRIDE]: Found forced interface configuration!");
-            Serial4.print("[OVERRIDE]: Using interface ");
+            Serial4.println("S: Found forced interface configuration!");
+            Serial4.print("S: Using interface ");
             Serial4.print(config.interface_num);
             Serial4.print(" endpoint 0x");
             Serial4.print(config.endpoint_addr | 0x80, HEX);
@@ -190,15 +179,15 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
             }
             
             if (!found) {
-                Serial4.println("[OVERRIDE]: ERROR - Specified interface not found!");
-                Serial4.println("[OVERRIDE]: Falling back to automatic selection");
+                Serial4.println("S: ERROR - Specified interface not found!");
+                Serial4.println("S: Falling back to automatic selection");
             }
         }
         
         // Claim the endpoints
         claimEndpoints();
         
-        Serial4.println("[STARTUP]: SunBox Host Driver found device");
+        Serial4.println("S: SunBox Host Driver found device");
         
         device_claimed = true;
         device_ready = true;
@@ -206,13 +195,13 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
         // Start reading data
         startReading();
         
-        Serial4.println("[STARTUP]: SunBox Host Driver claim process complete.");
-        Serial4.println("[STARTUP]: Device successfully claimed!");
+        Serial4.println("S: SunBox Host Driver claim process complete.");
+        Serial4.println("S: Device successfully claimed!");
         
         return true;  // Claim this interface
     }
     
-    Serial4.print("[STARTUP]: Unknown claim type: ");
+    Serial4.print("S: Unknown claim type: ");
     Serial4.print(type);
     Serial4.print(" - not claiming");
     Serial4.println();
@@ -243,7 +232,7 @@ void USBHostDriver::disconnect() {
     in_endpoint_interval = 1;
     out_endpoint_interval = 1;
     
-    Serial4.println("[STARTUP]: SunBox Host Driver device disconnected.");
+    Serial4.println("S: SunBox Host Driver device disconnected.");
 }
 
 //=============================================================================
@@ -251,10 +240,11 @@ void USBHostDriver::disconnect() {
 //=============================================================================
 
 void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
     const uint8_t* p = descriptors;
     const uint8_t* end = descriptors + len;
     
-    Serial4.println("[STARTUP]: Parsing descriptors...");
+    Serial4.println("S: Parsing descriptors...");
     
     // Clear endpoint info before parsing
     in_endpoint_addr = 0;
@@ -286,7 +276,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
                 iface->is_hid = (iface->interface_class == 0x03);
                 iface->has_in_endpoint = false;
                 
-                Serial4.print("[STARTUP]: Found interface ");
+                Serial4.print("S: Found interface ");
                 Serial4.print(iface->interface_num);
                 Serial4.print(", class: 0x");
                 Serial4.print(iface->interface_class, HEX);
@@ -308,7 +298,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
             uint16_t report_length = p[7] | (p[8] << 8);
             interfaces[current_interface_idx].hid_desc_length = report_length;
             
-            Serial4.print("[STARTUP]: HID descriptor found! Report length: ");
+            Serial4.print("S: HID descriptor found! Report length: ");
             Serial4.print(report_length);
             Serial4.print(" for interface ");
             Serial4.println(interfaces[current_interface_idx].interface_num);
@@ -321,7 +311,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
             uint16_t ep_size = p[4] | (p[5] << 8);
             uint8_t ep_interval = p[6];
             
-            Serial4.print("[STARTUP]: Found endpoint: addr=0x");
+            Serial4.print("S: Found endpoint: addr=0x");
             Serial4.print(ep_addr, HEX);
             Serial4.print(" attr=0x");
             Serial4.print(ep_attr, HEX);
@@ -338,7 +328,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
                         in_endpoint_addr = ep_addr & 0x7F;
                         in_endpoint_size = ep_size;
                         in_endpoint_interval = ep_interval;
-                        Serial4.println("[STARTUP]: Using as primary IN endpoint");
+                        Serial4.println("S: Using as primary IN endpoint");
                     }
                     
                     // Also store for current interface
@@ -355,7 +345,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
                         out_endpoint_addr = ep_addr;
                         out_endpoint_size = ep_size;
                         out_endpoint_interval = ep_interval;
-                        Serial4.println("[STARTUP]: Using as OUT endpoint");
+                        Serial4.println("S: Using as OUT endpoint");
                     }
                 }
             }
@@ -364,7 +354,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
         p += desc_len;
     }
     
-    Serial4.print("[STARTUP]: Parsing complete - ");
+    Serial4.print("S: Parsing complete - ");
     Serial4.print(interface_count);
     Serial4.print(" interfaces found, IN endpoint: ");
     Serial4.print(in_endpoint_addr);
@@ -380,51 +370,55 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
 //=============================================================================
 
 void USBHostDriver::claimEndpoints() {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     // Claim IN endpoint
     if (in_endpoint_addr) {
-        Serial4.print("[STARTUP]: Creating IN pipe for endpoint ");
+        Serial4.print("S: Creating IN pipe for endpoint ");
         Serial4.println(in_endpoint_addr);
         
         // Create interrupt pipe (type 3) for IN endpoint
         in_pipe = new_Pipe(device, 3, in_endpoint_addr, 1, in_endpoint_size, in_endpoint_interval);
         if (in_pipe) {
             in_pipe->callback_function = in_callback;
-            Serial4.println("[STARTUP]: IN pipe created successfully");
+            Serial4.println("S: IN pipe created successfully");
         } else {
-            Serial4.println("[STARTUP]: Failed to create IN pipe!");
+            Serial4.println("S: Failed to create IN pipe!");
         }
     }
     
     // Claim OUT endpoint
     if (out_endpoint_addr) {
-        Serial4.print("[STARTUP]: Creating OUT pipe for endpoint ");
+        Serial4.print("S: Creating OUT pipe for endpoint ");
         Serial4.println(out_endpoint_addr);
         
         // Create interrupt pipe (type 3) for OUT endpoint
         out_pipe = new_Pipe(device, 3, out_endpoint_addr, 0, out_endpoint_size, out_endpoint_interval);
         if (out_pipe) {
-            Serial4.println("[STARTUP]: OUT pipe created successfully");
+            Serial4.println("S: OUT pipe created successfully");
         } else {
-            Serial4.println("[STARTUP]: Failed to create OUT pipe!");
+            Serial4.println("S: Failed to create OUT pipe!");
         }
     }
 }
 
 void USBHostDriver::startReading() {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     if (in_pipe && !data_transfers_paused && !pending_in_transfer) {
-        Serial4.println("[STARTUP]: Starting data reading...");
-        Serial4.print("[STARTUP]: IN pipe address: 0x");
+        Serial4.println("S: Starting data reading...");
+        Serial4.print("S: IN pipe address: 0x");
         Serial4.println((uint32_t)in_pipe, HEX);
-        Serial4.print("[STARTUP]: Buffer address: 0x");
+        Serial4.print("S: Buffer address: 0x");
         Serial4.println((uint32_t)rx_buffer, HEX);
-        Serial4.print("[STARTUP]: Endpoint size: ");
+        Serial4.print("S: Endpoint size: ");
         Serial4.println(in_endpoint_size);
         
         pending_in_transfer = true;
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
-        Serial4.println("[STARTUP]: Data transfer queued");
+        Serial4.println("S: Data transfer queued");
         
-        Serial4.print("[STARTUP]: Pipe callback function: 0x");
+        Serial4.print("S: Pipe callback function: 0x");
         Serial4.println((uint32_t)in_pipe->callback_function, HEX);
     }
 }
@@ -437,8 +431,10 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
                                    uint16_t wValue, uint16_t wIndex, uint16_t wLength,
                                    uint8_t* data, uint16_t* actualLength, 
                                    uint32_t timeout_ms) {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     if (!device || !device_claimed) {
-        Serial4.println("[DRIVER]: Control transfer failed - no device");
+        Serial4.println("S: Control transfer failed - no device");
         return false;
     }
     
@@ -446,7 +442,7 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     bool is_descriptor_request = (bRequest == 0x06 && (wValue >> 8) == 0x22);
     
     // Always print debug for descriptor requests during dump
-    Serial4.print("[DRIVER]: Control transfer: bmRequestType=0x");
+    Serial4.print("S: Control transfer: bmRequestType=0x");
     Serial4.print(bmRequestType, HEX);
     Serial4.print(" bRequest=0x");
     Serial4.print(bRequest, HEX);
@@ -477,7 +473,7 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     control_last_token = 0;
     
     // Queue the transfer
-    Serial4.print("[DRIVER]: Queuing control transfer");
+    Serial4.print("S: Queuing control transfer");
     bool queue_result = queue_Control_Transfer(device, &control_setup, control_buffer, this);
     Serial4.println(queue_result ? "...success" : "...failed");
     
@@ -493,24 +489,24 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     
     // Check completion status
     if (!control_complete) {
-        Serial4.println("[DRIVER]: Control transfer timeout");
+        Serial4.println("S: Control transfer timeout");
         control_pending = false;  // Reset state
         return false;
     }
     
     if (!control_success) {
-        Serial4.print("[DRIVER]: Control transfer failed, token=0x");
+        Serial4.print("S: Control transfer failed, token=0x");
         Serial4.println(control_last_token, HEX);
         return false;
     }
     
     if (control_length_received == 0 && wLength > 0) {
-        Serial4.println("[DRIVER]: Control transfer returned no data");
+        Serial4.println("S: Control transfer returned no data");
         return false;
     }
     
     // Success - copy data
-    Serial4.print("[DRIVER]: Control transfer complete, received ");
+    Serial4.print("S: Control transfer complete, received ");
     Serial4.print(control_length_received);
     Serial4.println(" bytes");
     
@@ -526,10 +522,12 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
 }
 
 void USBHostDriver::control(const Transfer_t *transfer) {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     // Small delay to ensure previous Serial4 operations complete
     delayMicroseconds(100);
     
-    Serial4.println("[DRIVER]: control() callback called");
+    Serial4.println("S: control() callback called");
     
     if (control_pending && transfer->buffer == control_buffer) {
         control_pending = false;
@@ -541,25 +539,28 @@ void USBHostDriver::control(const Transfer_t *transfer) {
         control_last_token = token;
         control_success = ((token >> 0) & 0xFF) == 0;  // Status byte should be 0 for success
         
-        Serial4.print("[DRIVER]: Control transfer completed with token=0x");
+        Serial4.print("S: Control transfer completed with token=0x");
         Serial4.print(token, HEX);
         Serial4.print(", length=");
         Serial4.println(control_length_received);
         
         if (!control_success) {
-            Serial4.print("[DRIVER]: Control transfer error, token=0x");
+            Serial4.print("S: Control transfer error, token=0x");
             Serial4.println(token, HEX);
-            Serial4.print("[DRIVER]: Status=");
-            Serial4.print((token >> 0) & 0xFF);
-            Serial4.print(", PID=");
-            Serial4.print((token >> 8) & 0x03);
-            Serial4.print(", Error=");
-            Serial4.print((token >> 10) & 0x03);
-            Serial4.print(", Active=");
-            Serial4.println((token >> 7) & 0x01);
+            
+            if (debug_enabled) {
+                Serial4.print("I: Status=");
+                Serial4.print((token >> 0) & 0xFF);
+                Serial4.print(", PID=");
+                Serial4.print((token >> 8) & 0x03);
+                Serial4.print(", Error=");
+                Serial4.print((token >> 10) & 0x03);
+                Serial4.print(", Active=");
+                Serial4.println((token >> 7) & 0x01);
+            }
         }
     } else {
-        Serial4.println("[DRIVER]: control() called but not for our transfer");
+        Serial4.println("S: control() called but not for our transfer");
     }
 }
 
@@ -568,17 +569,19 @@ void USBHostDriver::control(const Transfer_t *transfer) {
 //=============================================================================
 
 void USBHostDriver::pauseDataTransfers() { 
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     if (data_transfers_paused) {
-        Serial4.println("[DRIVER]: Already paused");
+        if (debug_enabled) Serial4.println("I: Already paused");
         return;
     }
     
     data_transfers_paused = true;
-    Serial4.println("[DRIVER]: Data transfers paused");
+    if (debug_enabled) Serial4.println("I: Data transfers paused");
     
     // Wait for any pending transfer to complete without queuing a new one
     if (pending_in_transfer) {
-        Serial4.println("[DRIVER]: Waiting for current transfer to complete...");
+        if (debug_enabled) Serial4.println("I: Waiting for current transfer to complete...");
         uint32_t wait_start = millis();
         
         // Wait up to 500ms for the transfer to complete naturally
@@ -591,9 +594,9 @@ void USBHostDriver::pauseDataTransfers() {
         }
         
         if (!pending_in_transfer) {
-            Serial4.println("[DRIVER]: Current transfer completed");
+            if (debug_enabled) Serial4.println("I: Current transfer completed");
         } else {
-            Serial4.println("[DRIVER]: WARNING: Transfer still pending after extended wait");
+            if (debug_enabled) Serial4.println("I: WARNING: Transfer still pending after extended wait");
             // Force clear the flag since we've waited long enough
             pending_in_transfer = false;
         }
@@ -601,13 +604,15 @@ void USBHostDriver::pauseDataTransfers() {
     
     // Important: Add a significant delay to ensure the USB controller has 
     // fully processed the last interrupt transfer and is ready for control transfers
-    Serial4.println("[DRIVER]: Stabilization delay...");
+    if (debug_enabled) Serial4.println("I: Stabilization delay...");
     delay(100);  // 100ms stabilization delay
 }
 
 void USBHostDriver::resumeDataTransfers() { 
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     data_transfers_paused = false; 
-    Serial4.println("[DRIVER]: Data transfers resumed");
+    if (debug_enabled) Serial4.println("I: Data transfers resumed");
     if (in_pipe && device_ready && !pending_in_transfer) {
         pending_in_transfer = true;
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
@@ -628,13 +633,15 @@ void USBHostDriver::in_callback(const Transfer_t *transfer) {
 }
 
 void USBHostDriver::processInData(const Transfer_t *transfer) {
-    //Serial4.println("[DRIVER]: processInData called!");
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
+    //if (debug_enabled) Serial4.println("I: processInData called!");
     
     // Clear pending flag first
     pending_in_transfer = false;
     
     if (!transfer || !transfer->buffer) {
-        Serial4.println("[DRIVER]: Invalid transfer or buffer!");
+        if (debug_enabled) Serial4.println("I: Invalid transfer or buffer!");
         return;
     }
     
@@ -652,7 +659,7 @@ void USBHostDriver::processInData(const Transfer_t *transfer) {
         // Debug first data packet
         static bool first_data = true;
         if (first_data) {
-            Serial4.print("[STARTUP]: First data packet received! Length: ");
+            Serial4.print("S: First data packet received! Length: ");
             Serial4.print(actual_len);
             Serial4.print(" bytes: ");
             for (uint32_t i = 0; i < actual_len && i < 8; i++) {
@@ -681,7 +688,7 @@ void USBHostDriver::processInData(const Transfer_t *transfer) {
         pending_in_transfer = true;
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
     } else if (data_transfers_paused) {
-        Serial4.println("[DRIVER]: Not queuing next transfer - paused");
+        if (debug_enabled) Serial4.println("I: Not queuing next transfer - paused");
     }
 }
 
@@ -789,6 +796,8 @@ uint8_t USBHostDriver::getEndpointInterval(uint8_t interface_index) const {
 //=============================================================================
 
 void USBHostDriver::dumpDeviceInfo() {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     Serial4.println("\n=== USB Device Descriptor Dump ===");
     
     if (!device) {
@@ -907,6 +916,8 @@ void USBHostDriver::dumpDeviceInfo() {
 }
 
 void USBHostDriver::displayStoredDescriptors() {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     // First, display the reconstructed Configuration Descriptor header
     Serial4.println("\n--- Configuration Descriptor (Reconstructed) ---");
     Serial4.print("  Total Length: ");
@@ -1049,71 +1060,73 @@ void USBHostDriver::displayStoredDescriptors() {
     }
     
     // Display raw hex dump at the end - now with reconstructed header
-    Serial4.println("\n--- Raw Configuration Descriptor Hex Dump ---");
-    Serial4.println("  [Reconstructed header + stored descriptors]");
-    
-    // First show the reconstructed configuration descriptor header
-    Serial4.print("  000: 09 02 ");
-    uint16_t total_len = config_descriptor_len + 9;
-    if ((total_len & 0xFF) < 0x10) Serial4.print("0");
-    Serial4.print(total_len & 0xFF, HEX);
-    Serial4.print(" ");
-    if (((total_len >> 8) & 0xFF) < 0x10) Serial4.print("0");
-    Serial4.print((total_len >> 8) & 0xFF, HEX);
-    Serial4.print(" ");
-    if (config_num_interfaces < 0x10) Serial4.print("0");
-    Serial4.print(config_num_interfaces, HEX);
-    Serial4.print(" ");
-    if (config_value < 0x10) Serial4.print("0");
-    Serial4.print(config_value, HEX);
-    Serial4.print(" 00 ");  // Config string index
-    Serial4.print(config_attributes, HEX);
-    Serial4.print(" ");
-    Serial4.print(config_max_power, HEX);
-    Serial4.print("                  ");  // Padding
-    Serial4.println("[Config Header]");
-    
-    // Then show the stored descriptors
-    for (uint16_t i = 0; i < config_descriptor_len; i += 16) {
-        Serial4.print("  ");
-        uint16_t addr = i + 9;  // Account for header
-        if (addr < 0x10) Serial4.print("0");
-        if (addr < 0x100) Serial4.print("0");
-        Serial4.print(addr, HEX);
-        Serial4.print(": ");
+    if (debug_enabled) {
+        Serial4.println("\n--- Raw Configuration Descriptor Hex Dump ---");
+        Serial4.println("  [Reconstructed header + stored descriptors]");
         
-        // Hex bytes
-        for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
-            if (config_descriptor[i + j] < 0x10) Serial4.print("0");
-            Serial4.print(config_descriptor[i + j], HEX);
-            Serial4.print(" ");
-        }
-        
-        // Padding if last line
-        if (config_descriptor_len - i < 16) {
-            for (uint16_t j = config_descriptor_len - i; j < 16; j++) {
-                Serial4.print("   ");
-            }
-        }
-        
+        // First show the reconstructed configuration descriptor header
+        Serial4.print("  000: 09 02 ");
+        uint16_t total_len = config_descriptor_len + 9;
+        if ((total_len & 0xFF) < 0x10) Serial4.print("0");
+        Serial4.print(total_len & 0xFF, HEX);
         Serial4.print(" ");
+        if (((total_len >> 8) & 0xFF) < 0x10) Serial4.print("0");
+        Serial4.print((total_len >> 8) & 0xFF, HEX);
+        Serial4.print(" ");
+        if (config_num_interfaces < 0x10) Serial4.print("0");
+        Serial4.print(config_num_interfaces, HEX);
+        Serial4.print(" ");
+        if (config_value < 0x10) Serial4.print("0");
+        Serial4.print(config_value, HEX);
+        Serial4.print(" 00 ");  // Config string index
+        Serial4.print(config_attributes, HEX);
+        Serial4.print(" ");
+        Serial4.print(config_max_power, HEX);
+        Serial4.print("                  ");  // Padding
+        Serial4.println("[Config Header]");
         
-        // ASCII representation
-        for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
-            char c = config_descriptor[i + j];
-            if (c >= ' ' && c <= '~') {
-                Serial4.print(c);
-            } else {
-                Serial4.print(".");
+        // Then show the stored descriptors
+        for (uint16_t i = 0; i < config_descriptor_len; i += 16) {
+            Serial4.print("  ");
+            uint16_t addr = i + 9;  // Account for header
+            if (addr < 0x10) Serial4.print("0");
+            if (addr < 0x100) Serial4.print("0");
+            Serial4.print(addr, HEX);
+            Serial4.print(": ");
+            
+            // Hex bytes
+            for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
+                if (config_descriptor[i + j] < 0x10) Serial4.print("0");
+                Serial4.print(config_descriptor[i + j], HEX);
+                Serial4.print(" ");
             }
+            
+            // Padding if last line
+            if (config_descriptor_len - i < 16) {
+                for (uint16_t j = config_descriptor_len - i; j < 16; j++) {
+                    Serial4.print("   ");
+                }
+            }
+            
+            Serial4.print(" ");
+            
+            // ASCII representation
+            for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
+                char c = config_descriptor[i + j];
+                if (c >= ' ' && c <= '~') {
+                    Serial4.print(c);
+                } else {
+                    Serial4.print(".");
+                }
+            }
+            
+            Serial4.println();
         }
         
-        Serial4.println();
+        Serial4.print("Total bytes: ");
+        Serial4.print(total_len);
+        Serial4.println(" (9 header + ");
+        Serial4.print(config_descriptor_len);
+        Serial4.println(" descriptors)");
     }
-    
-    Serial4.print("Total bytes: ");
-    Serial4.print(total_len);
-    Serial4.println(" (9 header + ");
-    Serial4.print(config_descriptor_len);
-    Serial4.println(" descriptors)");
 }

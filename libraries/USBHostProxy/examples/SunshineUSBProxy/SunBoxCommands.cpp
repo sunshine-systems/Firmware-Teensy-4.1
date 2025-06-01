@@ -2,6 +2,7 @@
 #include "CommandsSunBoxDevtoolsInterface.h"
 #include "CommandsSunBoxInterface.h"
 #include "CommandsSunBoxKMBoxInterface.h"
+#include "SunBoxStartup.h"
 
 SunBoxCommands::SunBoxCommands(Stream& serial)
     : serial(serial), bufferIndex(0), lastCharTime(0), currentMode(MODE_DETECTING) {
@@ -28,7 +29,7 @@ void SunBoxCommands::begin() {
     
     // Apply debug mode to legacy and kmbox interfaces if enabled
     if (devtoolsInterface->isDebugEnabled()) {
-        Serial4.println("[COMMANDS]: Debug mode enabled from EEPROM");
+        Serial4.println("S: Debug mode enabled from EEPROM");
     }
 }
 
@@ -179,7 +180,7 @@ void SunBoxCommands::routeToLegacy() {
         } else if (expectedLength == 3) {
             // Settings message
             legacyInterface->getSettings().updateSettings(commandBuffer);
-            Serial4.println("[LEGACY]: Settings updated");
+            Serial4.println("S: Settings updated");
         }
         
         // Remove processed bytes from buffer

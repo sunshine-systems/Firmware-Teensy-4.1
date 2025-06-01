@@ -2,21 +2,15 @@
 #include "USBHostDriver.h"
 #include "HIDMouseDescriptorHandler.h"
 #include "SunBoxEEPROM.h"
+#include "SunBoxStartup.h"
 
 CommandsSunBoxDevtoolsInterface::CommandsSunBoxDevtoolsInterface()
     : usbHostDriver(nullptr), hidHandler(nullptr), debugEnabled(false) {
 }
 
 void CommandsSunBoxDevtoolsInterface::begin() {
-    // Initialize EEPROM
-    sunboxEEPROM.begin();
-    
-    // Load debug mode from EEPROM
-    sunboxEEPROM.loadDebugMode(debugEnabled);
-    
-    if (debugEnabled) {
-        Serial4.println("[DEVTOOLS]: Debug mode restored from EEPROM: ON");
-    }
+    // Get current debug state from SunBoxStartup (already loaded at startup)
+    debugEnabled = SunBoxStartup::isDebugEnabled();
 }
 
 void CommandsSunBoxDevtoolsInterface::handleCommand(const String& cmd) {
@@ -49,9 +43,9 @@ void CommandsSunBoxDevtoolsInterface::handleCommand(const String& cmd) {
         handleClaimClear();
     }
     else {
-        Serial4.print("[DEVTOOLS]: Unknown command: ");
+        Serial4.print("S: Unknown command: ");
         Serial4.println(baseCommand);
-        Serial4.println("[DEVTOOLS]: Type 'help' for available commands");
+        Serial4.println("S: Type 'help' for available commands");
     }
 }
 
@@ -121,12 +115,15 @@ void CommandsSunBoxDevtoolsInterface::handleDebug() {
     // Toggle debug mode using EEPROM
     debugEnabled = sunboxEEPROM.toggleDebugMode();
     
+    // Update the global debug state in SunBoxStartup
+    SunBoxStartup::setDebugEnabled(debugEnabled);
+    
     // Update debug mode in components if they exist
     if (hidHandler) {
         hidHandler->setDebugOutput(debugEnabled);
     }
     
-    Serial4.print("[DEVTOOLS]: Debug mode ");
+    Serial4.print("S: Debug mode ");
     Serial4.print(debugEnabled ? "ON" : "OFF");
     Serial4.println(" (saved to EEPROM)");
 }
@@ -135,7 +132,7 @@ void CommandsSunBoxDevtoolsInterface::handleDump() {
     if (usbHostDriver) {
         usbHostDriver->dumpDeviceInfo();
     } else {
-        Serial4.println("[DEVTOOLS]: USB Host Driver not available");
+        Serial4.println("S: USB Host Driver not available");
     }
 }
 
@@ -151,8 +148,8 @@ void CommandsSunBoxDevtoolsInterface::handleClaimCorrection(const String& args) 
     }
     
     if (commaCount != 3) {
-        Serial4.println("[DEVTOOLS]: Invalid format! Use: claimcorrection vid,pid,interface,endpoint");
-        Serial4.println("[DEVTOOLS]: Example: claimcorrection 046d,c53f,1,82");
+        Serial4.println("S: Invalid format! Use: claimcorrection vid,pid,interface,endpoint");
+        Serial4.println("S: Example: claimcorrection 046d,c53f,1,82");
         return;
     }
     
@@ -170,8 +167,8 @@ void CommandsSunBoxDevtoolsInterface::handleClaimCorrection(const String& args) 
     
     // Save to EEPROM
     if (sunboxEEPROM.saveClaimConfig(vid, pid, iface, ep)) {
-        Serial4.println("[DEVTOOLS]: Claim correction configuration saved:");
-        Serial4.print("[DEVTOOLS]: VID=0x");
+        Serial4.println("S: Claim correction configuration saved:");
+        Serial4.print("S: VID=0x");
         Serial4.print(vid, HEX);
         Serial4.print(" PID=0x");
         Serial4.print(pid, HEX);
@@ -179,13 +176,13 @@ void CommandsSunBoxDevtoolsInterface::handleClaimCorrection(const String& args) 
         Serial4.print(iface);
         Serial4.print(" Endpoint=0x");
         Serial4.println(ep, HEX);
-        Serial4.println("[DEVTOOLS]: Configuration will be used on next device connection");
+        Serial4.println("S: Configuration will be used on next device connection");
     } else {
-        Serial4.println("[DEVTOOLS]: Failed to save configuration");
+        Serial4.println("S: Failed to save configuration");
     }
 }
 
 void CommandsSunBoxDevtoolsInterface::handleClaimClear() {
     sunboxEEPROM.clearClaimConfig();
-    Serial4.println("[DEVTOOLS]: Claim correction configuration cleared");
+    Serial4.println("S: Claim correction configuration cleared");
 }

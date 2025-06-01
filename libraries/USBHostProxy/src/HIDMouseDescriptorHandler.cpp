@@ -1,4 +1,5 @@
 #include "HIDMouseDescriptorHandler.h"
+#include "SunBoxStartup.h"
 
 HIDMouseDescriptorHandler::HIDMouseDescriptorHandler() 
     : host_driver(nullptr), handler_state(HID_STATE_IDLE),
@@ -19,16 +20,17 @@ HIDMouseDescriptorHandler::HIDMouseDescriptorHandler()
 void HIDMouseDescriptorHandler::begin(USBHostDriver* driver) {
     host_driver = driver;
     handler_state = HID_STATE_IDLE;
+    debug_enabled = SunBoxStartup::isDebugEnabled();
     
     if (debug_enabled) {
-        Serial4.println("[HID_HANDLER]: Initialized with USBHostDriver");
+        Serial4.println("I: Initialized with USBHostDriver");
     }
 }
 
 bool HIDMouseDescriptorHandler::setupMouseInterface() {
     if (!host_driver || !host_driver->isReady()) {
         if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: No driver or device not ready");
+            Serial4.println("I: No driver or device not ready");
         }
         return false;
     }
@@ -36,14 +38,14 @@ bool HIDMouseDescriptorHandler::setupMouseInterface() {
     // Find mouse interface
     if (!findMouseInterface()) {
         if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: No mouse interface found");
+            Serial4.println("I: No mouse interface found");
         }
         handler_state = HID_STATE_ERROR;
         return false;
     }
     
     if (debug_enabled) {
-        Serial4.print("[HID_HANDLER]: Found mouse interface ");
+        Serial4.print("I: Found mouse interface ");
         Serial4.print(interface_number);
         Serial4.print(" at index ");
         Serial4.println(interface_index);
@@ -65,7 +67,7 @@ bool HIDMouseDescriptorHandler::findMouseInterface() {
         endpoint_interval = host_driver->getEndpointInterval(idx);
         
         if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: Found HID mouse interface (protocol=2)");
+            Serial4.println("I: Found HID mouse interface (protocol=2)");
         }
         return true;
     }
@@ -82,7 +84,7 @@ bool HIDMouseDescriptorHandler::findMouseInterface() {
         endpoint_interval = host_driver->getEndpointInterval(idx);
         
         if (debug_enabled) {
-            Serial4.print("[HID_HANDLER]: Found HID interface with protocol=");
+            Serial4.print("I: Found HID interface with protocol=");
             Serial4.println(interface_protocol);
         }
         return true;
@@ -94,7 +96,7 @@ bool HIDMouseDescriptorHandler::findMouseInterface() {
 bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     if (!host_driver || interface_index == 0xFF) {
         if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: Cannot request descriptor - no interface");
+            Serial4.println("I: Cannot request descriptor - no interface");
         }
         return false;
     }
@@ -102,7 +104,7 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     handler_state = HID_STATE_WAIT_DESCRIPTOR;
     
     if (debug_enabled) {
-        Serial4.print("[HID_HANDLER]: Requesting HID descriptor for interface ");
+        Serial4.print("I: Requesting HID descriptor for interface ");
         Serial4.print(interface_number);
         Serial4.print(", expected length: ");
         Serial4.println(descriptor_length);
@@ -112,7 +114,7 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     if (!retrieveHIDDescriptor(timeout_ms)) {
         // If retrieval failed, use boot protocol
         if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: Descriptor retrieval failed, using boot protocol");
+            Serial4.println("I: Descriptor retrieval failed, using boot protocol");
         }
         setBootMouseFormat();
         handler_state = HID_STATE_READY;
@@ -124,7 +126,7 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     if (!parseDescriptor(hid_descriptor, hid_descriptor_size)) {
         // If parsing failed, try boot protocol
         if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: Parse failed, using boot protocol");
+            Serial4.println("I: Parse failed, using boot protocol");
         }
         setBootMouseFormat();
     }
@@ -132,7 +134,7 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     handler_state = HID_STATE_READY;
     
     if (debug_enabled) {
-        Serial4.println("[HID_HANDLER]: HID descriptor ready!");
+        Serial4.println("I: HID descriptor ready!");
     }
     
     return true;
@@ -142,7 +144,7 @@ bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
     // If descriptor length is 0, we might not have a report descriptor
     if (descriptor_length == 0) {
         if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: No HID descriptor length, using boot protocol");
+            Serial4.println("I: No HID descriptor length, using boot protocol");
         }
         return false;
     }
@@ -166,12 +168,12 @@ bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
         hid_descriptor_size = actual_length;
         
         if (debug_enabled) {
-            Serial4.print("[HID_HANDLER]: Retrieved ");
+            Serial4.print("I: Retrieved ");
             Serial4.print(actual_length);
             Serial4.println(" bytes of HID descriptor");
             
             // Print first few bytes for debugging
-            Serial4.print("[HID_HANDLER]: First bytes: ");
+            Serial4.print("I: First bytes: ");
             for (uint16_t i = 0; i < min(actual_length, (uint16_t)16); i++) {
                 if (hid_descriptor[i] < 0x10) Serial4.print("0");
                 Serial4.print(hid_descriptor[i], HEX);
@@ -184,7 +186,7 @@ bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
     }
     
     if (debug_enabled) {
-        Serial4.println("[HID_HANDLER]: Failed to retrieve HID descriptor");
+        Serial4.println("I: Failed to retrieve HID descriptor");
     }
     
     return false;
@@ -193,13 +195,13 @@ bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
 bool HIDMouseDescriptorHandler::activateInterface() {
     if (!host_driver || interface_index == 0xFF) {
         if (debug_enabled) {
-            Serial4.println("[HID_HANDLER]: Cannot activate - no interface");
+            Serial4.println("I: Cannot activate - no interface");
         }
         return false;
     }
     
     if (debug_enabled) {
-        Serial4.println("[HID_HANDLER]: Interface activation complete");
+        Serial4.println("I: Interface activation complete");
     }
     
     // Note: SET_IDLE and SET_PROTOCOL are optional HID commands that many devices
@@ -443,13 +445,13 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
     report_size_bytes = (total_bits + 7) / 8;
     report_id = state.report_id;
     
-    Serial4.print("\n[PARSER] Total bits: ");
+    Serial4.print("\nS: Total bits: ");
     Serial4.print(total_bits);
     Serial4.print(" = ");
     Serial4.print(report_size_bytes);
     Serial4.println(" bytes");
     
-    Serial4.print("[PARSER] Found: ");
+    Serial4.print("S: Found: ");
     if (has_buttons) Serial4.print("Buttons ");
     if (has_x) Serial4.print("X ");
     if (has_y) Serial4.print("Y ");
@@ -463,7 +465,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
     }
     
     // If parsing failed or incomplete, use boot mouse format
-    Serial4.println("\n[PARSER] Missing X or Y - using boot mouse format");
+    Serial4.println("\nS: Missing X or Y - using boot mouse format");
     setBootMouseFormat();
     return true;  // Return true because we have a valid format now
 }
@@ -511,7 +513,7 @@ void HIDMouseDescriptorHandler::setBootMouseFormat() {
     wheel_field.is_signed = true;
     wheel_field.is_relative = true;
     
-    Serial4.println("[PARSER] Set boot mouse format");
+    Serial4.println("S: Set boot mouse format");
 }
 
 int32_t HIDMouseDescriptorHandler::extractValue(const uint8_t* data, uint16_t bit_offset, uint8_t bit_count,
@@ -857,25 +859,27 @@ void HIDMouseDescriptorHandler::printDescriptorInfo() {
 }
 
 void HIDMouseDescriptorHandler::printMouseState(const MouseState& state) {
-    Serial4.print("Mouse: Buttons=0x");
-    if (state.buttons < 0x10) Serial4.print("0");
-    Serial4.print(state.buttons, HEX);
-    Serial4.print(" (");
-    
-    // Check all possible buttons
-    if (state.buttons & 0x01) Serial4.print("L");
-    if (state.buttons & 0x02) Serial4.print("R"); 
-    if (state.buttons & 0x04) Serial4.print("M");
-    if (state.buttons & 0x08) Serial4.print("B4");  // Button 4 (thumb back)
-    if (state.buttons & 0x10) Serial4.print("B5");  // Button 5 (thumb forward)
-    if (state.buttons & 0x20) Serial4.print("B6");  // Button 6 (if exists)
-    if (state.buttons & 0x40) Serial4.print("B7");  // Button 7 (if exists)
-    if (state.buttons & 0x80) Serial4.print("B8");  // Button 8 (if exists)
-    
-    Serial4.print(") X=");
-    Serial4.print(state.x);
-    Serial4.print(" Y=");
-    Serial4.print(state.y);
-    Serial4.print(" Wheel=");
-    Serial4.println(state.wheel);
+    if (debug_enabled) {
+        Serial4.print("I: Mouse: Buttons=0x");
+        if (state.buttons < 0x10) Serial4.print("0");
+        Serial4.print(state.buttons, HEX);
+        Serial4.print(" (");
+        
+        // Check all possible buttons
+        if (state.buttons & 0x01) Serial4.print("L");
+        if (state.buttons & 0x02) Serial4.print("R"); 
+        if (state.buttons & 0x04) Serial4.print("M");
+        if (state.buttons & 0x08) Serial4.print("B4");  // Button 4 (thumb back)
+        if (state.buttons & 0x10) Serial4.print("B5");  // Button 5 (thumb forward)
+        if (state.buttons & 0x20) Serial4.print("B6");  // Button 6 (if exists)
+        if (state.buttons & 0x40) Serial4.print("B7");  // Button 7 (if exists)
+        if (state.buttons & 0x80) Serial4.print("B8");  // Button 8 (if exists)
+        
+        Serial4.print(") X=");
+        Serial4.print(state.x);
+        Serial4.print(" Y=");
+        Serial4.print(state.y);
+        Serial4.print(" Wheel=");
+        Serial4.println(state.wheel);
+    }
 }
