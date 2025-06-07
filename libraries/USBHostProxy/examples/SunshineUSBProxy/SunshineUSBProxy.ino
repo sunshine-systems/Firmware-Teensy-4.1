@@ -148,9 +148,8 @@ void initializeUSBDevice() {
             Serial4.println("S: USB device detected and ready");
             Serial4.println("S: Initializing USB device stack...");
             
-            // Initialize USB device stack
-            usb_init();
-            
+            // TODO: implement our own usb stack here
+
             usbDeviceInitialized = true;
             Serial4.println("S: USB device stack initialized");
             
