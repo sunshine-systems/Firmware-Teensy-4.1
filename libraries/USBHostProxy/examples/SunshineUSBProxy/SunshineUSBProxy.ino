@@ -7,12 +7,13 @@
 #include "SunBoxSyntheticHandleOutput.h"
 #include "CommandsSunBoxDevtoolsInterface.h"
 #include "SunBoxEEPROM.h"
+#include "USBDeviceProxy.h"  // NEW: Add our custom USB device stack
 
-// USB device functions
-extern "C" {
-    #include "usb_dev.h"
-    void usb_init(void);
-}
+// Remove the USB device functions - we don't need Teensy's stack anymore
+// extern "C" {
+//     #include "usb_dev.h"
+//     void usb_init(void);
+// }
 
 // =============================================================================
 // Configuration
@@ -38,6 +39,14 @@ SunBoxUSBMouseDataHandler usbMouseHandler(usbHostDriver, hidMouseHandler);
 // Output handler
 SunBoxSyntheticHandleOutput syntheticOutput(sunboxCommands, usbMouseHandler);
 
+// USB Device Proxy - NEW: Our custom USB device stack
+USBDeviceProxy usbDeviceProxy;
+
+// Make USBHostDriver accessible to usb_host_wrapper
+extern "C" {
+    extern USBHostDriver* g_usbHostDriver;
+}
+
 // State tracking
 bool systemInitialized = false;
 
@@ -54,6 +63,9 @@ void setup() {
     
     // Print startup banner
     printBanner();
+    
+    // Set the global pointer for usb_host_wrapper
+    g_usbHostDriver = &usbHostDriver;
     
     // Initialize EEPROM
     sunboxEEPROM.begin();
@@ -74,6 +86,10 @@ void setup() {
             hidMouseHandler.setDebugOutput(true);
         }
     }
+    
+    // Initialize USB Device Proxy - NEW: This replaces Teensy's usb_init()
+    Serial4.println("S: Initializing USB Device Proxy...");
+    usbDeviceProxy.begin();
     
     // Start USB Host
     Serial4.println("S: Starting USB Host...");
@@ -100,6 +116,9 @@ void loop() {
     // Process USB Host tasks
     myusb.Task();
     
+    // Poll USB Device proxy - CRITICAL: Must be called as often as possible!
+    usbDeviceProxy.poll();
+    
     // Check for commands
     sunboxCommands.check();
     
@@ -111,8 +130,8 @@ void loop() {
         syntheticOutput.process();
     }
     
-    // Initialize USB device when ready
-    initializeUSBDevice();
+    // Update status based on USB device proxy state
+    updateUSBDeviceStatus();
     
     // Update status LED
     updateStatusLED();
@@ -133,34 +152,36 @@ void printBanner() {
     Serial4.println("I:   - Sunshine Legacy Protocol");
     Serial4.println("I:   - KMBox B+ Protocol");
     Serial4.println("I:   - Intelligent Command Routing");
+    Serial4.println("I:   - Custom USB Device Stack (Polling)");  // NEW
     Serial4.println("I: =======================================\n");
 }
 
-void initializeUSBDevice() {
-    // Only initialize USB device after we know what we're proxying
-    static bool usbDeviceInitialized = false;
-    static unsigned long lastCheckTime = 0;
+// NEW: Replace initializeUSBDevice() with status monitoring
+void updateUSBDeviceStatus() {
+    static unsigned long lastStatusTime = 0;
+    static bool lastConnected = false;
     
-    if (!usbDeviceInitialized && (millis() - lastCheckTime > 1000)) {
-        lastCheckTime = millis();
-        
-        if (usbMouseHandler.isReady()) {
-            Serial4.println("S: USB device detected and ready");
-            Serial4.println("S: Initializing USB device stack...");
-            
-            // TODO: implement our own usb stack here
-
-            usbDeviceInitialized = true;
-            Serial4.println("S: USB device stack initialized");
-            
-            // Flash LED to indicate ready
-            for (int i = 0; i < 5; i++) {
-                digitalWrite(LED_BUILTIN, HIGH);
-                delay(100);
-                digitalWrite(LED_BUILTIN, LOW);
-                delay(100);
-            }
-        }
+    // Only check every second
+    if (millis() - lastStatusTime < 1000) return;
+    lastStatusTime = millis();
+    
+    bool currentlyConnected = usbDeviceProxy.isConnected();
+    
+    // Log state changes
+    if (currentlyConnected != lastConnected) {
+        Serial4.print("S: USB Device State: ");
+        Serial4.println(usbDeviceProxy.getStateString());
+        lastConnected = currentlyConnected;
+    }
+    
+    // Log polling statistics periodically (every 10 seconds)
+    static unsigned long lastStatsTime = 0;
+    if (millis() - lastStatsTime > 10000) {
+        uint32_t polls = usbDeviceProxy.getPollCount();
+        Serial4.print("I: USB Device polling rate: ~");
+        Serial4.print(polls / 10);  // Rough average per second
+        Serial4.println(" Hz");
+        lastStatsTime = millis();
     }
 }
 
@@ -168,14 +189,21 @@ void updateStatusLED() {
     static unsigned long lastBlink = 0;
     unsigned long now = millis();
     
+    // Different blink patterns based on state
     if (!usbMouseHandler.isReady()) {
-        // Slow blink - waiting for device
+        // Slow blink - waiting for USB host device (mouse)
         if (now - lastBlink >= 1000) {
             digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
             lastBlink = now;
         }
+    } else if (!usbDeviceProxy.isConnected()) {
+        // Fast blink - mouse connected but PC not detecting us
+        if (now - lastBlink >= 250) {
+            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+            lastBlink = now;
+        }
     } else {
-        // Solid on - device connected
+        // Solid on - everything connected
         digitalWrite(LED_BUILTIN, HIGH);
     }
 }
