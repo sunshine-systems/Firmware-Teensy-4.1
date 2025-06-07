@@ -28,6 +28,10 @@ static uint8_t proxy_endpoint0_buffer[8];
 // Our additional buffers for larger transfers
 static uint8_t proxy_descriptor_buffer[512] __attribute__((aligned(32)));
 
+// Buffer for data endpoint transfers
+static uint8_t proxy_in_buffers[NUM_ENDPOINTS][64] __attribute__((aligned(32)));
+static transfer_t proxy_in_transfers[NUM_ENDPOINTS] __attribute__((aligned(32)));
+
 // =============================================================================
 // USBDeviceProxy Implementation
 // =============================================================================
@@ -45,9 +49,12 @@ USBDeviceProxy::USBDeviceProxy() :
     last_poll_time(0),
     poll_count(0),
     endpoint0_notify_mask(0),
-    endpointN_notify_mask(0) {
+    endpointN_notify_mask(0),
+    num_endpoints(0) {
     
     memset(&pending_setup, 0, sizeof(pending_setup));
+    memset(endpoints, 0, sizeof(endpoints));
+    memset(endpoint_ready, 0, sizeof(endpoint_ready));
 }
 
 // Initialize USB hardware - following usb_init() exactly
@@ -190,6 +197,11 @@ void USBDeviceProxy::poll() {
     
     // Process any pending control transfers
     processControlTransfer();
+    
+    // Poll data endpoints if configured
+    if (device_state == STATE_CONFIGURED) {
+        pollDataEndpoints();
+    }
 }
 
 // Poll control endpoint for setup packets
@@ -229,6 +241,28 @@ void USBDeviceProxy::pollControlEndpoint() {
         handleSetupPacket(s.bmRequestType | (s.bRequest << 8), s.wValue | (s.wIndex << 16));
         
         setupstatus = USB1_ENDPTSETUPSTAT;
+    }
+}
+
+// Poll data endpoints for IN token from host
+void USBDeviceProxy::pollDataEndpoints() {
+    // For each configured endpoint, check if we need to send data
+    for (uint8_t i = 0; i < num_endpoints; i++) {
+        if (!endpoints[i].configured || !endpoint_ready[i]) continue;
+        
+        uint8_t ep_num = endpoints[i].address & 0x0F;
+        uint8_t ep_dir = (endpoints[i].address & 0x80) ? 1 : 0;
+        
+        if (ep_dir == 0) continue; // Only handle IN endpoints for now
+        
+        // Check if this endpoint has a completed transfer
+        uint32_t mask = 1 << (ep_num + 16); // IN endpoint mask
+        if (USB1_ENDPTCOMPLETE & mask) {
+            USB1_ENDPTCOMPLETE = mask; // Clear the complete flag
+            
+            // The host has consumed our data, we can send more
+            endpoint_ready[i] = true;
+        }
     }
 }
 
@@ -300,6 +334,9 @@ void USBDeviceProxy::handleUSBReset() {
     configuration_value = 0;
     proxy_usb_configuration = 0;
     
+    // Reset endpoint ready states
+    memset(endpoint_ready, 0, sizeof(endpoint_ready));
+    
     // If we were in the middle of a control transfer, resume host transfers
     if (control_stage != CONTROL_IDLE) {
         control_stage = CONTROL_IDLE;
@@ -350,6 +387,73 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
         return;
     }
     
+    // Handle CLEAR_FEATURE for endpoints locally
+    if (pending_setup.bRequest == 0x01 && // CLEAR_FEATURE
+        pending_setup.bmRequestType == 0x02 && // Endpoint recipient
+        (pending_setup.wIndex & 0x0F) != 0) { // Not endpoint 0
+        Serial4.println("I: Handling CLEAR_FEATURE locally for endpoint");
+        handleClearFeature();
+        usb_host_resume_transfers();
+        return;
+    }
+    
+    // Handle SET_CONFIGURATION specially - need to configure endpoints
+    if (pending_setup.bmRequestType == 0x00 && pending_setup.bRequest == 0x09) {
+        // Forward to device first
+        uint16_t dummy_len;
+        bool success = usb_host_control_transfer(
+            pending_setup.bmRequestType,
+            pending_setup.bRequest,
+            pending_setup.wValue,
+            pending_setup.wIndex,
+            0,
+            nullptr,
+            &dummy_len,
+            500
+        );
+        
+        if (success) {
+            Serial4.println("S: SET_CONFIGURATION forwarded successfully");
+            configuration_value = pending_setup.wValue;
+            proxy_usb_configuration = configuration_value;
+            
+            // Parse descriptors and configure endpoints
+            if (configuration_value > 0) {
+                parseConfigurationDescriptor();
+                configureAllEndpoints();
+                device_state = STATE_CONFIGURED;
+            }
+            
+            // ACK after endpoint configuration is complete
+            receiveData(NULL, 0);
+            control_stage = CONTROL_IDLE;
+            usb_host_resume_transfers();
+        } else {
+            USB1_ENDPTCTRL0 = 0x00010001;  // STALL
+            control_stage = CONTROL_IDLE;
+            usb_host_resume_transfers();
+        }
+        return;
+    }
+    
+    // Handle GET_DESCRIPTOR for strings specially to ensure proper forwarding
+    if (pending_setup.bmRequestType == 0x80 && pending_setup.bRequest == 0x06) {
+        uint8_t desc_type = (pending_setup.wValue >> 8) & 0xFF;
+        uint8_t desc_index = pending_setup.wValue & 0xFF;
+        
+        if (desc_type == 0x03) { // String descriptor
+            Serial4.print("I: GET_STRING_DESCRIPTOR index=");
+            Serial4.print(desc_index);
+            Serial4.print(" langID=0x");
+            Serial4.println(pending_setup.wIndex, HEX);
+            
+            // For string descriptors, we need to handle the language ID properly
+            control_stage = CONTROL_SETUP;
+            processControlTransfer();
+            return;
+        }
+    }
+    
     // For all other requests, forward to device
     control_stage = CONTROL_SETUP;
     processControlTransfer();
@@ -384,6 +488,13 @@ void USBDeviceProxy::processControlTransfer() {
     if (pending_setup.bmRequestType & 0x80) {
         // Device-to-host (IN) transfer
         Serial4.println("I: Forwarding IN request to mouse...");
+        
+        // Add small delay for string descriptors to help with timing
+        uint8_t desc_type = (pending_setup.wValue >> 8) & 0xFF;
+        if (pending_setup.bRequest == 0x06 && desc_type == 0x03) {
+            delay(10); // Small delay for string descriptors
+        }
+        
         success = usb_host_control_transfer(
             pending_setup.bmRequestType,
             pending_setup.bRequest,
@@ -401,13 +512,23 @@ void USBDeviceProxy::processControlTransfer() {
             Serial4.println(" bytes from mouse");
             
             // Debug: print first few bytes
-            Serial4.print("I: Device descriptor: ");
+            Serial4.print("I: Data: ");
             for (int i = 0; i < 8 && i < actual_len; i++) {
                 if (proxy_descriptor_buffer[i] < 0x10) Serial4.print("0");
                 Serial4.print(proxy_descriptor_buffer[i], HEX);
                 Serial4.print(" ");
             }
             Serial4.println("...");
+            
+            // CRITICAL FIX: For string descriptors, send ONLY the actual descriptor length
+            if (pending_setup.bRequest == 0x06 && desc_type == 0x03) {
+                // String descriptor - first byte contains the actual length
+                if (actual_len > 0 && proxy_descriptor_buffer[0] <= actual_len) {
+                    actual_len = proxy_descriptor_buffer[0]; // Use the descriptor's reported length
+                    Serial4.print("I: String descriptor actual length: ");
+                    Serial4.println(actual_len);
+                }
+            }
             
             // Send data to host
             setup_data_len = actual_len;
@@ -588,4 +709,280 @@ void USBDeviceProxy::schedule_transfer(endpoint_t *endpoint, uint32_t mask, tran
     endpoint->first_transfer = transfer;
     endpoint->last_transfer = transfer;
     __enable_irq();
+}
+
+// Parse configuration descriptor to find endpoints
+void USBDeviceProxy::parseConfigurationDescriptor() {
+    Serial4.println("I: Parsing configuration descriptor for endpoints...");
+    
+    // We already forwarded the configuration descriptor earlier, so we should have it cached
+    // Let's request it again to ensure we have the full descriptor
+    uint16_t config_len = 0;
+    uint8_t config_desc[512];
+    
+    // Request configuration descriptor
+    bool success = usb_host_control_transfer(
+        0x80,  // bmRequestType
+        0x06,  // GET_DESCRIPTOR
+        0x0200,  // Configuration descriptor
+        0,     // Index
+        sizeof(config_desc),
+        config_desc,
+        &config_len,
+        500
+    );
+    
+    if (!success || config_len < 9) {
+        Serial4.println("E: Failed to get configuration descriptor!");
+        return;
+    }
+    
+    Serial4.print("I: Got configuration descriptor, length: ");
+    Serial4.println(config_len);
+    
+    // Get actual total length from descriptor
+    uint16_t total_len = config_desc[2] | (config_desc[3] << 8);
+    Serial4.print("I: Total configuration length: ");
+    Serial4.println(total_len);
+    
+    // If we didn't get the full descriptor, request it again
+    if (config_len < total_len) {
+        success = usb_host_control_transfer(
+            0x80,  // bmRequestType
+            0x06,  // GET_DESCRIPTOR
+            0x0200,  // Configuration descriptor
+            0,     // Index
+            total_len,
+            config_desc,
+            &config_len,
+            500
+        );
+        
+        if (!success) {
+            Serial4.println("E: Failed to get full configuration descriptor!");
+            return;
+        }
+    }
+    
+    // Reset endpoint count
+    num_endpoints = 0;
+    
+    // Parse the descriptor
+    uint16_t offset = 0;
+    while (offset < config_len && num_endpoints < MAX_PROXY_ENDPOINTS) {
+        if (offset + 2 > config_len) break; // Need at least 2 bytes for length and type
+        
+        uint8_t desc_len = config_desc[offset];
+        uint8_t desc_type = config_desc[offset + 1];
+        
+        if (desc_len == 0 || offset + desc_len > config_len) break;
+        
+        // Look for endpoint descriptors
+        if (desc_type == 0x05 && desc_len >= 7) {  // Endpoint descriptor
+            uint8_t ep_addr = config_desc[offset + 2];
+            uint8_t ep_attr = config_desc[offset + 3];
+            uint16_t max_packet = config_desc[offset + 4] | (config_desc[offset + 5] << 8);
+            uint8_t interval = config_desc[offset + 6];
+            
+            Serial4.print("I: Found endpoint 0x");
+            Serial4.print(ep_addr, HEX);
+            Serial4.print(" type=");
+            Serial4.print(ep_attr & 0x03);
+            Serial4.print(" size=");
+            Serial4.print(max_packet);
+            Serial4.print(" interval=");
+            Serial4.println(interval);
+            
+            // Store endpoint info
+            endpoints[num_endpoints].address = ep_addr;
+            endpoints[num_endpoints].attributes = ep_attr;
+            endpoints[num_endpoints].maxPacketSize = max_packet;
+            endpoints[num_endpoints].interval = interval;
+            endpoints[num_endpoints].configured = false;
+            endpoint_ready[num_endpoints] = false;
+            num_endpoints++;
+        }
+        
+        offset += desc_len;
+    }
+    
+    Serial4.print("I: Found ");
+    Serial4.print(num_endpoints);
+    Serial4.println(" endpoints to configure");
+}
+
+// Configure a single endpoint
+void USBDeviceProxy::configureEndpoint(uint8_t addr, uint8_t type, uint16_t maxPacket, uint8_t interval) {
+    uint8_t ep_num = addr & 0x0F;
+    uint8_t ep_dir = (addr & 0x80) ? 1 : 0;
+    
+    if (ep_num == 0 || ep_num > 7) {
+        Serial4.print("E: Invalid endpoint number: ");
+        Serial4.println(ep_num);
+        return;
+    }
+    
+    Serial4.print("I: Configuring endpoint ");
+    Serial4.print(ep_num);
+    Serial4.print(ep_dir ? " IN" : " OUT");
+    Serial4.print(" type=");
+    Serial4.print(type & 0x03);
+    Serial4.print(" size=");
+    Serial4.println(maxPacket);
+    
+    // Configure the queue head
+    uint32_t config = (maxPacket << 16);
+    if ((type & 0x03) == 0) {  // Control endpoint
+        config |= (1 << 15);
+    }
+    
+    proxy_endpoint_queue_head[ep_num * 2 + ep_dir].config = config;
+    proxy_endpoint_queue_head[ep_num * 2 + ep_dir].current = 0;
+    proxy_endpoint_queue_head[ep_num * 2 + ep_dir].next = 1;  // Terminate
+    proxy_endpoint_queue_head[ep_num * 2 + ep_dir].status = 0;
+    
+    // Configure the endpoint control register
+    volatile uint32_t* endptctrl = &USB1_ENDPTCTRL0 + ep_num;
+    uint32_t ctrl = *endptctrl;
+    
+    if (ep_dir) {
+        // TX (IN) endpoint
+        ctrl &= 0x0000FFFF;  // Clear TX bits
+        ctrl |= (1 << 23);   // TXE - TX Enable
+        ctrl |= (1 << 22);   // TXR - TX Data Toggle Reset
+        ctrl |= ((type & 0x03) << 18);  // TXT - TX Endpoint Type
+    } else {
+        // RX (OUT) endpoint
+        ctrl &= 0xFFFF0000;  // Clear RX bits
+        ctrl |= (1 << 7);    // RXE - RX Enable
+        ctrl |= (1 << 6);    // RXR - RX Data Toggle Reset
+        ctrl |= ((type & 0x03) << 2);   // RXT - RX Endpoint Type
+    }
+    
+    *endptctrl = ctrl;
+    
+    // Enable notifications for this endpoint
+    if (ep_dir) {
+        proxy_endpointN_notify_mask |= (1 << (ep_num + 16));
+    } else {
+        proxy_endpointN_notify_mask |= (1 << ep_num);
+    }
+    endpointN_notify_mask = proxy_endpointN_notify_mask;
+    
+    Serial4.print("I: Endpoint ");
+    Serial4.print(ep_num);
+    Serial4.println(" configured successfully");
+}
+
+// Configure all discovered endpoints
+void USBDeviceProxy::configureAllEndpoints() {
+    Serial4.println("I: Configuring all endpoints...");
+    
+    for (uint8_t i = 0; i < num_endpoints; i++) {
+        if (!endpoints[i].configured) {
+            configureEndpoint(
+                endpoints[i].address,
+                endpoints[i].attributes,
+                endpoints[i].maxPacketSize,
+                endpoints[i].interval
+            );
+            endpoints[i].configured = true;
+            endpoint_ready[i] = true; // Mark as ready to send data
+        }
+    }
+    
+    Serial4.println("I: All endpoints configured");
+}
+
+// Handle CLEAR_FEATURE for endpoints
+void USBDeviceProxy::handleClearFeature() {
+    uint16_t feature = pending_setup.wValue;
+    uint16_t endpoint = pending_setup.wIndex;
+    
+    Serial4.print("I: CLEAR_FEATURE - feature=");
+    Serial4.print(feature);
+    Serial4.print(" endpoint=0x");
+    Serial4.println(endpoint, HEX);
+    
+    if (feature == 0) {  // ENDPOINT_HALT
+        uint8_t ep_num = endpoint & 0x0F;
+        uint8_t ep_dir = (endpoint & 0x80) ? 1 : 0;
+        
+        if (ep_num > 0 && ep_num <= 7) {
+            // Clear any halt/stall condition
+            volatile uint32_t* endptctrl = &USB1_ENDPTCTRL0 + ep_num;
+            uint32_t ctrl = *endptctrl;
+            
+            if (ep_dir) {
+                ctrl &= ~(1 << 16);  // Clear TXS (TX Stall)
+            } else {
+                ctrl &= ~(1 << 0);   // Clear RXS (RX Stall)
+            }
+            
+            *endptctrl = ctrl;
+            
+            // Reset data toggle
+            USB1_ENDPTFLUSH = ep_dir ? (1 << (ep_num + 16)) : (1 << ep_num);
+            while (USB1_ENDPTFLUSH & (ep_dir ? (1 << (ep_num + 16)) : (1 << ep_num)));
+            
+            Serial4.println("I: Endpoint halt cleared");
+        }
+    }
+    
+    // Send ZLP ACK
+    receiveData(NULL, 0);
+}
+
+// Send data on a configured endpoint
+void USBDeviceProxy::sendDataOnEndpoint(uint8_t ep_num, const uint8_t* data, uint32_t length) {
+    if (ep_num == 0 || ep_num > 7) return;
+    
+    // Find the endpoint info
+    int ep_idx = -1;
+    for (int i = 0; i < num_endpoints; i++) {
+        if ((endpoints[i].address & 0x0F) == ep_num && 
+            (endpoints[i].address & 0x80)) {  // IN endpoint
+            ep_idx = i;
+            break;
+        }
+    }
+    
+    if (ep_idx < 0 || !endpoint_ready[ep_idx]) return;
+    
+    // Copy data to endpoint buffer
+    if (length > sizeof(proxy_in_buffers[ep_idx])) {
+        length = sizeof(proxy_in_buffers[ep_idx]);
+    }
+    memcpy(proxy_in_buffers[ep_idx], data, length);
+    
+    // Setup transfer
+    proxy_in_transfers[ep_idx].next = 1;
+    proxy_in_transfers[ep_idx].status = (length << 16) | (1<<7) | (1<<15); // Active + IOC
+    uint32_t addr = (uint32_t)proxy_in_buffers[ep_idx];
+    proxy_in_transfers[ep_idx].pointer0 = addr;
+    proxy_in_transfers[ep_idx].pointer1 = addr + 4096;
+    proxy_in_transfers[ep_idx].pointer2 = addr + 8192;
+    proxy_in_transfers[ep_idx].pointer3 = addr + 12288;
+    proxy_in_transfers[ep_idx].pointer4 = addr + 16384;
+    
+    // Queue transfer
+    proxy_endpoint_queue_head[ep_num * 2 + 1].next = (uint32_t)&proxy_in_transfers[ep_idx];
+    proxy_endpoint_queue_head[ep_num * 2 + 1].status = 0;
+    
+    // Prime endpoint
+    USB1_ENDPTPRIME |= (1 << (ep_num + 16));
+    
+    // Mark as busy until complete
+    endpoint_ready[ep_idx] = false;
+}
+
+// Check if endpoint is ready to send data
+bool USBDeviceProxy::isEndpointReady(uint8_t ep_num) {
+    for (int i = 0; i < num_endpoints; i++) {
+        if ((endpoints[i].address & 0x0F) == ep_num && 
+            (endpoints[i].address & 0x80)) {  // IN endpoint
+            return endpoint_ready[i];
+        }
+    }
+    return false;
 }

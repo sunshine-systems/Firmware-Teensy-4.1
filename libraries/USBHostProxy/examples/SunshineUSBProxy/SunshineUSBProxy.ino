@@ -7,6 +7,7 @@
 #include "SunBoxSyntheticHandleOutput.h"
 #include "CommandsSunBoxDevtoolsInterface.h"
 #include "SunBoxEEPROM.h"
+#include "SunBoxStartup.h"  // Add this include
 #include "USBDeviceProxy.h"  // NEW: Add our custom USB device stack
 
 // =============================================================================
@@ -45,6 +46,20 @@ extern "C" {
 bool systemInitialized = false;
 bool usbDeviceProxyStarted = false;  // Track if device proxy has been started
 
+// Data forwarding buffers
+static uint8_t mouse_buffer[64];
+static uint32_t mouse_data_len = 0;
+static bool mouse_data_available = false;
+
+// Track which endpoints map to which interface
+struct EndpointMapping {
+    uint8_t ep_num;
+    uint8_t interface_num;
+    bool is_mouse;  // true for mouse interface, false for keyboard/other
+};
+static EndpointMapping endpoint_map[8];
+static uint8_t endpoint_map_count = 0;
+
 // =============================================================================
 // Setup
 // =============================================================================
@@ -82,6 +97,9 @@ void setup() {
         }
     }
     
+    // Set up data callback for USB mouse data
+    usbHostDriver.setDataCallback(mouseDataCallback);
+    
     // NOTE: We do NOT start USBDeviceProxy here anymore!
     Serial4.println("S: Waiting for USB mouse before starting device proxy...");
     
@@ -116,6 +134,9 @@ void loop() {
         usbDeviceProxy.begin();
         usbDeviceProxyStarted = true;
         
+        // Build endpoint mapping based on what we know about the device
+        buildEndpointMapping();
+        
         // Give it a moment to initialize
         delay(100);
     }
@@ -124,6 +145,11 @@ void loop() {
     if (usbDeviceProxyStarted) {
         // Poll USB Device proxy - CRITICAL: Must be called as often as possible!
         usbDeviceProxy.poll();
+        
+        // Forward mouse data if available and endpoint is ready
+        if (mouse_data_available && usbDeviceProxy.isConfigured()) {
+            forwardMouseData();
+        }
     }
     
     // Check for commands
@@ -132,8 +158,8 @@ void loop() {
     // Check for USB data
     usbMouseHandler.check();
     
-    // Process output if any data is available
-    if (sunboxCommands.hasData() || usbMouseHandler.hasData()) {
+    // Process output if any data is available from serial commands
+    if (sunboxCommands.hasData()) {
         syntheticOutput.process();
     }
     
@@ -144,6 +170,85 @@ void loop() {
     
     // Update status LED
     updateStatusLED();
+}
+
+// =============================================================================
+// Data Forwarding
+// =============================================================================
+
+// Callback for USB mouse data
+void mouseDataCallback(const uint8_t* data, uint32_t length) {
+    // Store the data for forwarding
+    if (length > 0 && length <= sizeof(mouse_buffer)) {
+        memcpy(mouse_buffer, data, length);
+        mouse_data_len = length;
+        mouse_data_available = true;
+    }
+}
+
+// Build endpoint mapping based on parsed configuration
+void buildEndpointMapping() {
+    endpoint_map_count = 0;
+    
+    // Based on the logs, we know:
+    // Interface 0 = HID Mouse (endpoint 0x81, 8 bytes)
+    // Interface 1 = HID Keyboard (endpoint 0x82, 64 bytes)  
+    // Interface 2 = HID Other (endpoint 0x83, 64 bytes)
+    
+    // For now, hardcode based on what we see in the logs
+    // TODO: Make this dynamic based on interface descriptors
+    endpoint_map[0].ep_num = 1;
+    endpoint_map[0].interface_num = 0;
+    endpoint_map[0].is_mouse = true;
+    
+    endpoint_map[1].ep_num = 2;
+    endpoint_map[1].interface_num = 1;
+    endpoint_map[1].is_mouse = false;
+    
+    endpoint_map[2].ep_num = 3;
+    endpoint_map[2].interface_num = 2;
+    endpoint_map[2].is_mouse = false;
+    
+    endpoint_map_count = 3;
+    
+    Serial4.println("S: Built endpoint mapping:");
+    for (int i = 0; i < endpoint_map_count; i++) {
+        Serial4.print("S:   EP");
+        Serial4.print(endpoint_map[i].ep_num);
+        Serial4.print(" -> Interface ");
+        Serial4.print(endpoint_map[i].interface_num);
+        Serial4.print(" (");
+        Serial4.print(endpoint_map[i].is_mouse ? "Mouse" : "Other");
+        Serial4.println(")");
+    }
+}
+
+// Forward mouse data to the appropriate endpoint
+void forwardMouseData() {
+    if (!mouse_data_available) return;
+    
+    // Find the mouse endpoint
+    for (int i = 0; i < endpoint_map_count; i++) {
+        if (endpoint_map[i].is_mouse) {
+            uint8_t ep_num = endpoint_map[i].ep_num;
+            
+            // Check if endpoint is ready
+            if (usbDeviceProxy.isEndpointReady(ep_num)) {
+                // Send the data
+                usbDeviceProxy.sendDataOnEndpoint(ep_num, mouse_buffer, mouse_data_len);
+                mouse_data_available = false;
+                
+                // Debug output
+                if (SunBoxStartup::isDebugEnabled()) {
+                    Serial4.print("I: Forwarded ");
+                    Serial4.print(mouse_data_len);
+                    Serial4.print(" bytes to EP");
+                    Serial4.println(ep_num);
+                }
+                break;
+            }
+        }
+    }
 }
 
 // =============================================================================

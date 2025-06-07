@@ -601,10 +601,10 @@ void USBHostDriver::resumeDataTransfers() {
     
     data_transfers_paused = false; 
     if (debug_enabled) Serial4.println("I: Data transfers resumed");
-    if (in_pipe && device_ready && !pending_in_transfer) {
-        pending_in_transfer = true;
-        queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
-    }
+    
+    // IMPORTANT: Don't automatically queue a new transfer here
+    // Let the next processInData callback handle it
+    // This prevents issues with transfers being queued at the wrong time
 }
 
 //=============================================================================

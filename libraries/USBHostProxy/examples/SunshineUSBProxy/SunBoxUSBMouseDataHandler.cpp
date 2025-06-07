@@ -16,8 +16,8 @@ SunBoxUSBMouseDataHandler::SunBoxUSBMouseDataHandler(USBHostDriver& hostDriver,
 }
 
 void SunBoxUSBMouseDataHandler::begin() {
-    // Set up callback
-    hostDriver.setDataCallback(dataCallback);
+    // Don't set up callback here - let the main sketch do it
+    // This allows the main sketch to use its own callback for data forwarding
     
     // Initialize HID handler
     hidHandler.begin(&hostDriver);
@@ -83,6 +83,11 @@ void SunBoxUSBMouseDataHandler::dataCallback(const uint8_t* data, uint32_t lengt
                     
                     // Mark data as available only if something changed
                     instance->dataAvailable = true;
+                    
+                    // Print the parsed state for debugging
+                    if (SunBoxStartup::isDebugEnabled()) {
+                        instance->hidHandler.printMouseState(instance->currentMouseState);
+                    }
                 }
             }
         } else {

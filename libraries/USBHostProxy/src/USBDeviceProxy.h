@@ -70,6 +70,10 @@ public:
     // Get polling statistics
     uint32_t getPollCount() const { return poll_count; }
     
+    // Data endpoint methods
+    void sendDataOnEndpoint(uint8_t ep_num, const uint8_t* data, uint32_t length);
+    bool isEndpointReady(uint8_t ep_num);
+    
 private:
     // USB Device states (USB 2.0 spec chapter 9)
     enum DeviceState {
@@ -89,6 +93,15 @@ private:
         CONTROL_DATA_OUT,   // Receiving data from host
         CONTROL_STATUS_IN,  // Sending status to host
         CONTROL_STATUS_OUT  // Receiving status from host
+    };
+    
+    // Endpoint information structure
+    struct EndpointInfo {
+        uint8_t address;        // Endpoint address (with direction bit)
+        uint8_t attributes;     // Transfer type and other attributes
+        uint16_t maxPacketSize; // Maximum packet size
+        uint8_t interval;       // Polling interval
+        bool configured;        // Is this endpoint configured?
     };
     
     // Member variables - order must match constructor initialization order!
@@ -117,6 +130,14 @@ private:
     // Setup packet - not in initialization list
     setup_packet_t pending_setup;
     
+    // Endpoint tracking - not in initialization list
+    static const uint8_t MAX_PROXY_ENDPOINTS = 16;
+    EndpointInfo endpoints[MAX_PROXY_ENDPOINTS];
+    uint8_t num_endpoints;
+    
+    // Endpoint ready states (for data forwarding)
+    bool endpoint_ready[MAX_PROXY_ENDPOINTS];
+    
     // Initialization functions
     bool initializePHY();
     bool initializeController();
@@ -125,6 +146,7 @@ private:
     
     // Polling functions
     void pollControlEndpoint();
+    void pollDataEndpoints();
     void handleUSBInterrupt();
     void handleUSBReset();
     void handlePortChange();
@@ -136,6 +158,12 @@ private:
     void sendData(const uint8_t* data, uint32_t length);
     void sendZLP();
     void receiveData(uint8_t* buffer, uint32_t length);
+    
+    // Endpoint configuration
+    void parseConfigurationDescriptor();
+    void configureEndpoint(uint8_t addr, uint8_t type, uint16_t maxPacket, uint8_t interval);
+    void configureAllEndpoints();
+    void handleClearFeature();
     
     // Transfer management (following usb.c pattern)
     void schedule_transfer(endpoint_t *endpoint, uint32_t mask, transfer_t *transfer);
