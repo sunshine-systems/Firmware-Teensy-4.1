@@ -9,12 +9,6 @@
 #include "SunBoxEEPROM.h"
 #include "USBDeviceProxy.h"  // NEW: Add our custom USB device stack
 
-// Remove the USB device functions - we don't need Teensy's stack anymore
-// extern "C" {
-//     #include "usb_dev.h"
-//     void usb_init(void);
-// }
-
 // =============================================================================
 // Configuration
 // =============================================================================
@@ -49,6 +43,7 @@ extern "C" {
 
 // State tracking
 bool systemInitialized = false;
+bool usbDeviceProxyStarted = false;  // Track if device proxy has been started
 
 // =============================================================================
 // Setup
@@ -87,9 +82,8 @@ void setup() {
         }
     }
     
-    // Initialize USB Device Proxy - NEW: This replaces Teensy's usb_init()
-    Serial4.println("S: Initializing USB Device Proxy...");
-    usbDeviceProxy.begin();
+    // NOTE: We do NOT start USBDeviceProxy here anymore!
+    Serial4.println("S: Waiting for USB mouse before starting device proxy...");
     
     // Start USB Host
     Serial4.println("S: Starting USB Host...");
@@ -116,8 +110,21 @@ void loop() {
     // Process USB Host tasks
     myusb.Task();
     
-    // Poll USB Device proxy - CRITICAL: Must be called as often as possible!
-    usbDeviceProxy.poll();
+    // Check if we need to start USB Device Proxy
+    if (!usbDeviceProxyStarted && usbMouseHandler.isReady()) {
+        Serial4.println("\nS: Mouse is ready, starting USB Device Proxy now!");
+        usbDeviceProxy.begin();
+        usbDeviceProxyStarted = true;
+        
+        // Give it a moment to initialize
+        delay(100);
+    }
+    
+    // Only poll USB Device proxy if it's been started
+    if (usbDeviceProxyStarted) {
+        // Poll USB Device proxy - CRITICAL: Must be called as often as possible!
+        usbDeviceProxy.poll();
+    }
     
     // Check for commands
     sunboxCommands.check();
@@ -131,7 +138,9 @@ void loop() {
     }
     
     // Update status based on USB device proxy state
-    updateUSBDeviceStatus();
+    if (usbDeviceProxyStarted) {
+        updateUSBDeviceStatus();
+    }
     
     // Update status LED
     updateStatusLED();
@@ -152,7 +161,7 @@ void printBanner() {
     Serial4.println("I:   - Sunshine Legacy Protocol");
     Serial4.println("I:   - KMBox B+ Protocol");
     Serial4.println("I:   - Intelligent Command Routing");
-    Serial4.println("I:   - Custom USB Device Stack (Polling)");  // NEW
+    Serial4.println("I:   - Custom USB Device Stack (Polling)");
     Serial4.println("I: =======================================\n");
 }
 
@@ -196,7 +205,7 @@ void updateStatusLED() {
             digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
             lastBlink = now;
         }
-    } else if (!usbDeviceProxy.isConnected()) {
+    } else if (!usbDeviceProxyStarted || !usbDeviceProxy.isConnected()) {
         // Fast blink - mouse connected but PC not detecting us
         if (now - lastBlink >= 250) {
             digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));

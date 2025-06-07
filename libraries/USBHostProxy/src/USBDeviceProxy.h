@@ -3,9 +3,15 @@
 #define _USB_DEVICE_PROXY_H_
 
 #include <Arduino.h>
+#include "usb_dev.h"   // Include this to get the structure definitions
 
-// Endpoint Queue Head structure (from i.MX RT1062 manual)
-typedef struct {
+// Define NUM_ENDPOINTS if not already defined
+#ifndef NUM_ENDPOINTS
+#define NUM_ENDPOINTS 7
+#endif
+
+// Define endpoint structure (from usb.c) since it's not in usb_dev.h
+typedef struct endpoint_struct {
     uint32_t config;
     uint32_t current;
     uint32_t next;
@@ -18,7 +24,20 @@ typedef struct {
     uint32_t reserved;
     uint32_t setup0;
     uint32_t setup1;
-} proxy_endpoint_queue_head_t;
+    transfer_t *first_transfer;
+    transfer_t *last_transfer;
+    void (*callback_function)(transfer_t *completed_transfer);
+    uint32_t unused1;
+} endpoint_t;
+
+// Setup packet structure
+typedef struct {
+    uint8_t bmRequestType;
+    uint8_t bRequest;
+    uint16_t wValue;
+    uint16_t wIndex;
+    uint16_t wLength;
+} setup_packet_t;
 
 class USBDeviceProxy {
 public:
@@ -62,6 +81,17 @@ private:
         STATE_CONFIGURED    // Configured and ready
     };
     
+    // Control transfer stages
+    enum ControlStage {
+        CONTROL_IDLE,       // No control transfer active
+        CONTROL_SETUP,      // Processing SETUP packet
+        CONTROL_DATA_IN,    // Sending data to host
+        CONTROL_DATA_OUT,   // Receiving data from host
+        CONTROL_STATUS_IN,  // Sending status to host
+        CONTROL_STATUS_OUT  // Receiving status from host
+    };
+    
+    // Member variables - order must match constructor initialization order!
     // Current state
     DeviceState device_state;
     uint8_t device_address;
@@ -72,9 +102,20 @@ private:
     bool controller_started;
     bool setup_received;
     
+    // Control transfer state
+    ControlStage control_stage;
+    uint16_t setup_data_len;
+    
     // Polling statistics
     uint32_t last_poll_time;
     uint32_t poll_count;
+    
+    // Notification masks - renamed to avoid conflicts
+    uint32_t endpoint0_notify_mask;   // Note: not using proxy_ prefix here as it's a member variable
+    uint32_t endpointN_notify_mask;
+    
+    // Setup packet - not in initialization list
+    setup_packet_t pending_setup;
     
     // Initialization functions
     bool initializePHY();
@@ -88,6 +129,16 @@ private:
     void handleUSBReset();
     void handlePortChange();
     void handleSetupPacket(uint32_t setup0, uint32_t setup1);
+    void handleSetAddress();
+    
+    // Control transfer handling
+    void processControlTransfer();
+    void sendData(const uint8_t* data, uint32_t length);
+    void sendZLP();
+    void receiveData(uint8_t* buffer, uint32_t length);
+    
+    // Transfer management (following usb.c pattern)
+    void schedule_transfer(endpoint_t *endpoint, uint32_t mask, transfer_t *transfer);
 };
 
 #endif // _USB_DEVICE_PROXY_H_
