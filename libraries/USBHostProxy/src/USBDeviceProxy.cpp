@@ -1,6 +1,7 @@
 // USBDeviceProxy.cpp - USB Device Stack for Teensy 4.1 (Polling-based)
 #include "USBDeviceProxy.h"
 #include "USBHostDriver.h"
+#include "SunBoxStartup.h"   // For debug state checking
 #include "imxrt.h"     // For i.MX RT1062 definitions
 #include "core_pins.h" // For CCM and other peripheral definitions
 #include <Arduino.h>
@@ -247,6 +248,8 @@ void USBDeviceProxy::pollControlEndpoint() {
 
 // Poll data endpoints for IN token from host
 void USBDeviceProxy::pollDataEndpoints() {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     // Check for any data endpoint completions
     uint32_t completestatus = USB1_ENDPTCOMPLETE;
     uint32_t data_ep_mask = 0xFFFEFFFE;  // All endpoints except EP0 (clear bits 0 and 16)
@@ -256,15 +259,17 @@ void USBDeviceProxy::pollDataEndpoints() {
         // Clear only the data endpoint flags we're processing
         USB1_ENDPTCOMPLETE = data_completions;
         
-        // Debug log for data endpoint completions
-        static uint32_t total_completions = 0;
-        total_completions++;
-        if ((total_completions % 100) == 1) {
-            Serial4.print("D: Data EP complete 0x");
-            Serial4.print(data_completions, HEX);
-            Serial4.print(" (#");
-            Serial4.print(total_completions);
-            Serial4.println(")");
+        // Debug log for data endpoint completions - ONLY IF DEBUG ENABLED
+        if (debug_enabled) {
+            static uint32_t total_completions = 0;
+            total_completions++;
+            if ((total_completions % 100) == 1) {
+                Serial4.print("D: Data EP complete 0x");
+                Serial4.print(data_completions, HEX);
+                Serial4.print(" (#");
+                Serial4.print(total_completions);
+                Serial4.println(")");
+            }
         }
     }
     
@@ -283,15 +288,17 @@ void USBDeviceProxy::pollDataEndpoints() {
             // The host has consumed our data, we can send more
             endpoint_ready[i] = true;
             
-            // Debug log for specific endpoint
-            static uint32_t ep_completions[8] = {0};
-            ep_completions[ep_num]++;
-            if ((ep_completions[ep_num] % 100) == 1) {
-                Serial4.print("D: EP");
-                Serial4.print(ep_num);
-                Serial4.print(" ready again (#");
-                Serial4.print(ep_completions[ep_num]);
-                Serial4.println(")");
+            // Debug log for specific endpoint - ONLY IF DEBUG ENABLED
+            if (debug_enabled) {
+                static uint32_t ep_completions[8] = {0};
+                ep_completions[ep_num]++;
+                if ((ep_completions[ep_num] % 100) == 1) {
+                    Serial4.print("D: EP");
+                    Serial4.print(ep_num);
+                    Serial4.print(" ready again (#");
+                    Serial4.print(ep_completions[ep_num]);
+                    Serial4.println(")");
+                }
             }
         }
     }

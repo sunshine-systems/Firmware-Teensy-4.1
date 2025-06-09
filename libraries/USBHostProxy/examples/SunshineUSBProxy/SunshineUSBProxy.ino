@@ -172,23 +172,27 @@ void loop() {
 
 // Callback for USB mouse data
 void mouseDataCallback(const uint8_t* data, uint32_t length) {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     // Only process if device proxy is configured
     if (!usbDeviceProxyStarted || !usbDeviceProxy.isConfigured()) {
         return;
     }
     
-    // DEBUG: Log when mouse data is received
-    static uint32_t packet_count = 0;
-    packet_count++;
-    
-    // Reduce debug spam - only log every 100th packet
-    if ((packet_count % 100) == 1) {
-        Serial4.print("D: Mouse packet #");
-        Serial4.print(packet_count);
-        Serial4.print(" len=");
-        Serial4.print(length);
-        Serial4.print(" proxy_configured=");
-        Serial4.println(usbDeviceProxy.isConfigured() ? "true" : "false");
+    // DEBUG: Log when mouse data is received - ONLY IF DEBUG ENABLED
+    if (debug_enabled) {
+        static uint32_t packet_count = 0;
+        packet_count++;
+        
+        // Reduce debug spam - only log every 100th packet
+        if ((packet_count % 100) == 1) {
+            Serial4.print("D: Mouse packet #");
+            Serial4.print(packet_count);
+            Serial4.print(" len=");
+            Serial4.print(length);
+            Serial4.print(" proxy_configured=");
+            Serial4.println(usbDeviceProxy.isConfigured() ? "true" : "false");
+        }
     }
     
     // Forward data immediately if we can
@@ -203,9 +207,13 @@ void mouseDataCallback(const uint8_t* data, uint32_t length) {
                     // Send immediately
                     usbDeviceProxy.sendDataOnEndpoint(ep_num, data, length);
                     
-                    if ((packet_count % 100) == 1) {
-                        Serial4.print("D: Forwarded immediately to EP");
-                        Serial4.println(ep_num);
+                    if (debug_enabled) {
+                        static uint32_t immediate_count = 0;
+                        immediate_count++;
+                        if ((immediate_count % 100) == 1) {
+                            Serial4.print("D: Forwarded immediately to EP");
+                            Serial4.println(ep_num);
+                        }
                     }
                 } else {
                     // Buffer for later
@@ -213,8 +221,12 @@ void mouseDataCallback(const uint8_t* data, uint32_t length) {
                     mouse_data_len = length;
                     mouse_data_available = true;
                     
-                    if ((packet_count % 100) == 1) {
-                        Serial4.println("D: Endpoint busy, buffered data");
+                    if (debug_enabled) {
+                        static uint32_t buffer_count = 0;
+                        buffer_count++;
+                        if ((buffer_count % 100) == 1) {
+                            Serial4.println("D: Endpoint busy, buffered data");
+                        }
                     }
                 }
                 break;
@@ -262,6 +274,8 @@ void buildEndpointMapping() {
 
 // Forward buffered mouse data to the appropriate endpoint
 void forwardMouseData() {
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    
     if (!mouse_data_available) return;
     
     // Find the mouse endpoint
@@ -275,9 +289,11 @@ void forwardMouseData() {
                 usbDeviceProxy.sendDataOnEndpoint(ep_num, mouse_buffer, mouse_data_len);
                 mouse_data_available = false;
                 
-                Serial4.print("D: Forwarded buffered data to EP");
-                Serial4.print(ep_num);
-                Serial4.println(" (endpoint became ready)");
+                if (debug_enabled) {
+                    Serial4.print("D: Forwarded buffered data to EP");
+                    Serial4.print(ep_num);
+                    Serial4.println(" (endpoint became ready)");
+                }
                 break;
             }
         }

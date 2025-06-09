@@ -670,32 +670,34 @@ void USBHostDriver::processInData(const Transfer_t *transfer) {
         }
     }
     
-    // DEBUG: Log transfer state when mouse data is received
+    // DEBUG: Log transfer state when mouse data is received - ONLY IF DEBUG ENABLED
     static uint32_t data_packet_count = 0;
     data_packet_count++;
     
-    // Only log every 100 packets to reduce spam
-    if ((data_packet_count % 100) == 1) {
-        Serial4.print("D: Mouse packet #");
-        Serial4.print(data_packet_count);
-        Serial4.print(" len=");
-        Serial4.print(actual_len);
-        Serial4.print(" available=");
-        Serial4.print(new_data_available ? "true" : "false");
-        Serial4.print(" proxy_configured=");
-        Serial4.println("true");  // We'll update this when proxy is integrated
-    }
-    
-    // Always log the detailed state for the first few packets
-    if (data_packet_count <= 5) {
-        Serial4.print("D: processInData #");
-        Serial4.print(data_packet_count);
-        Serial4.print(" paused=");
-        Serial4.print(data_transfers_paused ? "true" : "false");
-        Serial4.print(" ready=");
-        Serial4.print(device_ready ? "true" : "false");
-        Serial4.print(" pipe=");
-        Serial4.println(in_pipe ? "valid" : "null");
+    if (debug_enabled) {
+        // Only log every 100 packets to reduce spam
+        if ((data_packet_count % 100) == 1) {
+            Serial4.print("D: Mouse packet #");
+            Serial4.print(data_packet_count);
+            Serial4.print(" len=");
+            Serial4.print(actual_len);
+            Serial4.print(" available=");
+            Serial4.print(new_data_available ? "true" : "false");
+            Serial4.print(" proxy_configured=");
+            Serial4.println("true");  // We'll update this when proxy is integrated
+        }
+        
+        // Always log the detailed state for the first few packets
+        if (data_packet_count <= 5) {
+            Serial4.print("D: processInData #");
+            Serial4.print(data_packet_count);
+            Serial4.print(" paused=");
+            Serial4.print(data_transfers_paused ? "true" : "false");
+            Serial4.print(" ready=");
+            Serial4.print(device_ready ? "true" : "false");
+            Serial4.print(" pipe=");
+            Serial4.println(in_pipe ? "valid" : "null");
+        }
     }
     
     // IMPORTANT: Queue next transfer ONLY if not paused
@@ -703,12 +705,12 @@ void USBHostDriver::processInData(const Transfer_t *transfer) {
         pending_in_transfer = true;
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
         
-        if (data_packet_count <= 5) {
+        if (debug_enabled && data_packet_count <= 5) {
             Serial4.println("D: Queued next transfer");
         }
-    } else if (data_transfers_paused) {
+    } else if (data_transfers_paused && debug_enabled) {
         Serial4.println("D: Not queuing - transfers paused!");
-    } else {
+    } else if (debug_enabled) {
         Serial4.print("D: Not queuing - pipe=");
         Serial4.print(in_pipe ? "valid" : "null");
         Serial4.print(" ready=");
