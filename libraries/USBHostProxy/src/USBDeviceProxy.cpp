@@ -1,6 +1,6 @@
 // USBDeviceProxy.cpp - USB Device Stack for Teensy 4.1 (Polling-based)
 #include "USBDeviceProxy.h"
-#include "usb_host_wrapper.h"
+#include "USBHostDriver.h"
 #include "imxrt.h"     // For i.MX RT1062 definitions
 #include "core_pins.h" // For CCM and other peripheral definitions
 #include <Arduino.h>
@@ -50,7 +50,8 @@ USBDeviceProxy::USBDeviceProxy() :
     poll_count(0),
     endpoint0_notify_mask(0),
     endpointN_notify_mask(0),
-    num_endpoints(0) {
+    num_endpoints(0),
+    hostDriver(nullptr) {
     
     memset(&pending_setup, 0, sizeof(pending_setup));
     memset(endpoints, 0, sizeof(endpoints));
@@ -246,22 +247,52 @@ void USBDeviceProxy::pollControlEndpoint() {
 
 // Poll data endpoints for IN token from host
 void USBDeviceProxy::pollDataEndpoints() {
-    // For each configured endpoint, check if we need to send data
+    // Check for any data endpoint completions
+    uint32_t completestatus = USB1_ENDPTCOMPLETE;
+    uint32_t data_ep_mask = 0xFFFEFFFE;  // All endpoints except EP0 (clear bits 0 and 16)
+    uint32_t data_completions = completestatus & data_ep_mask;
+    
+    if (data_completions) {
+        // Clear only the data endpoint flags we're processing
+        USB1_ENDPTCOMPLETE = data_completions;
+        
+        // Debug log for data endpoint completions
+        static uint32_t total_completions = 0;
+        total_completions++;
+        if ((total_completions % 100) == 1) {
+            Serial4.print("D: Data EP complete 0x");
+            Serial4.print(data_completions, HEX);
+            Serial4.print(" (#");
+            Serial4.print(total_completions);
+            Serial4.println(")");
+        }
+    }
+    
+    // For each configured endpoint, check if it completed
     for (uint8_t i = 0; i < num_endpoints; i++) {
-        if (!endpoints[i].configured || !endpoint_ready[i]) continue;
+        if (!endpoints[i].configured) continue;
         
         uint8_t ep_num = endpoints[i].address & 0x0F;
         uint8_t ep_dir = (endpoints[i].address & 0x80) ? 1 : 0;
         
         if (ep_dir == 0) continue; // Only handle IN endpoints for now
         
-        // Check if this endpoint has a completed transfer
+        // Check if this endpoint completed
         uint32_t mask = 1 << (ep_num + 16); // IN endpoint mask
-        if (USB1_ENDPTCOMPLETE & mask) {
-            USB1_ENDPTCOMPLETE = mask; // Clear the complete flag
-            
+        if (data_completions & mask) {
             // The host has consumed our data, we can send more
             endpoint_ready[i] = true;
+            
+            // Debug log for specific endpoint
+            static uint32_t ep_completions[8] = {0};
+            ep_completions[ep_num]++;
+            if ((ep_completions[ep_num] % 100) == 1) {
+                Serial4.print("D: EP");
+                Serial4.print(ep_num);
+                Serial4.print(" ready again (#");
+                Serial4.print(ep_completions[ep_num]);
+                Serial4.println(")");
+            }
         }
     }
 }
@@ -271,16 +302,20 @@ void USBDeviceProxy::handleUSBInterrupt() {
     // Check endpoint complete status
     uint32_t completestatus = USB1_ENDPTCOMPLETE;
     if (completestatus) {
-        USB1_ENDPTCOMPLETE = completestatus;
+        // Only clear endpoint 0 flags here - let pollDataEndpoints handle data endpoints
+        uint32_t ep0_mask = 0x00010001;  // Bits 0 and 16 for EP0 OUT and IN
+        uint32_t ep0_status = completestatus & ep0_mask;
         
-        // Debug output
-        if (completestatus != 0) {
-            Serial4.print("I: ENDPTCOMPLETE = 0x");
-            Serial4.println(completestatus, HEX);
+        if (ep0_status) {
+            USB1_ENDPTCOMPLETE = ep0_status;  // Only clear EP0 flags
+            
+            // Debug output for EP0
+            Serial4.print("I: ENDPTCOMPLETE EP0 = 0x");
+            Serial4.println(ep0_status, HEX);
         }
         
         // Handle endpoint 0 completions
-        if (completestatus & proxy_endpoint0_notify_mask) {
+        if (ep0_status & proxy_endpoint0_notify_mask) {
             proxy_endpoint0_notify_mask = 0;
             endpoint0_notify_mask = 0;
             // Handle completion based on control stage
@@ -293,15 +328,10 @@ void USBDeviceProxy::handleUSBInterrupt() {
             else if (control_stage == CONTROL_STATUS_OUT) {
                 Serial4.println("I: Control transfer complete!");
                 control_stage = CONTROL_IDLE;
-                usb_host_resume_transfers();
             }
         }
         
-        // Handle other endpoint completions if needed
-        completestatus &= proxy_endpointN_notify_mask;
-        if (completestatus) {
-            // Process other endpoints here if needed
-        }
+        // Don't process other endpoints here - let pollDataEndpoints handle them
     }
 }
 
@@ -337,10 +367,9 @@ void USBDeviceProxy::handleUSBReset() {
     // Reset endpoint ready states
     memset(endpoint_ready, 0, sizeof(endpoint_ready));
     
-    // If we were in the middle of a control transfer, resume host transfers
+    // If we were in the middle of a control transfer, clean up
     if (control_stage != CONTROL_IDLE) {
         control_stage = CONTROL_IDLE;
-        usb_host_resume_transfers();
     }
 }
 
@@ -370,20 +399,16 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
     Serial4.println(pending_setup.wLength);
     
     // Check if we have a connected device to proxy
-    if (!usb_host_is_ready()) {
+    if (!hostDriver || !hostDriver->isReady()) {
         Serial4.println("E: No USB device connected to proxy!");
         USB1_ENDPTCTRL0 = 0x00010001;  // STALL both directions
         return;
     }
     
-    // Pause USB host data transfers during control transfer
-    usb_host_pause_transfers();
-    
     // Handle specific requests that need special treatment
     if (pending_setup.bmRequestType == 0x00 && pending_setup.bRequest == 0x05) {
         // SET_ADDRESS - must handle locally with proper timing
         handleSetAddress();
-        usb_host_resume_transfers();
         return;
     }
     
@@ -393,15 +418,17 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
         (pending_setup.wIndex & 0x0F) != 0) { // Not endpoint 0
         Serial4.println("I: Handling CLEAR_FEATURE locally for endpoint");
         handleClearFeature();
-        usb_host_resume_transfers();
         return;
     }
     
     // Handle SET_CONFIGURATION specially - need to configure endpoints
     if (pending_setup.bmRequestType == 0x00 && pending_setup.bRequest == 0x09) {
+        // Pause data transfers ONLY during SET_CONFIGURATION
+        hostDriver->pauseDataTransfers();
+        
         // Forward to device first
         uint16_t dummy_len;
-        bool success = usb_host_control_transfer(
+        bool success = hostDriver->controlTransfer(
             pending_setup.bmRequestType,
             pending_setup.bRequest,
             pending_setup.wValue,
@@ -427,12 +454,13 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
             // ACK after endpoint configuration is complete
             receiveData(NULL, 0);
             control_stage = CONTROL_IDLE;
-            usb_host_resume_transfers();
         } else {
             USB1_ENDPTCTRL0 = 0x00010001;  // STALL
             control_stage = CONTROL_IDLE;
-            usb_host_resume_transfers();
         }
+        
+        // Always resume data transfers after SET_CONFIGURATION
+        hostDriver->resumeDataTransfers();
         return;
     }
     
@@ -454,7 +482,7 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
         }
     }
     
-    // For all other requests, forward to device
+    // For all other requests, forward to device WITHOUT pausing
     control_stage = CONTROL_SETUP;
     processControlTransfer();
 }
@@ -495,7 +523,7 @@ void USBDeviceProxy::processControlTransfer() {
             delay(10); // Small delay for string descriptors
         }
         
-        success = usb_host_control_transfer(
+        success = hostDriver->controlTransfer(
             pending_setup.bmRequestType,
             pending_setup.bRequest,
             pending_setup.wValue,
@@ -538,13 +566,11 @@ void USBDeviceProxy::processControlTransfer() {
             // No data, just send ZLP
             receiveData(NULL, 0);
             control_stage = CONTROL_IDLE;
-            usb_host_resume_transfers();
         } else {
             // Failed - STALL
             Serial4.println("E: Control transfer to device failed!");
             USB1_ENDPTCTRL0 = 0x00010001;
             control_stage = CONTROL_IDLE;
-            usb_host_resume_transfers();
         }
     } else {
         // Host-to-device (OUT) transfer
@@ -553,10 +579,9 @@ void USBDeviceProxy::processControlTransfer() {
             Serial4.println("E: OUT transfers not implemented yet");
             USB1_ENDPTCTRL0 = 0x00010001;
             control_stage = CONTROL_IDLE;
-            usb_host_resume_transfers();
         } else {
             // No data phase, forward immediately
-            success = usb_host_control_transfer(
+            success = hostDriver->controlTransfer(
                 pending_setup.bmRequestType,
                 pending_setup.bRequest,
                 pending_setup.wValue,
@@ -570,11 +595,9 @@ void USBDeviceProxy::processControlTransfer() {
             if (success) {
                 receiveData(NULL, 0);  // ACK
                 control_stage = CONTROL_IDLE;
-                usb_host_resume_transfers();
             } else {
                 USB1_ENDPTCTRL0 = 0x00010001;  // STALL
                 control_stage = CONTROL_IDLE;
-                usb_host_resume_transfers();
             }
         }
     }
@@ -721,7 +744,7 @@ void USBDeviceProxy::parseConfigurationDescriptor() {
     uint8_t config_desc[512];
     
     // Request configuration descriptor
-    bool success = usb_host_control_transfer(
+    bool success = hostDriver->controlTransfer(
         0x80,  // bmRequestType
         0x06,  // GET_DESCRIPTOR
         0x0200,  // Configuration descriptor
@@ -747,7 +770,7 @@ void USBDeviceProxy::parseConfigurationDescriptor() {
     
     // If we didn't get the full descriptor, request it again
     if (config_len < total_len) {
-        success = usb_host_control_transfer(
+        success = hostDriver->controlTransfer(
             0x80,  // bmRequestType
             0x06,  // GET_DESCRIPTOR
             0x0200,  // Configuration descriptor

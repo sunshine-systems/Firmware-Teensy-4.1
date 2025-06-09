@@ -10,6 +10,9 @@
 #define NUM_ENDPOINTS 7
 #endif
 
+// Forward declaration
+class USBHostDriver;
+
 // Define endpoint structure (from usb.c) since it's not in usb_dev.h
 typedef struct endpoint_struct {
     uint32_t config;
@@ -45,6 +48,9 @@ public:
     
     // Initialize USB hardware (no interrupts!)
     void begin();
+    
+    // Set the USB Host Driver reference
+    void setUSBHostDriver(USBHostDriver* driver) { hostDriver = driver; }
     
     // Main polling function - MUST be called frequently from loop()
     // Target: >16kHz for 8kHz devices
@@ -137,6 +143,9 @@ private:
     
     // Endpoint ready states (for data forwarding)
     bool endpoint_ready[MAX_PROXY_ENDPOINTS];
+    
+    // USB Host Driver reference
+    USBHostDriver* hostDriver;
     
     // Initialization functions
     bool initializePHY();

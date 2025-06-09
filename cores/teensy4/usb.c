@@ -12,811 +12,1103 @@
 #include "usb_midi.h"
 #include "usb_audio.h"
 #include "usb_mtp.h"
-#include "core_pins.h"
+#include "core_pins.h" // for delay()
 #include "avr/pgmspace.h"
 #include <string.h>
 #include "debug/printf.h"
 
-// Include our USB Host wrapper (C-compatible interface)
-#include "../../libraries/USBHostProxy/src/usb_host_wrapper.h"
+//#define LOG_SIZE  20
+//uint32_t transfer_log_head=0;
+//uint32_t transfer_log_count=0;
+//uint32_t transfer_log[LOG_SIZE];
+
+// device mode, page 3155
 
 #if defined(NUM_ENDPOINTS)
 
-// Type definitions need to come first
 typedef struct endpoint_struct endpoint_t;
 
 struct endpoint_struct {
-    uint32_t config;
-    uint32_t current;
-    uint32_t next;
-    uint32_t status;
-    uint32_t pointer0;
-    uint32_t pointer1;
-    uint32_t pointer2;
-    uint32_t pointer3;
-    uint32_t pointer4;
-    uint32_t reserved;
-    uint32_t setup0;
-    uint32_t setup1;
-    transfer_t *first_transfer;
-    transfer_t *last_transfer;
-    void (*callback_function)(transfer_t *completed_transfer);
-    uint32_t unused1;
+	uint32_t config;
+	uint32_t current;
+	uint32_t next;
+	uint32_t status;
+	uint32_t pointer0;
+	uint32_t pointer1;
+	uint32_t pointer2;
+	uint32_t pointer3;
+	uint32_t pointer4;
+	uint32_t reserved;
+	uint32_t setup0;
+	uint32_t setup1;
+	transfer_t *first_transfer;
+	transfer_t *last_transfer;
+	void (*callback_function)(transfer_t *completed_transfer);
+	uint32_t unused1;
 };
 
-typedef union {
-    struct {
-        union {
-            struct {
-                uint8_t bmRequestType;
-                uint8_t bRequest;
-            };
-            uint16_t wRequestAndType;
-        };
-        uint16_t wValue;
-        uint16_t wIndex;
-        uint16_t wLength;
-    };
-    struct {
-        uint32_t word1;
-        uint32_t word2;
-    };
-    uint64_t bothwords;
-} setup_t;
+/*struct transfer_struct {
+	uint32_t next;
+	uint32_t status;
+	uint32_t pointer0;
+	uint32_t pointer1;
+	uint32_t pointer2;
+	uint32_t pointer3;
+	uint32_t pointer4;
+	uint32_t callback_param;
+};*/
 
-// Proxy state
-static volatile bool proxy_device_connected = false;
-static volatile bool proxy_enumeration_complete = false;
-static uint8_t proxy_config_value = 1;
-
-// Descriptor cache
-static uint8_t device_descriptor_cache[18];
-static uint8_t config_descriptor_cache[512];  // Larger buffer for complex devices
-static uint16_t config_descriptor_length = 0;
-static uint8_t string_descriptor_cache[256];
-
-// Endpoint mapping for data transfers
-typedef struct {
-    uint8_t ep_num;
-    uint8_t ep_dir;  // 0=OUT, 1=IN
-    uint16_t max_packet_size;
-    uint8_t ep_type;  // 0=control, 1=iso, 2=bulk, 3=interrupt
-    uint8_t interval;
-    transfer_t *active_transfers[2];  // Double buffering
-    uint8_t active_buffer;
-    uint8_t buffer[2][512] __attribute__ ((aligned(32)));  // Double buffers
-    volatile bool busy[2];
-} endpoint_proxy_t;
-
-static endpoint_proxy_t proxy_endpoints[8];  // Support up to 8 endpoints
-static uint8_t num_proxy_endpoints = 0;
-
-// Control transfer state
-static volatile bool control_proxy_busy = false;
-static uint8_t control_proxy_buffer[512] __attribute__ ((aligned(32)));
-static setup_t pending_setup;
-
-// Standard USB variables
 endpoint_t endpoint_queue_head[(NUM_ENDPOINTS+1)*2] __attribute__ ((used, aligned(4096), section(".endpoint_queue") ));
+
 transfer_t endpoint0_transfer_data __attribute__ ((used, aligned(32)));
 transfer_t endpoint0_transfer_ack  __attribute__ ((used, aligned(32)));
 
+
+typedef union {
+ struct {
+  union {
+   struct {
+        uint8_t bmRequestType;
+        uint8_t bRequest;
+   };
+        uint16_t wRequestAndType;
+  };
+        uint16_t wValue;
+        uint16_t wIndex;
+        uint16_t wLength;
+ };
+ struct {
+        uint32_t word1;
+        uint32_t word2;
+ };
+	uint64_t bothwords;
+} setup_t;
+
+static setup_t endpoint0_setupdata;
 static uint32_t endpoint0_notify_mask=0;
 static uint32_t endpointN_notify_mask=0;
-volatile uint8_t usb_configuration = 0;
-volatile uint8_t usb_high_speed = 0;
+//static int reset_count=0;
+volatile uint8_t usb_configuration = 0; // non-zero when USB host as configured device
+volatile uint8_t usb_high_speed = 0;    // non-zero if running at 480 Mbit/sec speed
 static uint8_t endpoint0_buffer[8];
-static uint8_t reply_buffer[8];
-static uint8_t usb_reboot_timer = 0;
 static uint8_t sof_usage = 0;
+static uint8_t usb_reboot_timer = 0;
 
-extern uint8_t usb_descriptor_buffer[];
+extern uint8_t usb_descriptor_buffer[]; // defined in usb_desc.c
 extern const uint8_t usb_config_descriptor_480[];
 extern const uint8_t usb_config_descriptor_12[];
 
 void (*usb_timer0_callback)(void) = NULL;
 void (*usb_timer1_callback)(void) = NULL;
 
-// Forward declarations
 void usb_isr(void);
 static void endpoint0_setup(uint64_t setupdata);
 static void endpoint0_transmit(const void *data, uint32_t len, int notify);
 static void endpoint0_receive(void *data, uint32_t len, int notify);
 static void endpoint0_complete(void);
+
+
 static void run_callbacks(endpoint_t *ep);
-static void proxy_in_complete(transfer_t *transfer);
-static void proxy_out_complete(transfer_t *transfer);
-static bool forward_control_request(setup_t *setup, uint8_t *data, uint16_t *len);
-static void check_device_connection(void);
-static void schedule_transfer(endpoint_t *endpoint, uint32_t epmask, transfer_t *transfer);
+
 
 FLASHMEM void usb_init(void)
 {
-    // Wait for USB Host Driver to be ready
-    printf("USB Proxy: Waiting for host driver...\n");
-    uint32_t timeout = 5000;  // 5 second timeout
-    while (!usb_host_is_ready() && timeout > 0) {
-        delay(10);
-        timeout -= 10;
-    }
-    
-    if (usb_host_is_ready()) {
-        proxy_device_connected = true;
-        printf("USB Proxy: Device connected, starting enumeration\n");
-        
-        // Pre-fetch device descriptor
-        setup_t get_device_desc;
-        get_device_desc.bmRequestType = 0x80;
-        get_device_desc.bRequest = 0x06;
-        get_device_desc.wValue = 0x0100;
-        get_device_desc.wIndex = 0;
-        get_device_desc.wLength = 18;
-        uint16_t actual_len = 0;
-        if (usb_host_control_transfer(
-            get_device_desc.bmRequestType,
-            get_device_desc.bRequest,
-            get_device_desc.wValue,
-            get_device_desc.wIndex,
-            get_device_desc.wLength,
-            device_descriptor_cache,
-            &actual_len,
-            1000)) {
-            printf("USB Proxy: Got device descriptor, VID=%04X PID=%04X\n",
-                device_descriptor_cache[8] | (device_descriptor_cache[9] << 8),
-                device_descriptor_cache[10] | (device_descriptor_cache[11] << 8));
-        }
-    } else {
-        printf("USB Proxy: No device connected or timeout\n");
-    }
-    
-    // Standard USB initialization continues...
-    PMU_REG_3P0 = PMU_REG_3P0_OUTPUT_TRG(0x0F) | PMU_REG_3P0_BO_OFFSET(6)
-        | PMU_REG_3P0_ENABLE_LINREG;
+	// TODO: only enable when VBUS detected
+	// TODO: return to low power mode when VBUS removed
+	// TODO: protect PMU access with MPU
+	PMU_REG_3P0 = PMU_REG_3P0_OUTPUT_TRG(0x0F) | PMU_REG_3P0_BO_OFFSET(6)
+		| PMU_REG_3P0_ENABLE_LINREG;
 
-    usb_init_serialnumber();
+	usb_init_serialnumber();
 
-    CCM_CCGR6 |= CCM_CCGR6_USBOH3(CCM_CCGR_ON);
-    
-    USB1_BURSTSIZE = 0x0404;
-    
-    if ((USBPHY1_PWD & (USBPHY_PWD_RXPWDRX | USBPHY_PWD_RXPWDDIFF | USBPHY_PWD_RXPWD1PT1
-      | USBPHY_PWD_RXPWDENV | USBPHY_PWD_TXPWDV2I | USBPHY_PWD_TXPWDIBIAS
-      | USBPHY_PWD_TXPWDFS)) || (USB1_USBMODE & USB_USBMODE_CM_MASK)) {
-        USBPHY1_CTRL_SET = USBPHY_CTRL_SFTRST;
-        USB1_USBCMD |= USB_USBCMD_RST;
-        int count=0;
-        while (USB1_USBCMD & USB_USBCMD_RST) count++;
-        NVIC_CLEAR_PENDING(IRQ_USB1);
-        USBPHY1_CTRL_CLR = USBPHY_CTRL_SFTRST;
-        printf("USB reset took %d loops\n", count);
-        delay(25);
-    }
-    
-    USBPHY1_CTRL_CLR = USBPHY_CTRL_CLKGATE;
-    USBPHY1_PWD = 0;
-    
-    USB1_USBMODE = USB_USBMODE_CM(2) | USB_USBMODE_SLOM;
-    memset(endpoint_queue_head, 0, sizeof(endpoint_queue_head));
-    endpoint_queue_head[0].config = (64 << 16) | (1 << 15);
-    endpoint_queue_head[1].config = (64 << 16);
-    USB1_ENDPOINTLISTADDR = (uint32_t)&endpoint_queue_head;
-    
-    USB1_USBINTR = USB_USBINTR_UE | USB_USBINTR_UEE | 
-        USB_USBINTR_URE | USB_USBINTR_SLE;
-    
-    attachInterruptVector(IRQ_USB1, &usb_isr);
-    NVIC_ENABLE_IRQ(IRQ_USB1);
-    
-    USB1_USBCMD = USB_USBCMD_RS;
+	// assume PLL3 is already running - already done by usb_pll_start() in main.c
+
+	CCM_CCGR6 |= CCM_CCGR6_USBOH3(CCM_CCGR_ON); // turn on clocks to USB peripheral
+	
+	printf("BURSTSIZE=%08lX\n", USB1_BURSTSIZE);
+	//USB1_BURSTSIZE = USB_BURSTSIZE_TXPBURST(4) | USB_BURSTSIZE_RXPBURST(4);
+	USB1_BURSTSIZE = 0x0404;
+	printf("BURSTSIZE=%08lX\n", USB1_BURSTSIZE);
+	printf("USB1_TXFILLTUNING=%08lX\n", USB1_TXFILLTUNING);
+
+	// Before programming this register, the PHY clocks must be enabled in registers
+	// USBPHYx_CTRLn and CCM_ANALOG_USBPHYx_PLL_480_CTRLn.
+
+	//printf("USBPHY1_PWD=%08lX\n", USBPHY1_PWD);
+	//printf("USBPHY1_TX=%08lX\n", USBPHY1_TX);
+	//printf("USBPHY1_RX=%08lX\n", USBPHY1_RX);
+	//printf("USBPHY1_CTRL=%08lX\n", USBPHY1_CTRL);
+	//printf("USB1_USBMODE=%08lX\n", USB1_USBMODE);
+
+	// turn on PLL3, wait for 480 MHz lock?
+	// turn on CCM clock gates?  CCGR6[CG0]
+#if 1
+	if ((USBPHY1_PWD & (USBPHY_PWD_RXPWDRX | USBPHY_PWD_RXPWDDIFF | USBPHY_PWD_RXPWD1PT1
+	  | USBPHY_PWD_RXPWDENV | USBPHY_PWD_TXPWDV2I | USBPHY_PWD_TXPWDIBIAS
+	  | USBPHY_PWD_TXPWDFS)) || (USB1_USBMODE & USB_USBMODE_CM_MASK)) {
+		// USB controller is turned on from previous use
+		// reset needed to turn it off & start from clean slate
+		USBPHY1_CTRL_SET = USBPHY_CTRL_SFTRST; // USBPHY1_CTRL page 3292
+		USB1_USBCMD |= USB_USBCMD_RST; // reset controller
+		int count=0;
+		while (USB1_USBCMD & USB_USBCMD_RST) count++;
+		NVIC_CLEAR_PENDING(IRQ_USB1);
+		USBPHY1_CTRL_CLR = USBPHY_CTRL_SFTRST; // reset PHY
+		//USB1_USBSTS = USB1_USBSTS; // TODO: is this needed?
+		printf("USB reset took %d loops\n", count);
+		//delay(10);
+		//printf("\n");
+		//printf("USBPHY1_PWD=%08lX\n", USBPHY1_PWD);
+		//printf("USBPHY1_TX=%08lX\n", USBPHY1_TX);
+		//printf("USBPHY1_RX=%08lX\n", USBPHY1_RX);
+		//printf("USBPHY1_CTRL=%08lX\n", USBPHY1_CTRL);
+		//printf("USB1_USBMODE=%08lX\n", USB1_USBMODE);
+		delay(25);
+	}
+#endif
+	// Device Controller Initialization, page 2351 (Rev 2, 12/2019)
+	// USBCMD	pg 3216
+	// USBSTS	pg 3220
+	// USBINTR	pg 3224
+	// DEVICEADDR	pg 3227
+	// ENDPTLISTADDR   3229
+	// USBMODE	pg 3244
+	// ENDPTSETUPSTAT  3245
+	// ENDPTPRIME	pg 3246
+	// ENDPTFLUSH	pg 3247
+	// ENDPTSTAT	pg 3247
+	// ENDPTCOMPLETE   3248
+	// ENDPTCTRL0	pg 3249
+
+	USBPHY1_CTRL_CLR = USBPHY_CTRL_CLKGATE;
+	USBPHY1_PWD = 0;
+	//printf("USBPHY1_PWD=%08lX\n", USBPHY1_PWD);
+	//printf("USBPHY1_CTRL=%08lX\n", USBPHY1_CTRL);
+
+	USB1_USBMODE = USB_USBMODE_CM(2) | USB_USBMODE_SLOM;
+	memset(endpoint_queue_head, 0, sizeof(endpoint_queue_head));
+	endpoint_queue_head[0].config = (64 << 16) | (1 << 15);
+	endpoint_queue_head[1].config = (64 << 16);
+	USB1_ENDPOINTLISTADDR = (uint32_t)&endpoint_queue_head;
+	//  Recommended: enable all device interrupts including: USBINT, USBERRINT,
+	// Port Change Detect, USB Reset Received, DCSuspend.
+	USB1_USBINTR = USB_USBINTR_UE | USB_USBINTR_UEE | /* USB_USBINTR_PCE | */
+		USB_USBINTR_URE | USB_USBINTR_SLE;
+	//_VectorsRam[IRQ_USB1+16] = &usb_isr;
+	attachInterruptVector(IRQ_USB1, &usb_isr);
+	NVIC_ENABLE_IRQ(IRQ_USB1);
+	//printf("USB1_ENDPTCTRL0=%08lX\n", USB1_ENDPTCTRL0);
+	//printf("USB1_ENDPTCTRL1=%08lX\n", USB1_ENDPTCTRL1);
+	//printf("USB1_ENDPTCTRL2=%08lX\n", USB1_ENDPTCTRL2);
+	//printf("USB1_ENDPTCTRL3=%08lX\n", USB1_ENDPTCTRL3);
+	USB1_USBCMD = USB_USBCMD_RS;
+	//transfer_log_head = 0;
+	//transfer_log_count = 0;
+	//USB1_PORTSC1 |= USB_PORTSC1_PFSC; // force 12 Mbit/sec
 }
+
 
 FLASHMEM __attribute__((noinline)) void _reboot_Teensyduino_(void)
 {
-    if (!(HW_OCOTP_CFG5 & 0x02)) {
-        asm("bkpt #251"); // run bootloader
-    } else {
-        __disable_irq();
-        USB1_USBCMD = 0;
-        IOMUXC_GPR_GPR16 = 0x00200003;
-        __asm__ volatile("mov sp, %0" : : "r" (0x20201000) : );
-        __asm__ volatile("dsb":::"memory");
-        volatile uint32_t * const p = (uint32_t *)0x20208000;
-        *p = 0xEB120000;
-        ((void (*)(volatile void *))(*(uint32_t *)(*(uint32_t *)0x0020001C + 8)))(p);
-    }
-    __builtin_unreachable();
+	if (!(HW_OCOTP_CFG5 & 0x02)) {
+		asm("bkpt #251"); // run bootloader
+	} else {
+		__disable_irq(); // secure mode NXP ROM reboot
+		USB1_USBCMD = 0;
+		IOMUXC_GPR_GPR16 = 0x00200003;
+		// TODO: wipe all RAM for security
+		__asm__ volatile("mov sp, %0" : : "r" (0x20201000) : );
+		__asm__ volatile("dsb":::"memory");
+		volatile uint32_t * const p = (uint32_t *)0x20208000;
+		*p = 0xEB120000;
+		((void (*)(volatile void *))(*(uint32_t *)(*(uint32_t *)0x0020001C + 8)))(p);
+	}
+	__builtin_unreachable();
 }
+
 
 void usb_isr(void)
 {
-    uint32_t status = USB1_USBSTS;
-    USB1_USBSTS = status;
-    
-    // Check device connection periodically
-    check_device_connection();
-    
-    if (status & USB_USBSTS_UI) {
-        uint32_t setupstatus = USB1_ENDPTSETUPSTAT;
-        while (setupstatus) {
-            USB1_ENDPTSETUPSTAT = setupstatus;
-            setup_t s;
-            do {
-                USB1_USBCMD |= USB_USBCMD_SUTW;
-                s.word1 = endpoint_queue_head[0].setup0;
-                s.word2 = endpoint_queue_head[0].setup1;
-            } while (!(USB1_USBCMD & USB_USBCMD_SUTW));
-            USB1_USBCMD &= ~USB_USBCMD_SUTW;
-            USB1_ENDPTFLUSH = (1<<16) | (1<<0);
-            while (USB1_ENDPTFLUSH & ((1<<16) | (1<<0))) ;
-            endpoint0_notify_mask = 0;
-            endpoint0_setup(s.bothwords);
-            setupstatus = USB1_ENDPTSETUPSTAT;
-        }
-        
-        uint32_t completestatus = USB1_ENDPTCOMPLETE;
-        if (completestatus) {
-            USB1_ENDPTCOMPLETE = completestatus;
-            if (completestatus & endpoint0_notify_mask) {
-                endpoint0_notify_mask = 0;
-                endpoint0_complete();
-            }
-            completestatus &= endpointN_notify_mask;
-            if (completestatus) {
-                uint32_t tx = completestatus >> 16;
-                while (tx) {
-                    int p=__builtin_ctz(tx);
-                    run_callbacks(endpoint_queue_head + p * 2 + 1);
-                    tx &= ~(1<<p);
-                }
-                uint32_t rx = completestatus & 0xffff;
-                while(rx) {
-                    int p=__builtin_ctz(rx);
-                    run_callbacks(endpoint_queue_head + p * 2);
-                    rx &= ~(1<<p);
-                };
-            }
-        }
-    }
-    
-    if (status & USB_USBSTS_URI) {
-        USB1_ENDPTSETUPSTAT = USB1_ENDPTSETUPSTAT;
-        USB1_ENDPTCOMPLETE = USB1_ENDPTCOMPLETE;
-        while (USB1_ENDPTPRIME != 0) ;
-        USB1_ENDPTFLUSH = 0xFFFFFFFF;
-        #if defined(CDC_STATUS_INTERFACE) && defined(CDC_DATA_INTERFACE)
-        usb_serial_reset();
-        #endif
-        endpointN_notify_mask = 0;
-        proxy_enumeration_complete = false;
-    }
-    
-    if (status & USB_USBSTS_TI0) {
-        if (usb_timer0_callback != NULL) usb_timer0_callback();
-    }
-    if (status & USB_USBSTS_TI1) {
-        if (usb_timer1_callback != NULL) usb_timer1_callback();
-    }
-    if (status & USB_USBSTS_PCI) {
-        if (USB1_PORTSC1 & USB_PORTSC1_HSP) {
-            usb_high_speed = 1;
-        } else {
-            usb_high_speed = 0;
-        }
-    }
-    if (status & USB_USBSTS_SLI) {
-        // suspend
-    }
-    if ((USB1_USBINTR & USB_USBINTR_SRE) && (status & USB_USBSTS_SRI)) {
-        if (usb_reboot_timer) {
-            if (--usb_reboot_timer == 0) {
-                usb_stop_sof_interrupts(NUM_INTERFACE);
-                _reboot_Teensyduino_();
-            }
-        }
-        #ifdef MIDI_INTERFACE
-        usb_midi_flush_output();
-        #endif
-        #ifdef MULTITOUCH_INTERFACE
-        usb_touchscreen_update_callback();
-        #endif
-        #ifdef FLIGHTSIM_INTERFACE
-        usb_flightsim_flush_output();
-        #endif
-    }
+	//printf("*");
+
+	//  Port control in device mode is only used for
+	//  status port reset, suspend, and current connect status.
+	uint32_t status = USB1_USBSTS;
+	USB1_USBSTS = status;
+
+	// USB_USBSTS_SLI - set to 1 when enters a suspend state from an active state
+	// USB_USBSTS_SRI - set at start of frame
+	// USB_USBSTS_SRI - set when USB reset detected
+
+	if (status & USB_USBSTS_UI) {
+		//printf("data\n");
+		uint32_t setupstatus = USB1_ENDPTSETUPSTAT;
+		//printf("USB1_ENDPTSETUPSTAT=%X\n", setupstatus);
+		while (setupstatus) {
+			USB1_ENDPTSETUPSTAT = setupstatus;
+			setup_t s;
+			do {
+				USB1_USBCMD |= USB_USBCMD_SUTW;
+				s.word1 = endpoint_queue_head[0].setup0;
+				s.word2 = endpoint_queue_head[0].setup1;
+			} while (!(USB1_USBCMD & USB_USBCMD_SUTW));
+			USB1_USBCMD &= ~USB_USBCMD_SUTW;
+			//printf("setup %08lX %08lX\n", s.word1, s.word2);
+			USB1_ENDPTFLUSH = (1<<16) | (1<<0); // page 3174
+			while (USB1_ENDPTFLUSH & ((1<<16) | (1<<0))) ;
+			endpoint0_notify_mask = 0;
+			endpoint0_setup(s.bothwords);
+			setupstatus = USB1_ENDPTSETUPSTAT; // page 3175
+		}
+		uint32_t completestatus = USB1_ENDPTCOMPLETE;
+		if (completestatus) {
+			USB1_ENDPTCOMPLETE = completestatus;
+			//printf("USB1_ENDPTCOMPLETE=%lX\n", completestatus);
+			if (completestatus & endpoint0_notify_mask) {
+				endpoint0_notify_mask = 0;
+				endpoint0_complete();
+			}
+			completestatus &= endpointN_notify_mask;
+#if 1
+			if (completestatus) {
+
+				// transmit:
+				uint32_t tx = completestatus >> 16;
+				while (tx) {
+					int p=__builtin_ctz(tx);
+					run_callbacks(endpoint_queue_head + p * 2 + 1);
+					tx &= ~(1<<p);
+				}
+
+				// receive:
+				uint32_t rx = completestatus & 0xffff;
+				while(rx) {
+					int p=__builtin_ctz(rx);
+					run_callbacks(endpoint_queue_head + p * 2);
+					rx &= ~(1<<p);
+				};
+			}
+#else
+			if (completestatus) {
+				int i;   // TODO: optimize with __builtin_ctz()
+				for (i=2; i <= NUM_ENDPOINTS; i++) {
+					if (completestatus & (1 << i)) { // receive
+						run_callbacks(endpoint_queue_head + i * 2);
+					}
+					if (completestatus & (1 << (i + 16))) { // transmit
+						run_callbacks(endpoint_queue_head + i * 2 + 1);
+					}
+				}
+			}
+#endif
+
+		}
+	}
+	if (status & USB_USBSTS_URI) { // page 3164
+		USB1_ENDPTSETUPSTAT = USB1_ENDPTSETUPSTAT; // Clear all setup token semaphores
+		USB1_ENDPTCOMPLETE = USB1_ENDPTCOMPLETE; // Clear all the endpoint complete status
+		while (USB1_ENDPTPRIME != 0) ; // Wait for any endpoint priming
+		USB1_ENDPTFLUSH = 0xFFFFFFFF;  // Cancel all endpoint primed status
+		if ((USB1_PORTSC1 & USB_PORTSC1_PR)) {
+			//printf("reset\n");
+		} else {
+			// we took too long to respond :(
+			// TODO; is this ever really a problem?
+			//printf("reset too slow\n");
+		}
+		#if defined(CDC_STATUS_INTERFACE) && defined(CDC_DATA_INTERFACE)
+		usb_serial_reset();
+		#endif
+		endpointN_notify_mask = 0;
+		// TODO: Free all allocated dTDs
+		//if (++reset_count >= 3) {
+			// shut off USB - easier to see results in protocol analyzer
+			//USB1_USBCMD &= ~USB_USBCMD_RS;
+			//printf("shut off USB\n");
+		//}
+	}
+	if (status & USB_USBSTS_TI0) {
+		if (usb_timer0_callback != NULL) usb_timer0_callback();
+	}
+	if (status & USB_USBSTS_TI1) {
+		if (usb_timer1_callback != NULL) usb_timer1_callback();
+	}
+	if (status & USB_USBSTS_PCI) {
+		if (USB1_PORTSC1 & USB_PORTSC1_HSP) {
+			//printf("port at 480 Mbit\n");
+			usb_high_speed = 1;
+		} else {
+			//printf("port at 12 Mbit\n");
+			usb_high_speed = 0;
+		}
+	}
+	if (status & USB_USBSTS_SLI) { // page 3165
+		//printf("suspend\n");
+	}
+	if (status & USB_USBSTS_UEI) {
+		//printf("error\n");
+	}
+	if ((USB1_USBINTR & USB_USBINTR_SRE) && (status & USB_USBSTS_SRI)) {
+		//printf("sof %d\n", usb_reboot_timer);
+		if (usb_reboot_timer) {
+			if (--usb_reboot_timer == 0) {
+				usb_stop_sof_interrupts(NUM_INTERFACE);
+				_reboot_Teensyduino_();
+			}
+		}
+		#ifdef MIDI_INTERFACE
+		usb_midi_flush_output();
+		#endif
+		#ifdef MULTITOUCH_INTERFACE
+		usb_touchscreen_update_callback();
+		#endif
+		#ifdef FLIGHTSIM_INTERFACE
+		usb_flightsim_flush_output();
+		#endif
+	}
 }
 
-static void endpoint0_setup(uint64_t setupdata)
-{
-    setup_t setup;
-    
-    setup.bothwords = setupdata;
-    
-    printf("USB Proxy: Setup %08lX %08lX\n", setup.word1, setup.word2);
-    
-    // Check if we have a connected device to proxy
-    if (!proxy_device_connected || !usb_host_is_ready()) {
-        // No device connected, stall
-        USB1_ENDPTCTRL0 = 0x000010001;
-        return;
-    }
-    
-    // Handle standard requests that might need special handling
-    switch (setup.wRequestAndType) {
-    case 0x0500: // SET_ADDRESS
-        // Let the host handle this locally
-        endpoint0_receive(NULL, 0, 0);
-        USB1_DEVICEADDR = USB_DEVICEADDR_USBADR(setup.wValue) | USB_DEVICEADDR_USBADRA;
-        return;
-        
-    case 0x0900: // SET_CONFIGURATION
-        // Forward to device but also configure our endpoints
-        {
-            uint16_t dummy_len;
-            if (forward_control_request(&setup, NULL, &dummy_len)) {
-                usb_configuration = setup.wValue;
-                proxy_config_value = setup.wValue;
-                
-                // Parse config descriptor to set up endpoints
-                if (config_descriptor_length > 0) {
-                    uint8_t *p = config_descriptor_cache;
-                    uint8_t *end = p + config_descriptor_length;
-                    
-                    num_proxy_endpoints = 0;
-                    
-                    while (p < end) {
-                        uint8_t desc_len = p[0];
-                        uint8_t desc_type = p[1];
-                        
-                        if (p + desc_len > end) break;
-                        
-                        if (desc_type == 0x05 && desc_len >= 7) { // Endpoint descriptor
-                            uint8_t ep_addr = p[2];
-                            uint8_t ep_attr = p[3];
-                            uint16_t max_packet = p[4] | (p[5] << 8);
-                            uint8_t interval = p[6];
-                            
-                            uint8_t ep_num = ep_addr & 0x0F;
-                            uint8_t ep_dir = (ep_addr & 0x80) ? 1 : 0;
-                            uint8_t ep_type = ep_attr & 0x03;
-                            
-                            if (ep_num > 0 && ep_num <= 7 && num_proxy_endpoints < 8) {
-                                endpoint_proxy_t *ep = &proxy_endpoints[num_proxy_endpoints++];
-                                ep->ep_num = ep_num;
-                                ep->ep_dir = ep_dir;
-                                ep->max_packet_size = max_packet;
-                                ep->ep_type = ep_type;
-                                ep->interval = interval;
-                                ep->active_buffer = 0;
-                                ep->busy[0] = false;
-                                ep->busy[1] = false;
-                                
-                                // Configure endpoint
-                                // The ENDPTCTRL register format is:
-                                // TX bits [23:16]: TXE=bit23, TXR=bit22, TXT=bits[19:18]
-                                // RX bits [7:0]: RXE=bit7, RXR=bit6, RXT=bits[3:2]
-                                uint32_t current_ctrl = *((volatile uint32_t *)&USB1_ENDPTCTRL0 + ep_num);
-                                
-                                if (ep_dir) {
-                                    // TX (IN) endpoint
-                                    current_ctrl &= 0x0000FFFF; // Clear TX bits
-                                    current_ctrl |= (1 << 23);  // TXE - TX Enable
-                                    current_ctrl |= (1 << 22);  // TXR - TX Data Toggle Reset
-                                    current_ctrl |= ((uint32_t)ep_type << 18); // TXT - TX Endpoint Type
-                                } else {
-                                    // RX (OUT) endpoint  
-                                    current_ctrl &= 0xFFFF0000; // Clear RX bits
-                                    current_ctrl |= (1 << 7);   // RXE - RX Enable
-                                    current_ctrl |= (1 << 6);   // RXR - RX Data Toggle Reset
-                                    current_ctrl |= ((uint32_t)ep_type << 2);  // RXT - RX Endpoint Type
-                                }
-                                
-                                *((volatile uint32_t *)&USB1_ENDPTCTRL0 + ep_num) = current_ctrl;
-                                
-                                // Set up endpoint queue head
-                                endpoint_queue_head[ep_num * 2 + ep_dir].config = 
-                                    (max_packet << 16) | ((ep_type == 0) ? (1 << 15) : 0);
-                                endpoint_queue_head[ep_num * 2 + ep_dir].callback_function = 
-                                    ep_dir ? proxy_in_complete : proxy_out_complete;
-                                
-                                // Enable notifications
-                                if (ep_dir) {
-                                    endpointN_notify_mask |= (1 << (ep_num + 16));
-                                } else {
-                                    endpointN_notify_mask |= (1 << ep_num);
-                                }
-                                
-                                printf("USB Proxy: Configured EP%d%s type=%d size=%d\n",
-                                    ep_num, ep_dir ? "IN" : "OUT", ep_type, max_packet);
-                            }
-                        }
-                        
-                        p += desc_len;
-                    }
-                }
-                
-                endpoint0_receive(NULL, 0, 0);
-                proxy_enumeration_complete = true;
-                return;
-            }
-        }
-        break;
-        
-    case 0x0880: // GET_CONFIGURATION
-        reply_buffer[0] = usb_configuration;
-        endpoint0_transmit(reply_buffer, 1, 0);
-        return;
-        
-    case 0x0680: // GET_DESCRIPTOR
-    case 0x0681:
-        {
-            uint8_t desc_type = setup.wValue >> 8;
-            uint8_t desc_index = setup.wValue & 0xFF;
-            
-            printf("USB Proxy: GET_DESCRIPTOR type=%d index=%d\n", desc_type, desc_index);
-            
-            if (desc_type == 1) { // Device descriptor
-                if (device_descriptor_cache[0] != 0) {
-                    uint32_t len = 18;
-                    if (len > setup.wLength) len = setup.wLength;
-                    endpoint0_transmit(device_descriptor_cache, len, 0);
-                    return;
-                }
-            }
-            else if (desc_type == 2) { // Configuration descriptor
-                // First request is usually for 9 bytes to get total length
-                if (setup.wLength == 9 || config_descriptor_length == 0) {
-                    // Need to fetch from device
-                    uint16_t actual_len = 0;
-                    if (forward_control_request(&setup, config_descriptor_cache, &actual_len)) {
-                        config_descriptor_length = actual_len;
-                        uint32_t len = actual_len;
-                        if (len > setup.wLength) len = setup.wLength;
-                        endpoint0_transmit(config_descriptor_cache, len, 0);
-                        return;
-                    }
-                } else {
-                    // Use cached descriptor
-                    uint32_t len = config_descriptor_length;
-                    if (len > setup.wLength) len = setup.wLength;
-                    endpoint0_transmit(config_descriptor_cache, len, 0);
-                    return;
-                }
-            }
-            else if (desc_type == 3) { // String descriptor
-                uint16_t actual_len = 0;
-                if (forward_control_request(&setup, string_descriptor_cache, &actual_len)) {
-                    uint32_t len = actual_len;
-                    if (len > setup.wLength) len = setup.wLength;
-                    endpoint0_transmit(string_descriptor_cache, len, 0);
-                    return;
-                }
-            }
-        }
-        break;
-        
-    case 0x0080: // GET_STATUS (device)
-    case 0x0082: // GET_STATUS (endpoint)
-    case 0x0302: // SET_FEATURE (endpoint)
-    case 0x0102: // CLEAR_FEATURE (endpoint)
-        // Forward these to the real device
-        break;
-    }
-    
-    // For all other requests, forward to the device
-    uint16_t response_len = 0;
-    pending_setup = setup;
-    
-    if (setup.bmRequestType & 0x80) {
-        // Device-to-host (IN) transfer
-        if (forward_control_request(&setup, control_proxy_buffer, &response_len)) {
-            if (response_len > 0) {
-                uint32_t len = response_len;
-                if (len > setup.wLength) len = setup.wLength;
-                endpoint0_transmit(control_proxy_buffer, len, 0);
-            } else {
-                endpoint0_receive(NULL, 0, 0);
-            }
-        } else {
-            // Request failed, stall
-            USB1_ENDPTCTRL0 = 0x000010001;
-        }
-    } else {
-        // Host-to-device (OUT) transfer
-        if (setup.wLength > 0) {
-            // Need to receive data first
-            endpoint0_receive(endpoint0_buffer, setup.wLength, 1);
-        } else {
-            // No data phase
-            if (forward_control_request(&setup, NULL, &response_len)) {
-                endpoint0_receive(NULL, 0, 0);
-            } else {
-                USB1_ENDPTCTRL0 = 0x000010001;
-            }
-        }
-    }
-}
-
-static void endpoint0_transmit(const void *data, uint32_t len, int notify)
-{
-    if (len > 0) {
-        endpoint0_transfer_data.next = 1;
-        endpoint0_transfer_data.status = (len << 16) | (1<<7);
-        uint32_t addr = (uint32_t)data;
-        endpoint0_transfer_data.pointer0 = addr;
-        endpoint0_transfer_data.pointer1 = addr + 4096;
-        endpoint0_transfer_data.pointer2 = addr + 8192;
-        endpoint0_transfer_data.pointer3 = addr + 12288;
-        endpoint0_transfer_data.pointer4 = addr + 16384;
-        endpoint_queue_head[1].next = (uint32_t)&endpoint0_transfer_data;
-        endpoint_queue_head[1].status = 0;
-        USB1_ENDPTPRIME |= (1<<16);
-        while (USB1_ENDPTPRIME) ;
-    }
-    endpoint0_transfer_ack.next = 1;
-    endpoint0_transfer_ack.status = (1<<7) | (notify ? (1 << 15) : 0);
-    endpoint0_transfer_ack.pointer0 = 0;
-    endpoint_queue_head[0].next = (uint32_t)&endpoint0_transfer_ack;
-    endpoint_queue_head[0].status = 0;
-    USB1_ENDPTCOMPLETE = (1<<0) | (1<<16);
-    USB1_ENDPTPRIME |= (1<<0);
-    endpoint0_notify_mask = (notify ? (1 << 0) : 0);
-    while (USB1_ENDPTPRIME) ;
-}
-
-static void endpoint0_receive(void *data, uint32_t len, int notify)
-{
-    if (len > 0) {
-        endpoint0_transfer_data.next = 1;
-        endpoint0_transfer_data.status = (len << 16) | (1<<7);
-        uint32_t addr = (uint32_t)data;
-        endpoint0_transfer_data.pointer0 = addr;
-        endpoint0_transfer_data.pointer1 = addr + 4096;
-        endpoint0_transfer_data.pointer2 = addr + 8192;
-        endpoint0_transfer_data.pointer3 = addr + 12288;
-        endpoint0_transfer_data.pointer4 = addr + 16384;
-        endpoint_queue_head[0].next = (uint32_t)&endpoint0_transfer_data;
-        endpoint_queue_head[0].status = 0;
-        USB1_ENDPTPRIME |= (1<<0);
-        while (USB1_ENDPTPRIME) ;
-    }
-    endpoint0_transfer_ack.next = 1;
-    endpoint0_transfer_ack.status = (1<<7) | (notify ? (1 << 15) : 0);
-    endpoint0_transfer_ack.pointer0 = 0;
-    endpoint_queue_head[1].next = (uint32_t)&endpoint0_transfer_ack;
-    endpoint_queue_head[1].status = 0;
-    USB1_ENDPTCOMPLETE = (1<<0) | (1<<16);
-    USB1_ENDPTPRIME |= (1<<16);
-    endpoint0_notify_mask = (notify ? (1 << 16) : 0);
-    while (USB1_ENDPTPRIME) ;
-}
-
-static void endpoint0_complete(void)
-{
-    // Handle completion of control transfers with data phase
-    if (pending_setup.wLength > 0 && !(pending_setup.bmRequestType & 0x80)) {
-        // This was a host-to-device transfer with data
-        uint16_t dummy_len;
-        forward_control_request(&pending_setup, endpoint0_buffer, &dummy_len);
-    }
-}
-
-static bool forward_control_request(setup_t *setup, uint8_t *data, uint16_t *len)
-{
-    if (!usb_host_is_ready()) {
-        return false;
-    }
-    
-    // Pause data transfers during control transfer
-    usb_host_pause_transfers();
-    
-    bool success = usb_host_control_transfer(
-        setup->bmRequestType,
-        setup->bRequest,
-        setup->wValue,
-        setup->wIndex,
-        setup->wLength,
-        data,
-        len,
-        500  // 500ms timeout
-    );
-    
-    // Resume data transfers
-    usb_host_resume_transfers();
-    
-    return success;
-}
-
-static void proxy_in_complete(transfer_t *transfer)
-{
-    // Find which endpoint this is for
-    uint32_t ep_num = 0;
-    for (int i = 0; i < num_proxy_endpoints; i++) {
-        endpoint_proxy_t *ep = &proxy_endpoints[i];
-        if (ep->ep_dir == 1 && 
-            (transfer == ep->active_transfers[0] || transfer == ep->active_transfers[1])) {
-            ep_num = ep->ep_num;
-            
-            // Mark buffer as not busy
-            int buf_idx = (transfer == ep->active_transfers[0]) ? 0 : 1;
-            ep->busy[buf_idx] = false;
-            
-            // TODO: Here you can intercept mouse data if needed
-            // if (ep_num == 1) { // If this is the mouse endpoint
-            //     // Modify data in ep->buffer[buf_idx] before sending
-            // }
-            
-            // Forward data to host
-            // The transfer structure doesn't have a length field
-            // We need to calculate it from the status
-            uint32_t remaining = (transfer->status >> 16) & 0x7FFF;
-            uint32_t len = ep->max_packet_size - remaining;
-            
-            if (len > 0) {
-                // Queue transfer to host
-                usb_prepare_transfer(transfer, ep->buffer[buf_idx], len, 0);
-                usb_transmit(ep_num, transfer);
-            }
-            
-            break;
-        }
-    }
-}
-
-static void proxy_out_complete(transfer_t *transfer)
-{
-    // Find which endpoint this is for and forward to device
-    // This is less common for HID devices but needed for completeness
-    uint32_t remaining = (transfer->status >> 16) & 0x7FFF;
-    // Calculate actual received length from max packet size
-    // Note: This would need the endpoint info to get max_packet_size
-    if (remaining < 512 && usb_host_is_ready()) { // Assuming max 512 bytes
-        // TODO: Implement OUT endpoint forwarding if needed
-    }
-}
-
-static void check_device_connection(void)
-{
-    static uint32_t last_check = 0;
-    uint32_t now = millis();
-    
-    if (now - last_check < 100) return;  // Check every 100ms
-    last_check = now;
-    
-    bool currently_connected = usb_host_is_ready();
-    
-    if (proxy_device_connected && !currently_connected) {
-        // Device was connected but now disconnected
-        printf("USB Proxy: Device disconnected, rebooting...\n");
-        delay(100);  // Give time for message to print
-        _reboot_Teensyduino_();
-    }
-    else if (!proxy_device_connected && currently_connected) {
-        // New device connected
-        proxy_device_connected = true;
-        printf("USB Proxy: New device connected\n");
-    }
-}
-
-static void run_callbacks(endpoint_t *ep)
-{
-    transfer_t *first = ep->first_transfer;
-    if (first == NULL) return;
-
-    uint32_t count = 0;
-    transfer_t *t = first;
-    while (1) {
-        if (t->status & (1<<7)) {
-            ep->first_transfer = t;
-            break;
-        }
-        count++;
-        t = (transfer_t *)t->next;
-        if ((uint32_t)t == 1) {
-            ep->first_transfer = NULL;
-            ep->last_transfer = NULL;
-            break;
-        }
-    }
-    while (count) {
-        transfer_t *next = (transfer_t *)first->next;
-        ep->callback_function(first);
-        first = next;
-        count--;
-    }
-}
 
 void usb_start_sof_interrupts(int interface)
 {
-    __disable_irq();
-    sof_usage |= (1 << interface);
-    uint32_t intr = USB1_USBINTR;
-    if (!(intr & USB_USBINTR_SRE)) {
-        USB1_USBSTS = USB_USBSTS_SRI;
-        USB1_USBINTR = intr | USB_USBINTR_SRE;
-    }
-    __enable_irq();
+	__disable_irq();
+	sof_usage |= (1 << interface);
+	uint32_t intr = USB1_USBINTR;
+	if (!(intr & USB_USBINTR_SRE)) {
+		USB1_USBSTS = USB_USBSTS_SRI; // clear prior SOF before SOF IRQ enable
+		USB1_USBINTR = intr | USB_USBINTR_SRE;
+	}
+	__enable_irq();
 }
 
 void usb_stop_sof_interrupts(int interface)
 {
-    sof_usage &= ~(1 << interface);
-    if (sof_usage == 0) {
-        USB1_USBINTR &= ~USB_USBINTR_SRE;
-    }
+	sof_usage &= ~(1 << interface);
+	if (sof_usage == 0) {
+		USB1_USBINTR &= ~USB_USBINTR_SRE;
+	}
 }
+
+
+
+
+/*
+struct transfer_struct { // table 55-60, pg 3159
+	uint32_t next;
+	uint32_t status;
+	uint32_t pointer0;
+	uint32_t pointer1;
+	uint32_t pointer2;
+	uint32_t pointer3;
+	uint32_t pointer4;
+	uint32_t unused1;
+};
+transfer_t endpoint0_transfer_data __attribute__ ((aligned(32)));;
+transfer_t endpoint0_transfer_ack  __attribute__ ((aligned(32)));;
+*/
+
+static uint8_t reply_buffer[8];
+
+static void endpoint0_setup(uint64_t setupdata)
+{
+	setup_t setup;
+	uint32_t endpoint, dir, ctrl;
+	const usb_descriptor_list_t *list;
+
+	setup.bothwords = setupdata;
+	switch (setup.wRequestAndType) {
+	  case 0x0500: // SET_ADDRESS
+		endpoint0_receive(NULL, 0, 0);
+		USB1_DEVICEADDR = USB_DEVICEADDR_USBADR(setup.wValue) | USB_DEVICEADDR_USBADRA;
+		return;
+	  case 0x0900: // SET_CONFIGURATION
+		usb_configuration = setup.wValue;
+		// configure all other endpoints
+		#if defined(ENDPOINT2_CONFIG)
+		USB1_ENDPTCTRL2 = ENDPOINT2_CONFIG;
+		#endif
+		#if defined(ENDPOINT3_CONFIG)
+		USB1_ENDPTCTRL3 = ENDPOINT3_CONFIG;
+		#endif
+		#if defined(ENDPOINT4_CONFIG)
+		USB1_ENDPTCTRL4 = ENDPOINT4_CONFIG;
+		#endif
+		#if defined(ENDPOINT5_CONFIG)
+		USB1_ENDPTCTRL5 = ENDPOINT5_CONFIG;
+		#endif
+		#if defined(ENDPOINT6_CONFIG)
+		USB1_ENDPTCTRL6 = ENDPOINT6_CONFIG;
+		#endif
+		#if defined(ENDPOINT7_CONFIG)
+		USB1_ENDPTCTRL7 = ENDPOINT7_CONFIG;
+		#endif
+		#if defined(CDC_STATUS_INTERFACE) && defined(CDC_DATA_INTERFACE)
+		usb_serial_configure();
+		#elif defined(SEREMU_INTERFACE)
+		usb_seremu_configure();
+		#endif
+		#if defined(CDC2_STATUS_INTERFACE) && defined(CDC2_DATA_INTERFACE)
+		usb_serial2_configure();
+		#endif
+		#if defined(CDC3_STATUS_INTERFACE) && defined(CDC3_DATA_INTERFACE)
+		usb_serial3_configure();
+		#endif
+		#if defined(RAWHID_INTERFACE)
+		usb_rawhid_configure();
+		#endif
+		#if defined(KEYBOARD_INTERFACE)
+		usb_keyboard_configure();
+		#endif
+		#if defined(MOUSE_INTERFACE)
+		usb_mouse_configure();
+		#endif
+		#if defined(FLIGHTSIM_INTERFACE)
+		usb_flightsim_configure();
+		#endif
+		#if defined(JOYSTICK_INTERFACE)
+		usb_joystick_configure();
+		#endif
+		#if defined(MULTITOUCH_INTERFACE)
+		usb_touchscreen_configure();
+		#endif
+		#if defined(MIDI_INTERFACE)
+		usb_midi_configure();
+		#endif
+		#if defined(AUDIO_INTERFACE)
+		usb_audio_configure();
+		#endif
+		#if defined(MTP_INTERFACE)
+		usb_mtp_configure();
+		#endif
+		#if defined(EXPERIMENTAL_INTERFACE)
+		memset(endpoint_queue_head + 2, 0, sizeof(endpoint_t) * 2);
+		endpoint_queue_head[2].pointer4 = 0xB8C6CF5D;
+		endpoint_queue_head[3].pointer4 = 0x74D59319;
+		#endif
+		endpoint0_receive(NULL, 0, 0);
+		return;
+	  case 0x0880: // GET_CONFIGURATION
+		reply_buffer[0] = usb_configuration;
+		endpoint0_transmit(reply_buffer, 1, 0);
+		return;
+	  case 0x0080: // GET_STATUS (device)
+		reply_buffer[0] = 0;
+		reply_buffer[1] = 0;
+		endpoint0_transmit(reply_buffer, 2, 0);
+		return;
+	  case 0x0082: // GET_STATUS (endpoint)
+		endpoint = setup.wIndex & 0x7F;
+		if (endpoint > 7) break;
+		dir = setup.wIndex & 0x80;
+		ctrl = *((uint32_t *)&USB1_ENDPTCTRL0 + endpoint);
+		reply_buffer[0] = 0;
+		reply_buffer[1] = 0;
+		if ((dir && (ctrl & USB_ENDPTCTRL_TXS)) || (!dir && (ctrl & USB_ENDPTCTRL_RXS))) {
+			reply_buffer[0] = 1;
+		}
+		endpoint0_transmit(reply_buffer, 2, 0);
+		return;
+	  case 0x0302: // SET_FEATURE (endpoint)
+		endpoint = setup.wIndex & 0x7F;
+		if (endpoint > 7) break;
+		dir = setup.wIndex & 0x80;
+		if (dir) {
+			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) |= USB_ENDPTCTRL_TXS;
+		} else {
+			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) |= USB_ENDPTCTRL_RXS;
+		}
+		endpoint0_receive(NULL, 0, 0);
+		return;
+	  case 0x0102: // CLEAR_FEATURE (endpoint)
+		endpoint = setup.wIndex & 0x7F;
+		if (endpoint > 7) break;
+		dir = setup.wIndex & 0x80;
+		if (dir) {
+			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) &= ~USB_ENDPTCTRL_TXS;
+		} else {
+			*((volatile uint32_t *)&USB1_ENDPTCTRL0 + endpoint) &= ~USB_ENDPTCTRL_RXS;
+		}
+		endpoint0_receive(NULL, 0, 0);
+		return;
+#ifdef EXPERIMENTAL_INTERFACE
+	  case 0xF8C0: // GET_MS_DESCRIPTOR (bRequest=0xF8 because microsoft_os_string_desc)
+		if ((setup.wIndex & 0xFF00) != 0) break; // 1=Genre, 4=Compat ID, 5=Properties
+		setup.wIndex |= 0xEE00; // alter wIndex and treat as normal USB descriptor
+		__attribute__((fallthrough));
+#endif
+	  case 0x0680: // GET_DESCRIPTOR
+	  case 0x0681:
+		for (list = usb_descriptor_list; list->addr != NULL; list++) {
+			if (setup.wValue == list->wValue && setup.wIndex == list->wIndex) {
+				uint32_t datalen;
+				if ((setup.wValue >> 8) == 3) {
+					// for string descriptors, use the descriptor's
+					// length field, allowing runtime configured length.
+					datalen = *(list->addr);
+				} else {
+					datalen = list->length;
+				}
+				if (datalen > setup.wLength) datalen = setup.wLength;
+
+				// copy the descriptor, from PROGMEM to DMAMEM
+				if (setup.wValue == 0x200) {
+					// config descriptor needs to adapt to speed
+					const uint8_t *src = usb_config_descriptor_12;
+					if (usb_high_speed) src = usb_config_descriptor_480;
+					memcpy(usb_descriptor_buffer, src, datalen);
+				} else if (setup.wValue == 0x700) {
+					// other speed config also needs to adapt
+					const uint8_t *src = usb_config_descriptor_480;
+					if (usb_high_speed) src = usb_config_descriptor_12;
+					memcpy(usb_descriptor_buffer, src, datalen);
+					usb_descriptor_buffer[1] = 7;
+				} else {
+					memcpy(usb_descriptor_buffer, list->addr, datalen);
+				}
+				// prep transmit
+				arm_dcache_flush_delete(usb_descriptor_buffer, datalen);
+				endpoint0_transmit(usb_descriptor_buffer, datalen, 0);
+				return;
+			}
+		}
+		break;
+#if defined(CDC_STATUS_INTERFACE)
+	  case 0x2221: // CDC_SET_CONTROL_LINE_STATE
+		#ifdef CDC_STATUS_INTERFACE
+		if (setup.wIndex == CDC_STATUS_INTERFACE) {
+			usb_cdc_line_rtsdtr_millis = systick_millis_count;
+			usb_cdc_line_rtsdtr = setup.wValue;
+		}
+		#endif
+		#ifdef CDC2_STATUS_INTERFACE
+		if (setup.wIndex == CDC2_STATUS_INTERFACE) {
+			usb_cdc2_line_rtsdtr_millis = systick_millis_count;
+			usb_cdc2_line_rtsdtr = setup.wValue;
+		}
+		#endif
+		#ifdef CDC3_STATUS_INTERFACE
+		if (setup.wIndex == CDC3_STATUS_INTERFACE) {
+			usb_cdc3_line_rtsdtr_millis = systick_millis_count;
+			usb_cdc3_line_rtsdtr = setup.wValue;
+		}
+		#endif
+		__attribute__((fallthrough));
+		// fall through to next case, to always send ZLP ACK
+	  case 0x2321: // CDC_SEND_BREAK
+		endpoint0_receive(NULL, 0, 0);
+		return;
+	  case 0x2021: // CDC_SET_LINE_CODING
+		if (setup.wLength != 7) break;
+		endpoint0_setupdata.bothwords = setupdata;
+		endpoint0_receive(endpoint0_buffer, 7, 1);
+		return;
+#endif
+#if defined(SEREMU_INTERFACE) || defined(KEYBOARD_INTERFACE)
+	  case 0x0921: // HID SET_REPORT
+		if (setup.wLength <= sizeof(endpoint0_buffer)) {
+			//printf("hid set report %x %x\n", setup.word1, setup.word2);
+			endpoint0_setupdata.bothwords = setup.bothwords;
+			endpoint0_buffer[0] = 0xE9;
+			endpoint0_receive(endpoint0_buffer, setup.wLength, 1);
+			return;
+		}
+		break;
+#endif
+#if defined(AUDIO_INTERFACE)
+	  case 0x0B01: // SET_INTERFACE (alternate setting)
+		if (setup.wIndex == AUDIO_INTERFACE+1) {
+			usb_audio_transmit_setting = setup.wValue;
+			if (usb_audio_transmit_setting > 0) {
+				// TODO: set up AUDIO_TX_ENDPOINT to transmit
+			}
+			endpoint0_receive(NULL, 0, 0);
+			return;
+		} else if (setup.wIndex == AUDIO_INTERFACE+2) {
+			usb_audio_receive_setting = setup.wValue;
+			endpoint0_receive(NULL, 0, 0);
+			return;
+		}
+		break;
+	  case 0x0A81: // GET_INTERFACE (alternate setting)
+		if (setup.wIndex == AUDIO_INTERFACE+1) {
+			endpoint0_buffer[0] = usb_audio_transmit_setting;
+			endpoint0_transmit(endpoint0_buffer, 1, 0);
+			return;
+		} else if (setup.wIndex == AUDIO_INTERFACE+2) {
+			endpoint0_buffer[0] = usb_audio_receive_setting;
+			endpoint0_transmit(endpoint0_buffer, 1, 0);
+			return;
+		}
+		break;
+	  case 0x0121: // SET FEATURE
+	  case 0x0221:
+	  case 0x0321:
+	  case 0x0421:
+		//printf("set_feature, word1=%x, len=%d\n", setup.word1, setup.wLength);
+		if (setup.wLength <= sizeof(endpoint0_buffer)) {
+			endpoint0_setupdata.bothwords = setupdata;
+			endpoint0_receive(endpoint0_buffer, setup.wLength, 1);
+			return; // handle these after ACK
+		}
+		break;
+	  case 0x81A1: // GET FEATURE
+	  case 0x82A1:
+	  case 0x83A1:
+	  case 0x84A1:
+		if (setup.wLength <= sizeof(endpoint0_buffer)) {
+			uint32_t len;
+			if (usb_audio_get_feature(&setup, endpoint0_buffer, &len)) {
+				//printf("GET feature, len=%d\n", len);
+				endpoint0_transmit(endpoint0_buffer, len, 0);
+				return;
+			}
+		}
+		break;
+	  case 0x81A2: // GET_CUR (wValue=0, wIndex=interface, wLength=len)
+		if (setup.wLength >= 3) {
+			endpoint0_buffer[0] = 44100 & 255;
+			endpoint0_buffer[1] = 44100 >> 8;
+			endpoint0_buffer[2] = 0;
+			endpoint0_transmit(endpoint0_buffer, 3, 0);
+			return;
+		}
+		break;
+#endif
+#if defined(MULTITOUCH_INTERFACE)
+	  case 0x01A1:
+		if (setup.wValue == 0x0300 && setup.wIndex == MULTITOUCH_INTERFACE) {
+			endpoint0_buffer[0] = MULTITOUCH_FINGERS;
+			endpoint0_transmit(endpoint0_buffer, 1, 0);
+			return;
+		} else if (setup.wValue == 0x0100 && setup.wIndex == MULTITOUCH_INTERFACE) {
+			memset(endpoint0_buffer, 0, 8);
+			endpoint0_transmit(endpoint0_buffer, 8, 0);
+			return;
+		}
+		break;
+#endif
+#if defined(MTP_INTERFACE)
+	  case 0x6421: // Cancel Request, Still Image Class 1.0, 5.2.1, page 8
+		if (setup.wLength == 6) {
+			endpoint0_setupdata.bothwords = setupdata;
+			endpoint0_receive(endpoint0_buffer, setup.wLength, 1);
+			return;
+		}
+		break;
+	  case 0x65A1: // Get Extended Event Data, Still Image Class 1.0, 5.2.2, page 9
+		break;
+	  case 0x6621: // Device Reset, Still Image Class 1.0, 5.2.3 page 10
+		break;
+	  case 0x67A1: // Get Device Status, Still Image Class 1.0, 5.2.4, page 10
+		if (setup.wLength >= 4) {
+			endpoint0_buffer[0] = 4;
+			endpoint0_buffer[1] = 0;
+			endpoint0_buffer[2] = usb_mtp_status;
+			endpoint0_buffer[3] = 0x20;
+			endpoint0_transmit(endpoint0_buffer, 4, 0);
+			//if (usb_mtp_status == 0x19) usb_mtp_status = 0x01; // testing only
+			return;
+		}
+		break;
+#endif
+	}
+	printf("endpoint 0 stall\n");
+	USB1_ENDPTCTRL0 = 0x000010001; // stall
+}
+
+static void endpoint0_transmit(const void *data, uint32_t len, int notify)
+{
+	//printf("tx %lu\n", len);
+	if (len > 0) {
+		// Executing A Transfer Descriptor, page 3182
+		endpoint0_transfer_data.next = 1;
+		endpoint0_transfer_data.status = (len << 16) | (1<<7);
+		uint32_t addr = (uint32_t)data;
+		endpoint0_transfer_data.pointer0 = addr; // format: table 55-60, pg 3159
+		endpoint0_transfer_data.pointer1 = addr + 4096;
+		endpoint0_transfer_data.pointer2 = addr + 8192;
+		endpoint0_transfer_data.pointer3 = addr + 12288;
+		endpoint0_transfer_data.pointer4 = addr + 16384;
+		//  Case 1: Link list is empty, page 3182
+		endpoint_queue_head[1].next = (uint32_t)&endpoint0_transfer_data;
+		endpoint_queue_head[1].status = 0;
+		USB1_ENDPTPRIME |= (1<<16);
+		while (USB1_ENDPTPRIME) ;
+	}
+	endpoint0_transfer_ack.next = 1;
+	endpoint0_transfer_ack.status = (1<<7) | (notify ? (1 << 15) : 0);
+	endpoint0_transfer_ack.pointer0 = 0;
+	endpoint_queue_head[0].next = (uint32_t)&endpoint0_transfer_ack;
+	endpoint_queue_head[0].status = 0;
+	USB1_ENDPTCOMPLETE = (1<<0) | (1<<16);
+	USB1_ENDPTPRIME |= (1<<0);
+	endpoint0_notify_mask = (notify ? (1 << 0) : 0);
+	while (USB1_ENDPTPRIME) ;
+}
+
+static void endpoint0_receive(void *data, uint32_t len, int notify)
+{
+	//printf("rx %lu\n", len);
+	if (len > 0) {
+		// Executing A Transfer Descriptor, page 3182
+		endpoint0_transfer_data.next = 1;
+		endpoint0_transfer_data.status = (len << 16) | (1<<7);
+		uint32_t addr = (uint32_t)data;
+		endpoint0_transfer_data.pointer0 = addr; // format: table 55-60, pg 3159
+		endpoint0_transfer_data.pointer1 = addr + 4096;
+		endpoint0_transfer_data.pointer2 = addr + 8192;
+		endpoint0_transfer_data.pointer3 = addr + 12288;
+		endpoint0_transfer_data.pointer4 = addr + 16384;
+		//  Case 1: Link list is empty, page 3182
+		endpoint_queue_head[0].next = (uint32_t)&endpoint0_transfer_data;
+		endpoint_queue_head[0].status = 0;
+		USB1_ENDPTPRIME |= (1<<0);
+		while (USB1_ENDPTPRIME) ;
+	}
+	endpoint0_transfer_ack.next = 1;
+	endpoint0_transfer_ack.status = (1<<7) | (notify ? (1 << 15) : 0);
+	endpoint0_transfer_ack.pointer0 = 0;
+	endpoint_queue_head[1].next = (uint32_t)&endpoint0_transfer_ack;
+	endpoint_queue_head[1].status = 0;
+	USB1_ENDPTCOMPLETE = (1<<0) | (1<<16);
+	USB1_ENDPTPRIME |= (1<<16);
+	endpoint0_notify_mask = (notify ? (1 << 16) : 0);
+	while (USB1_ENDPTPRIME) ;
+}
+
+/*typedef union {
+ struct {
+  union {
+   struct {
+        uint8_t bmRequestType;
+        uint8_t bRequest;
+   };
+        uint16_t wRequestAndType;
+  };
+        uint16_t wValue;
+        uint16_t wIndex;
+        uint16_t wLength;
+ };
+ struct {
+        uint32_t word1;
+        uint32_t word2;
+ };
+	uint64_t bothwords;
+} setup_t; */
+
+
+static void endpoint0_complete(void)
+{
+	setup_t setup;
+
+	setup.bothwords = endpoint0_setupdata.bothwords;
+	//printf("complete %x %x %x\n", setup.word1, setup.word2, endpoint0_buffer[0]);
+#ifdef CDC_STATUS_INTERFACE
+	// 0x2021 is CDC_SET_LINE_CODING
+	if (setup.wRequestAndType == 0x2021 && setup.wIndex == CDC_STATUS_INTERFACE) {
+		memcpy(usb_cdc_line_coding, endpoint0_buffer, 7);
+		printf("usb_cdc_line_coding, baud=%u\n", usb_cdc_line_coding[0]);
+		if (usb_cdc_line_coding[0] == 134) {
+			usb_start_sof_interrupts(NUM_INTERFACE);
+			usb_reboot_timer = 80; // TODO: 10 if only 12 Mbit/sec
+		}
+	}
+#endif
+#ifdef CDC2_STATUS_INTERFACE
+	if (setup.wRequestAndType == 0x2021 && setup.wIndex == CDC2_STATUS_INTERFACE) {
+		memcpy(usb_cdc2_line_coding, endpoint0_buffer, 7);
+		printf("usb_cdc2_line_coding, baud=%u\n", usb_cdc2_line_coding[0]);
+		if (usb_cdc2_line_coding[0] == 134) {
+			usb_start_sof_interrupts(NUM_INTERFACE);
+			usb_reboot_timer = 80; // TODO: 10 if only 12 Mbit/sec
+		}
+	}
+#endif
+#ifdef CDC3_STATUS_INTERFACE
+	if (setup.wRequestAndType == 0x2021 && setup.wIndex == CDC3_STATUS_INTERFACE) {
+		memcpy(usb_cdc3_line_coding, endpoint0_buffer, 7);
+		printf("usb_cdc3_line_coding, baud=%u\n", usb_cdc3_line_coding[0]);
+		if (usb_cdc3_line_coding[0] == 134) {
+			usb_start_sof_interrupts(NUM_INTERFACE);
+			usb_reboot_timer = 80; // TODO: 10 if only 12 Mbit/sec
+		}
+	}
+#endif
+#ifdef KEYBOARD_INTERFACE
+	if (setup.word1 == 0x02000921 && setup.word2 == ((1 << 16) | KEYBOARD_INTERFACE)) {
+		keyboard_leds = endpoint0_buffer[0];
+		endpoint0_transmit(NULL, 0, 0);
+	}
+#endif
+#ifdef SEREMU_INTERFACE
+	if (setup.word1 == 0x03000921 && setup.word2 == ((4<<16)|SEREMU_INTERFACE)) {
+		if (endpoint0_buffer[0] == 0xA9 && endpoint0_buffer[1] == 0x45
+		  && endpoint0_buffer[2] == 0xC2 && endpoint0_buffer[3] == 0x6B) {
+			printf("seremu reboot request\n");
+			usb_start_sof_interrupts(NUM_INTERFACE);
+			usb_reboot_timer = 80; // TODO: 10 if only 12 Mbit/sec
+		} else {
+			// any other feature report means Arduino Serial Monitor is open
+			usb_seremu_online = 1;
+		}
+	}
+#endif
+#ifdef AUDIO_INTERFACE
+	if (setup.word1 == 0x02010121 || setup.word1 == 0x01000121 /* TODO: check setup.word2 */) {
+		usb_audio_set_feature(&endpoint0_setupdata, endpoint0_buffer);
+	}
+#endif
+#ifdef MTP_INTERFACE
+	if (setup.wRequestAndType == 0x6421) {
+		if (endpoint0_buffer[0] == 0x01 && endpoint0_buffer[1] == 0x40) {
+			printf("MTP cancel, transaction ID=%08X\n",
+			  endpoint0_buffer[2] | (endpoint0_buffer[3] << 8) |
+			  (endpoint0_buffer[4] << 16) | (endpoint0_buffer[5] << 24));
+			usb_mtp_status = 0x19; // 0x19 = host initiated cancel
+		}
+	}
+#endif
+}
+
+static void usb_endpoint_config(endpoint_t *qh, uint32_t config, void (*callback)(transfer_t *))
+{
+	memset(qh, 0, sizeof(endpoint_t));
+	qh->config = config;
+	qh->next = 1; // Terminate bit = 1
+	qh->callback_function = callback;
+}
+
+void usb_config_rx(uint32_t ep, uint32_t packet_size, int do_zlp, void (*cb)(transfer_t *))
+{
+	uint32_t config = (packet_size << 16) | (do_zlp ? 0 : (1 << 29));
+	if (ep < 2 || ep > NUM_ENDPOINTS) return;
+	usb_endpoint_config(endpoint_queue_head + ep * 2, config, cb);
+	if (cb) endpointN_notify_mask |= (1 << ep);
+}
+
+void usb_config_tx(uint32_t ep, uint32_t packet_size, int do_zlp, void (*cb)(transfer_t *))
+{
+	uint32_t config = (packet_size << 16) | (do_zlp ? 0 : (1 << 29));
+	if (ep < 2 || ep > NUM_ENDPOINTS) return;
+	usb_endpoint_config(endpoint_queue_head + ep * 2 + 1, config, cb);
+	if (cb) endpointN_notify_mask |= (1 << (ep + 16));
+}
+
+void usb_config_rx_iso(uint32_t ep, uint32_t packet_size, int mult, void (*cb)(transfer_t *))
+{
+	if (mult < 1 || mult > 3) return;
+	uint32_t config = (packet_size << 16) | (mult << 30);
+	if (ep < 2 || ep > NUM_ENDPOINTS) return;
+	usb_endpoint_config(endpoint_queue_head + ep * 2, config, cb);
+	if (cb) endpointN_notify_mask |= (1 << ep);
+}
+
+void usb_config_tx_iso(uint32_t ep, uint32_t packet_size, int mult, void (*cb)(transfer_t *))
+{
+	if (mult < 1 || mult > 3) return;
+	uint32_t config = (packet_size << 16) | (mult << 30);
+	if (ep < 2 || ep > NUM_ENDPOINTS) return;
+	usb_endpoint_config(endpoint_queue_head + ep * 2 + 1, config, cb);
+	if (cb) endpointN_notify_mask |= (1 << (ep + 16));
+}
+
+
 
 void usb_prepare_transfer(transfer_t *transfer, const void *data, uint32_t len, uint32_t param)
 {
-    transfer->next = 1;
-    transfer->status = (len << 16) | (1<<7);
-    uint32_t addr = (uint32_t)data;
-    transfer->pointer0 = addr;
-    transfer->pointer1 = addr + 4096;
-    transfer->pointer2 = addr + 8192;
-    transfer->pointer3 = addr + 12288;
-    transfer->pointer4 = addr + 16384;
-    transfer->callback_param = param;
+	transfer->next = 1;
+	transfer->status = (len << 16) | (1<<7);
+	uint32_t addr = (uint32_t)data;
+	transfer->pointer0 = addr;
+	transfer->pointer1 = addr + 4096;
+	transfer->pointer2 = addr + 8192;
+	transfer->pointer3 = addr + 12288;
+	transfer->pointer4 = addr + 16384;
+	transfer->callback_param = param;
 }
+
+#if 0
+void usb_print_transfer_log(void)
+{
+	uint32_t i, count;
+	printf("log %d transfers\n", transfer_log_count);
+	count = transfer_log_count;
+	if (count > LOG_SIZE) count = LOG_SIZE;
+
+	for (i=0; i < count; i++) {
+		if (transfer_log_head == 0) transfer_log_head = LOG_SIZE;
+		transfer_log_head--;
+		uint32_t log = transfer_log[transfer_log_head];
+		printf(" %c %X\n", log >> 8, (int)(log & 255));
+	}
+}
+#endif
 
 static void schedule_transfer(endpoint_t *endpoint, uint32_t epmask, transfer_t *transfer)
 {
-    if (endpoint->callback_function) {
-        transfer->status |= (1<<15);
-    }
-    __disable_irq();
-    transfer_t *last = endpoint->last_transfer;
-    if (last) {
-        last->next = (uint32_t)transfer;
-        if (USB1_ENDPTPRIME & epmask) goto end;
-        uint32_t status, cyccnt=ARM_DWT_CYCCNT;
-        do {
-            USB1_USBCMD |= USB_USBCMD_ATDTW;
-            status = USB1_ENDPTSTATUS;
-        } while (!(USB1_USBCMD & USB_USBCMD_ATDTW) && (ARM_DWT_CYCCNT - cyccnt < 2400));
-        if (status & epmask) goto end;
-        endpoint->next = (uint32_t)transfer;
-        endpoint->status = 0;
-        USB1_ENDPTPRIME |= epmask;
-        goto end;
-    }
-    endpoint->next = (uint32_t)transfer;
-    endpoint->status = 0;
-    USB1_ENDPTPRIME |= epmask;
-    endpoint->first_transfer = transfer;
+	// when we stop at 6, why is the last transfer missing from the USB output?
+	//if (transfer_log_count >= 6) return;
+
+	//uint32_t ret = (*(const uint8_t *)transfer->pointer0) << 8;
+	if (endpoint->callback_function) {
+		transfer->status |= (1<<15);
+	}
+	__disable_irq();
+	//digitalWriteFast(1, HIGH);
+	// Executing A Transfer Descriptor, page 2468 (RT1060 manual, Rev 1, 12/2018)
+	transfer_t *last = endpoint->last_transfer;
+	if (last) {
+		last->next = (uint32_t)transfer;
+		if (USB1_ENDPTPRIME & epmask) goto end;
+		//digitalWriteFast(2, HIGH);
+		//ret |= 0x01;
+		uint32_t status, cyccnt=ARM_DWT_CYCCNT;
+		do {
+			USB1_USBCMD |= USB_USBCMD_ATDTW;
+			status = USB1_ENDPTSTATUS;
+		} while (!(USB1_USBCMD & USB_USBCMD_ATDTW) && (ARM_DWT_CYCCNT - cyccnt < 2400));
+		//USB1_USBCMD &= ~USB_USBCMD_ATDTW;
+		if (status & epmask) goto end;
+		//ret |= 0x02;
+		endpoint->next = (uint32_t)transfer;
+		endpoint->status = 0;
+		USB1_ENDPTPRIME |= epmask;
+		goto end;
+	}
+	//digitalWriteFast(4, HIGH);
+	endpoint->next = (uint32_t)transfer;
+	endpoint->status = 0;
+	USB1_ENDPTPRIME |= epmask;
+	endpoint->first_transfer = transfer;
 end:
-    endpoint->last_transfer = transfer;
-    __enable_irq();
+	endpoint->last_transfer = transfer;
+	__enable_irq();
+	//digitalWriteFast(4, LOW);
+	//digitalWriteFast(3, LOW);
+	//digitalWriteFast(2, LOW);
+	//digitalWriteFast(1, LOW);
+	//if (transfer_log_head > LOG_SIZE) transfer_log_head = 0;
+	//transfer_log[transfer_log_head++] = ret;
+	//transfer_log_count++;
+}
+	// ENDPTPRIME -  Software should write a one to the corresponding bit when
+	//		 posting a new transfer descriptor to an endpoint queue head.
+	//		 Hardware automatically uses this bit to begin parsing for a
+	//		 new transfer descriptor from the queue head and prepare a
+	//		 transmit buffer. Hardware clears this bit when the associated
+	//		 endpoint(s) is (are) successfully primed.
+	//		 Momentarily set by hardware during hardware re-priming
+	//		 operations when a dTD is retired, and the dQH is updated.
+
+	// ENDPTSTATUS - Transmit Buffer Ready - set to one by the hardware as a
+	//		 response to receiving a command from a corresponding bit
+	//		 in the ENDPTPRIME register.  . Buffer ready is cleared by
+	//		 USB reset, by the USB DMA system, or through the ENDPTFLUSH
+	//		 register.  (so 0=buffer ready, 1=buffer primed for transmit)
+
+	//  USBCMD.ATDTW - This bit is used as a semaphore to ensure proper addition
+	//		   of a new dTD to an active (primed) endpoint's linked list.
+	//		   This bit is set and cleared by software.
+	//		   This bit would also be cleared by hardware when state machine
+	//		   is hazard region for which adding a dTD to a primed endpoint
+	//		    may go unrecognized.
+
+/*struct endpoint_struct {
+	uint32_t config;
+	uint32_t current;
+	uint32_t next;
+	uint32_t status;
+	uint32_t pointer0;
+	uint32_t pointer1;
+	uint32_t pointer2;
+	uint32_t pointer3;
+	uint32_t pointer4;
+	uint32_t reserved;
+	uint32_t setup0;
+	uint32_t setup1;
+	transfer_t *first_transfer;
+	transfer_t *last_transfer;
+	void (*callback_function)(transfer_t *completed_transfer);
+	uint32_t unused1;
+};*/
+
+static void run_callbacks(endpoint_t *ep)
+{
+	//printf("run_callbacks\n");
+	transfer_t *first = ep->first_transfer;
+	if (first == NULL) return;
+
+	// count how many transfers are completed, then remove them from the endpoint's list
+	uint32_t count = 0;
+	transfer_t *t = first;
+	while (1) {
+		if (t->status & (1<<7)) {
+			// found a still-active transfer, new list begins here
+			//printf(" still active\n");
+			ep->first_transfer = t;
+			break;
+		}
+		count++;
+		t = (transfer_t *)t->next;
+		if ((uint32_t)t == 1) {
+			// reached end of list, all need callbacks, new list is empty
+			//printf(" end of list\n");
+			ep->first_transfer = NULL;
+			ep->last_transfer = NULL;
+			break;
+		}
+	}
+	// do all the callbacks
+	while (count) {
+		transfer_t *next = (transfer_t *)first->next;
+		ep->callback_function(first);
+		first = next;
+		count--;
+	}
 }
 
 void usb_transmit(int endpoint_number, transfer_t *transfer)
 {
-    if (endpoint_number < 2 || endpoint_number > NUM_ENDPOINTS) return;
-    endpoint_t *endpoint = endpoint_queue_head + endpoint_number * 2 + 1;
-    uint32_t mask = 1 << (endpoint_number + 16);
-    schedule_transfer(endpoint, mask, transfer);
+	if (endpoint_number < 2 || endpoint_number > NUM_ENDPOINTS) return;
+	endpoint_t *endpoint = endpoint_queue_head + endpoint_number * 2 + 1;
+	uint32_t mask = 1 << (endpoint_number + 16);
+	schedule_transfer(endpoint, mask, transfer);
 }
 
 void usb_receive(int endpoint_number, transfer_t *transfer)
 {
-    if (endpoint_number < 2 || endpoint_number > NUM_ENDPOINTS) return;
-    endpoint_t *endpoint = endpoint_queue_head + endpoint_number * 2;
-    uint32_t mask = 1 << endpoint_number;
-    schedule_transfer(endpoint, mask, transfer);
+	if (endpoint_number < 2 || endpoint_number > NUM_ENDPOINTS) return;
+	endpoint_t *endpoint = endpoint_queue_head + endpoint_number * 2;
+	uint32_t mask = 1 << endpoint_number;
+	schedule_transfer(endpoint, mask, transfer);
 }
 
 uint32_t usb_transfer_status(const transfer_t *transfer)
 {
-    return transfer->status;
+#if defined(USB_MTPDISK) || defined(USB_MTPDISK_SERIAL)
+	uint32_t status, cmd;
+	//int count=0;
+	cmd = USB1_USBCMD;
+	while (1) {
+		__disable_irq();
+		USB1_USBCMD = cmd | USB_USBCMD_ATDTW;
+		status = transfer->status;
+		cmd = USB1_USBCMD;
+		__enable_irq();
+		if (cmd & USB_USBCMD_ATDTW) return status;
+		//if (!(cmd & USB_USBCMD_ATDTW)) continue;
+		//if (status & 0x80) break; // for still active, only 1 reading needed
+		//if (++count > 1) break; // for completed, check 10 times
+	}
+#else
+	return transfer->status;
+#endif
 }
-
-// Config functions - minimal implementation for proxy
-void usb_config_rx(uint32_t ep, uint32_t packet_size, int do_zlp, void (*cb)(transfer_t *)) {}
-void usb_config_tx(uint32_t ep, uint32_t packet_size, int do_zlp, void (*cb)(transfer_t *)) {}
-void usb_config_rx_iso(uint32_t ep, uint32_t packet_size, int mult, void (*cb)(transfer_t *)) {}
-void usb_config_tx_iso(uint32_t ep, uint32_t packet_size, int mult, void (*cb)(transfer_t *)) {}
 
 #else // defined(NUM_ENDPOINTS)
 
-void usb_init(void) {}
+void usb_init(void)
+{
+}
 
 #endif // defined(NUM_ENDPOINTS)

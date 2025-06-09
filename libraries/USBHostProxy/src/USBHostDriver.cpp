@@ -572,8 +572,8 @@ void USBHostDriver::pauseDataTransfers() {
         if (debug_enabled) Serial4.println("I: Waiting for current transfer to complete...");
         uint32_t wait_start = millis();
         
-        // Wait up to 500ms for the transfer to complete naturally
-        while (pending_in_transfer && (millis() - wait_start) < 500) {
+        // Wait up to 100ms for the transfer to complete naturally
+        while (pending_in_transfer && (millis() - wait_start) < 100) {
             if (usbHost) {
                 usbHost->Task();
             }
@@ -584,16 +584,15 @@ void USBHostDriver::pauseDataTransfers() {
         if (!pending_in_transfer) {
             if (debug_enabled) Serial4.println("I: Current transfer completed");
         } else {
-            if (debug_enabled) Serial4.println("I: WARNING: Transfer still pending after extended wait");
+            if (debug_enabled) Serial4.println("I: Transfer still pending after wait");
             // Force clear the flag since we've waited long enough
             pending_in_transfer = false;
         }
     }
     
-    // Important: Add a significant delay to ensure the USB controller has 
-    // fully processed the last interrupt transfer and is ready for control transfers
+    // Small stabilization delay
     if (debug_enabled) Serial4.println("I: Stabilization delay...");
-    delay(100);  // 100ms stabilization delay
+    delay(50);  // Reduced from 100ms to 50ms
 }
 
 void USBHostDriver::resumeDataTransfers() { 
@@ -602,9 +601,12 @@ void USBHostDriver::resumeDataTransfers() {
     data_transfers_paused = false; 
     if (debug_enabled) Serial4.println("I: Data transfers resumed");
     
-    // IMPORTANT: Don't automatically queue a new transfer here
-    // Let the next processInData callback handle it
-    // This prevents issues with transfers being queued at the wrong time
+    // Immediately queue a new transfer if we have a pipe and device is ready
+    if (in_pipe && device_ready && !pending_in_transfer) {
+        pending_in_transfer = true;
+        queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
+        if (debug_enabled) Serial4.println("I: Queued new transfer after resume");
+    }
 }
 
 //=============================================================================
@@ -622,8 +624,6 @@ void USBHostDriver::in_callback(const Transfer_t *transfer) {
 
 void USBHostDriver::processInData(const Transfer_t *transfer) {
     bool debug_enabled = SunBoxStartup::isDebugEnabled();
-    
-    //if (debug_enabled) Serial4.println("I: processInData called!");
     
     // Clear pending flag first
     pending_in_transfer = false;
@@ -670,13 +670,49 @@ void USBHostDriver::processInData(const Transfer_t *transfer) {
         }
     }
     
-    // IMPORTANT: Check pause flag AFTER processing the data but BEFORE queuing next
-    // This ensures we don't miss the pause request
+    // DEBUG: Log transfer state when mouse data is received
+    static uint32_t data_packet_count = 0;
+    data_packet_count++;
+    
+    // Only log every 100 packets to reduce spam
+    if ((data_packet_count % 100) == 1) {
+        Serial4.print("D: Mouse packet #");
+        Serial4.print(data_packet_count);
+        Serial4.print(" len=");
+        Serial4.print(actual_len);
+        Serial4.print(" available=");
+        Serial4.print(new_data_available ? "true" : "false");
+        Serial4.print(" proxy_configured=");
+        Serial4.println("true");  // We'll update this when proxy is integrated
+    }
+    
+    // Always log the detailed state for the first few packets
+    if (data_packet_count <= 5) {
+        Serial4.print("D: processInData #");
+        Serial4.print(data_packet_count);
+        Serial4.print(" paused=");
+        Serial4.print(data_transfers_paused ? "true" : "false");
+        Serial4.print(" ready=");
+        Serial4.print(device_ready ? "true" : "false");
+        Serial4.print(" pipe=");
+        Serial4.println(in_pipe ? "valid" : "null");
+    }
+    
+    // IMPORTANT: Queue next transfer ONLY if not paused
     if (in_pipe && !data_transfers_paused && device_ready) {
         pending_in_transfer = true;
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
+        
+        if (data_packet_count <= 5) {
+            Serial4.println("D: Queued next transfer");
+        }
     } else if (data_transfers_paused) {
-        if (debug_enabled) Serial4.println("I: Not queuing next transfer - paused");
+        Serial4.println("D: Not queuing - transfers paused!");
+    } else {
+        Serial4.print("D: Not queuing - pipe=");
+        Serial4.print(in_pipe ? "valid" : "null");
+        Serial4.print(" ready=");
+        Serial4.println(device_ready ? "true" : "false");
     }
 }
 
