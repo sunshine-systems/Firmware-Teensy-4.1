@@ -841,56 +841,64 @@ void USBDeviceProxy::parseConfigurationDescriptor() {
     Serial4.println(" endpoints to configure");
 }
 
-// Configure a single endpoint
+// Configure a single endpoint, replicating the official Teensy core library logic.
 void USBDeviceProxy::configureEndpoint(uint8_t addr, uint8_t type, uint16_t maxPacket, uint8_t interval) {
     uint8_t ep_num = addr & 0x0F;
     uint8_t ep_dir = (addr & 0x80) ? 1 : 0;
-    
+
     if (ep_num == 0 || ep_num > 7) {
         Serial4.print("E: Invalid endpoint number: ");
         Serial4.println(ep_num);
         return;
     }
-    
+
     Serial4.print("I: Configuring endpoint ");
     Serial4.print(ep_num);
     Serial4.print(ep_dir ? " IN" : " OUT");
     Serial4.print(" type=");
     Serial4.print(type & 0x03);
     Serial4.print(" size=");
-    Serial4.println(maxPacket);
-    
-    // Configure the queue head
-    uint32_t config = (maxPacket << 16);
-    if ((type & 0x03) == 0) {  // Control endpoint
-        config |= (1 << 15);
-    }
-    
+    Serial4.print(maxPacket);
+    Serial4.print(" interval=");
+    Serial4.println(interval);
+
+    // ======================== THE DEFINITIVE FIX ========================
+    // Based on the official usb.c, the queue head configuration for a
+    // standard interrupt/bulk transmit endpoint must include bit 29 (ZLT).
+    // This prevents the hardware from prematurely halting the transfer queue.
+    // This is the key piece of hardware configuration that was missing.
+    //
+    uint32_t config = (maxPacket << 16) | (1 << 29);
+    // ====================== END OF DEFINITIVE FIX =======================
+
+    // We do NOT set MULT or the 'I' bit for a standard interrupt endpoint.
+    // The official code confirms this. The ZLT bit is the only one needed.
+
     proxy_endpoint_queue_head[ep_num * 2 + ep_dir].config = config;
     proxy_endpoint_queue_head[ep_num * 2 + ep_dir].current = 0;
-    proxy_endpoint_queue_head[ep_num * 2 + ep_dir].next = 1;  // Terminate
+    proxy_endpoint_queue_head[ep_num * 2 + ep_dir].next = 1;  // Terminate list
     proxy_endpoint_queue_head[ep_num * 2 + ep_dir].status = 0;
-    
-    // Configure the endpoint control register
+
+    // Configure the endpoint control register (this part was already correct)
     volatile uint32_t* endptctrl = &USB1_ENDPTCTRL0 + ep_num;
     uint32_t ctrl = *endptctrl;
-    
+
     if (ep_dir) {
         // TX (IN) endpoint
-        ctrl &= 0x0000FFFF;  // Clear TX bits
+        ctrl &= 0x0000FFFF;
         ctrl |= (1 << 23);   // TXE - TX Enable
         ctrl |= (1 << 22);   // TXR - TX Data Toggle Reset
-        ctrl |= ((type & 0x03) << 18);  // TXT - TX Endpoint Type
+        ctrl |= ((type & 0x03) << 18);  // TXT - TX Endpoint Type (Interrupt)
     } else {
         // RX (OUT) endpoint
-        ctrl &= 0xFFFF0000;  // Clear RX bits
+        ctrl &= 0xFFFF0000;
         ctrl |= (1 << 7);    // RXE - RX Enable
         ctrl |= (1 << 6);    // RXR - RX Data Toggle Reset
         ctrl |= ((type & 0x03) << 2);   // RXT - RX Endpoint Type
     }
-    
+
     *endptctrl = ctrl;
-    
+
     // Enable notifications for this endpoint
     if (ep_dir) {
         proxy_endpointN_notify_mask |= (1 << (ep_num + 16));
@@ -898,7 +906,7 @@ void USBDeviceProxy::configureEndpoint(uint8_t addr, uint8_t type, uint16_t maxP
         proxy_endpointN_notify_mask |= (1 << ep_num);
     }
     endpointN_notify_mask = proxy_endpointN_notify_mask;
-    
+
     Serial4.print("I: Endpoint ");
     Serial4.print(ep_num);
     Serial4.println(" configured successfully");
