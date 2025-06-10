@@ -52,7 +52,8 @@ USBDeviceProxy::USBDeviceProxy() :
     endpoint0_notify_mask(0),
     endpointN_notify_mask(0),
     num_endpoints(0),
-    hostDriver(nullptr) {
+    hostDriver(nullptr),
+    device_high_speed(true) {  // Default to high speed
     
     memset(&pending_setup, 0, sizeof(pending_setup));
     memset(endpoints, 0, sizeof(endpoints));
@@ -109,6 +110,19 @@ void USBDeviceProxy::begin() {
     // 6. Power up PHY (from usb.c line 606-607)
     USBPHY1_CTRL_CLR = USBPHY_CTRL_CLKGATE;
     USBPHY1_PWD = 0;
+    
+    // NEW: Configure USB speed based on detected device speed
+    if (!device_high_speed) {
+        // Force Full Speed (12 Mbps) operation
+        USBPHY1_CTRL_SET = USBPHY_CTRL_ENUTMILEVEL2 | USBPHY_CTRL_ENUTMILEVEL3;
+        USB1_PORTSC1 |= USB_PORTSC1_PFSC;
+        Serial4.println("S: USB Device configured for Full Speed (12 Mbps) - matching physical device");
+    } else {
+        // Allow High Speed (480 Mbps) operation (default)
+        USBPHY1_CTRL_CLR = USBPHY_CTRL_ENUTMILEVEL2 | USBPHY_CTRL_ENUTMILEVEL3;
+        USB1_PORTSC1 &= ~USB_PORTSC1_PFSC;
+        Serial4.println("S: USB Device configured for High Speed (480 Mbps) - matching physical device");
+    }
     
     // 7. Set device mode (from usb.c line 613)
     USB1_USBMODE = USB_USBMODE_CM(2) | USB_USBMODE_SLOM;
@@ -382,13 +396,24 @@ void USBDeviceProxy::handleUSBReset() {
 
 // Handle port change
 void USBDeviceProxy::handlePortChange() {
-    // Check speed
+    // Check negotiated speed
     if (USB1_PORTSC1 & USB_PORTSC1_HSP) {
-        Serial4.println("I: High-speed device operation");
+        Serial4.println("I: High-speed device operation detected");
         proxy_usb_high_speed = 1;
+        
+        // Verify this matches our configuration
+        if (!device_high_speed) {
+            Serial4.println("W: Speed mismatch - configured for Full Speed but negotiated High Speed!");
+            Serial4.println("W: Host may not support Full Speed on this port");
+        }
     } else {
-        Serial4.println("I: Full-speed device operation");
+        Serial4.println("I: Full-speed device operation detected");
         proxy_usb_high_speed = 0;
+        
+        // Verify this matches our configuration
+        if (device_high_speed) {
+            Serial4.println("I: Successfully forced Full Speed operation despite High Speed capability");
+        }
     }
 }
 

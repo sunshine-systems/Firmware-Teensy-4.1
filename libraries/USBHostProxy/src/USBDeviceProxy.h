@@ -10,6 +10,11 @@
 #define NUM_ENDPOINTS 7
 #endif
 
+// USB PHY control defines for speed configuration
+#define USBPHY_CTRL_ENUTMILEVEL2  ((uint32_t)(1<<14))
+#define USBPHY_CTRL_ENUTMILEVEL3  ((uint32_t)(1<<15))
+#define USB_PORTSC1_PFSC          ((uint32_t)(1<<24))
+
 // Forward declaration
 class USBHostDriver;
 
@@ -51,6 +56,9 @@ public:
     
     // Set the USB Host Driver reference
     void setUSBHostDriver(USBHostDriver* driver) { hostDriver = driver; }
+    
+    // Set device speed configuration (must be called before begin())
+    void setDeviceSpeed(bool high_speed) { device_high_speed = high_speed; }
     
     // Main polling function - MUST be called frequently from loop()
     // Target: >16kHz for 8kHz devices
@@ -146,6 +154,9 @@ private:
     
     // USB Host Driver reference
     USBHostDriver* hostDriver;
+    
+    // Device speed configuration
+    bool device_high_speed;  // true = 480 Mbps, false = 12 Mbps
     
     // Initialization functions
     bool initializePHY();

@@ -30,6 +30,9 @@ public:
     uint16_t getVendorID() const { return device ? device->idVendor : 0; }
     uint16_t getProductID() const { return device ? device->idProduct : 0; }
     
+    // Device speed detection
+    bool isDeviceHighSpeed() const;
+    
     // Control transfer API
     bool controlTransfer(uint8_t bmRequestType, uint8_t bRequest, 
                         uint16_t wValue, uint16_t wIndex, uint16_t wLength,
