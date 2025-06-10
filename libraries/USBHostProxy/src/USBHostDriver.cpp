@@ -821,20 +821,17 @@ uint8_t USBHostDriver::getEndpointInterval(uint8_t interface_index) const {
 // Device Speed Detection - NEW METHOD
 //=============================================================================
 
-bool USBHostDriver::isDeviceHighSpeed() const {
+// Get the actual device speed (Low/Full/High)
+uint8_t USBHostDriver::getDeviceSpeed() const {
     if (!device || !device_ready) {
         Serial4.println("S: No device connected, defaulting to High Speed");
-        return true; // Default to high speed if no device
+        return 2; // Default to high speed if no device
     }
     
-    // The USBHost_t36 library's Device_t structure contains speed information
-    // Check the device's speed field
-    // Speed values in USBHost_t36:
+    // Return the actual speed value
     // 0 = Low Speed (1.5 Mbps)
     // 1 = Full Speed (12 Mbps)  
     // 2 = High Speed (480 Mbps)
-    
-    bool is_high_speed = (device->speed == 2);
     
     Serial4.print("S: Device speed detected: ");
     switch (device->speed) {
@@ -854,7 +851,12 @@ bool USBHostDriver::isDeviceHighSpeed() const {
             break;
     }
     
-    return is_high_speed;
+    return device->speed;
+}
+
+// Keep the old method for compatibility but have it use the new one
+bool USBHostDriver::isDeviceHighSpeed() const {
+    return getDeviceSpeed() == 2;
 }
 
 //=============================================================================

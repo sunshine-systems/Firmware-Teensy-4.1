@@ -60,6 +60,9 @@ public:
     // Set device speed configuration (must be called before begin())
     void setDeviceSpeed(bool high_speed) { device_high_speed = high_speed; }
     
+    // Get the actual device speed from host driver
+    uint8_t getActualDeviceSpeed() const;
+    
     // Main polling function - MUST be called frequently from loop()
     // Target: >16kHz for 8kHz devices
     void poll();

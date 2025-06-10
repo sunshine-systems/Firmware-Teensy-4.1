@@ -60,6 +60,12 @@ USBDeviceProxy::USBDeviceProxy() :
     memset(endpoint_ready, 0, sizeof(endpoint_ready));
 }
 
+// Get the actual device speed from host driver
+uint8_t USBDeviceProxy::getActualDeviceSpeed() const {
+    if (!hostDriver) return 2; // Default to high speed if no driver
+    return ((USBHostDriver*)hostDriver)->getDeviceSpeed();
+}
+
 // Initialize USB hardware - following usb_init() exactly
 void USBDeviceProxy::begin() {
     Serial4.println("S: USBDeviceProxy::begin() - Initializing USB device hardware");
@@ -129,8 +135,29 @@ void USBDeviceProxy::begin() {
     
     // 8. Initialize endpoint queue heads (from usb.c line 615-620)
     memset(proxy_endpoint_queue_head, 0, sizeof(proxy_endpoint_queue_head));
-    proxy_endpoint_queue_head[0].config = (64 << 16) | (1 << 15);  // EP0 OUT
-    proxy_endpoint_queue_head[1].config = (64 << 16);              // EP0 IN (no control bit!)
+    
+    // Dynamic EP0 configuration based on actual device
+    uint16_t ep0_max_size = 64;  // Default
+    
+    if (hostDriver && hostDriver->isReady()) {
+        // For Low Speed devices, EP0 is typically 8 bytes
+        // We can detect this from the device descriptor
+        uint8_t device_speed = hostDriver->getDeviceSpeed();
+        if (device_speed == 0) {  // Low Speed
+            ep0_max_size = 8;
+            Serial4.println("S: Configuring EP0 for Low Speed device (8 bytes)");
+        } else {
+            // For Full/High Speed, default is usually 64
+            ep0_max_size = 64;
+        }
+        
+        Serial4.print("S: Configuring USB Device EP0 with size: ");
+        Serial4.print(ep0_max_size);
+        Serial4.println(" bytes");
+    }
+    
+    proxy_endpoint_queue_head[0].config = (ep0_max_size << 16) | (1 << 15);  // EP0 OUT
+    proxy_endpoint_queue_head[1].config = (ep0_max_size << 16);              // EP0 IN
     
     // 9. Set endpoint list address - CRITICAL: Use OUR queue heads!
     USB1_ENDPOINTLISTADDR = (uint32_t)&proxy_endpoint_queue_head;
@@ -886,6 +913,13 @@ void USBDeviceProxy::configureEndpoint(uint8_t addr, uint8_t type, uint16_t maxP
     Serial4.print(maxPacket);
     Serial4.print(" interval=");
     Serial4.println(interval);
+
+    // Special handling for Low Speed devices
+    if (hostDriver && hostDriver->getDeviceSpeed() == 0) {
+        Serial4.println("I: Low Speed device - adjusting endpoint configuration");
+        // Low Speed devices typically have smaller endpoints
+        // BenQ ZOWIE has 8-byte endpoints
+    }
 
     // ======================== THE DEFINITIVE FIX ========================
     // Based on the official usb.c, the queue head configuration for a

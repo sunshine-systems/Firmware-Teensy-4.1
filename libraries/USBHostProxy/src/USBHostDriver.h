@@ -32,6 +32,7 @@ public:
     
     // Device speed detection
     bool isDeviceHighSpeed() const;
+    uint8_t getDeviceSpeed() const;  // Returns 0=Low, 1=Full, 2=High
     
     // Control transfer API
     bool controlTransfer(uint8_t bmRequestType, uint8_t bRequest, 

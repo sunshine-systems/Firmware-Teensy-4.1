@@ -121,13 +121,28 @@ void loop() {
     if (!usbDeviceProxyStarted && usbMouseHandler.isReady()) {
         Serial4.println("\nS: Mouse is ready, starting USB Device Proxy now!");
         
-        // Detect the physical device's USB speed
-        bool device_is_high_speed = usbHostDriver.isDeviceHighSpeed();
-        Serial4.print("S: Physical device speed: ");
-        Serial4.println(device_is_high_speed ? "High Speed (480 Mbps)" : "Full Speed (12 Mbps)");
+        // Get the actual device speed (0=Low, 1=Full, 2=High)
+        uint8_t device_speed = usbHostDriver.getDeviceSpeed();
         
-        // Configure the proxy to match the physical device's speed
-        usbDeviceProxy.setDeviceSpeed(device_is_high_speed);
+        // Determine what speed to configure the proxy for
+        bool proxy_high_speed = false;
+        
+        if (device_speed == 0) {
+            // Low Speed device - force Full Speed on proxy side (backwards compatible)
+            Serial4.println("S: Low Speed device detected - forcing Full Speed proxy");
+            proxy_high_speed = false;
+        } else if (device_speed == 1) {
+            // Full Speed device
+            Serial4.println("S: Full Speed device detected");
+            proxy_high_speed = false;
+        } else {
+            // High Speed device
+            Serial4.println("S: High Speed device detected");
+            proxy_high_speed = true;
+        }
+        
+        // Configure the proxy to match (Low Speed devices run at Full Speed)
+        usbDeviceProxy.setDeviceSpeed(proxy_high_speed);
         
         // Set the USB Host Driver reference
         usbDeviceProxy.setUSBHostDriver(&usbHostDriver);
