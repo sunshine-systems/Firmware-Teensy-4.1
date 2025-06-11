@@ -140,20 +140,15 @@ void USBDeviceProxy::begin() {
     uint16_t ep0_max_size = 64;  // Default
     
     if (hostDriver && hostDriver->isReady()) {
-        // For Low Speed devices, EP0 is typically 8 bytes
-        // We can detect this from the device descriptor
-        uint8_t device_speed = hostDriver->getDeviceSpeed();
-        if (device_speed == 0) {  // Low Speed
-            ep0_max_size = 8;
-            Serial4.println("S: Configuring EP0 for Low Speed device (8 bytes)");
-        } else {
-            // For Full/High Speed, default is usually 64
-            ep0_max_size = 64;
-        }
+        // Get the EP0 size directly from the physical device's descriptor
+        // This is the CRITICAL FIX - use actual bMaxPacketSize0 instead of inferring from speed
+        ep0_max_size = hostDriver->getDeviceEP0Size();
         
-        Serial4.print("S: Configuring USB Device EP0 with size: ");
+        Serial4.print("S: Configuring USB Device EP0 with size from physical device: ");
         Serial4.print(ep0_max_size);
         Serial4.println(" bytes");
+    } else {
+        Serial4.println("S: No host driver ready, using default EP0 size of 64 bytes");
     }
     
     proxy_endpoint_queue_head[0].config = (ep0_max_size << 16) | (1 << 15);  // EP0 OUT

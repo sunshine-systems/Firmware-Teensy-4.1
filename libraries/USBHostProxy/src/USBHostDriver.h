@@ -33,6 +33,7 @@ public:
     // Device speed detection
     bool isDeviceHighSpeed() const;
     uint8_t getDeviceSpeed() const;  // Returns 0=Low, 1=Full, 2=High
+    uint8_t getDeviceEP0Size() const;  // NEW: Get actual EP0 max packet size
     
     // Control transfer API
     bool controlTransfer(uint8_t bmRequestType, uint8_t bRequest, 

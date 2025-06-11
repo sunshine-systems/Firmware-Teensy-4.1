@@ -821,6 +821,53 @@ uint8_t USBHostDriver::getEndpointInterval(uint8_t interface_index) const {
 // Device Speed Detection - NEW METHOD
 //=============================================================================
 
+// Get the actual EP0 max packet size from the device descriptor
+uint8_t USBHostDriver::getDeviceEP0Size() const {
+    if (!device || !device_ready) {
+        Serial4.println("S: No device connected, defaulting EP0 size to 64 bytes");
+        return 64; // Default to 64 if no device
+    }
+    
+    // We need to get this from the device descriptor
+    // The bMaxPacketSize0 is at offset 7 in the device descriptor
+    uint8_t descriptor[18];
+    uint16_t actual_len = 0;
+    
+    // Request device descriptor from the device
+    bool success = const_cast<USBHostDriver*>(this)->controlTransfer(
+        0x80,  // bmRequestType: Device-to-host, standard, device
+        0x06,  // bRequest: GET_DESCRIPTOR
+        0x0100,  // wValue: Device descriptor (type 1, index 0)
+        0,     // wIndex
+        18,    // wLength: Standard device descriptor length
+        descriptor,
+        &actual_len,
+        100    // timeout
+    );
+    
+    if (!success || actual_len < 8) {
+        Serial4.println("W: Failed to get device descriptor for EP0 size - defaulting to 64");
+        return 64;
+    }
+    
+    // Extract bMaxPacketSize0 from offset 7
+    uint8_t size = descriptor[7];
+    
+    // Sanity check - EP0 can only be 8, 16, 32, or 64 bytes per USB spec
+    if (size != 8 && size != 16 && size != 32 && size != 64) {
+        Serial4.print("W: Invalid EP0 size ");
+        Serial4.print(size);
+        Serial4.println(" bytes from device - defaulting to 64");
+        return 64;
+    }
+    
+    Serial4.print("S: Device EP0 max packet size: ");
+    Serial4.print(size);
+    Serial4.println(" bytes");
+    
+    return size;
+}
+
 // Get the actual device speed (Low/Full/High)
 uint8_t USBHostDriver::getDeviceSpeed() const {
     if (!device || !device_ready) {
