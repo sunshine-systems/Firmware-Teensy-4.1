@@ -828,30 +828,34 @@ uint8_t USBHostDriver::getDeviceSpeed() const {
         return 2; // Default to high speed if no device
     }
     
-    // Return the actual speed value
-    // 0 = Low Speed (1.5 Mbps)
-    // 1 = Full Speed (12 Mbps)  
-    // 2 = High Speed (480 Mbps)
+    // CRITICAL: Convert USBHost_t36 encoding to standard encoding
+    // Library: 0=Full, 1=Low, 2=High
+    // We need: 0=Low, 1=Full, 2=High
     
-    Serial4.print("S: Device speed detected: ");
-    switch (device->speed) {
-        case 0:
-            Serial4.println("Low Speed (1.5 Mbps)");
+    uint8_t lib_speed = device->speed;
+    uint8_t standard_speed;
+    
+    switch (lib_speed) {
+        case 0:  // Library says Full Speed (12 Mbps)
+            standard_speed = 1;
+            Serial4.println("S: Full Speed (12 Mbps)");
             break;
-        case 1:
-            Serial4.println("Full Speed (12 Mbps)");
+        case 1:  // Library says Low Speed (1.5 Mbps)
+            standard_speed = 0;
+            Serial4.println("S: Low Speed (1.5 Mbps)");
             break;
-        case 2:
-            Serial4.println("High Speed (480 Mbps)");
+        case 2:  // Library says High Speed (480 Mbps)
+            standard_speed = 2;
+            Serial4.println("S: High Speed (480 Mbps)");
             break;
         default:
-            Serial4.print("Unknown (");
-            Serial4.print(device->speed);
-            Serial4.println(")");
+            Serial4.print("S: Unknown speed encoding: ");
+            Serial4.println(lib_speed);
+            standard_speed = 1; // Default to Full Speed
             break;
     }
     
-    return device->speed;
+    return standard_speed;
 }
 
 // Keep the old method for compatibility but have it use the new one
