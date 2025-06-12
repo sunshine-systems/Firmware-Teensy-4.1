@@ -69,6 +69,10 @@ public:
     // Transfer control
     void pauseDataTransfers();
     void resumeDataTransfers();
+
+    uint8_t getConfiguredMouseEndpoint() const { 
+        return in_endpoint_addr | 0x80;  // Add direction bit
+    }
     
 protected:
     // USBDriver interface implementation

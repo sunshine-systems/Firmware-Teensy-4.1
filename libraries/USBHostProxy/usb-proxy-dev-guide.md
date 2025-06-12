@@ -13,13 +13,15 @@ A **fully functional HID input device proxy** for Teensy 4.1 that:
 - ✅ **Automatically matches the USB speed of the connected device**
 - ✅ **NEW**: Supports Low Speed (1.5 Mbps) devices with automatic Full Speed conversion
 - ✅ **NEW**: Handles non-compliant devices through intelligent request filtering
+- ✅ **NEW**: Dynamic endpoint mapping with EEPROM override support
 
-### Status: **FULLY OPERATIONAL (8kHz VERIFIED + UNIVERSAL SPEED SUPPORT + NON-COMPLIANT DEVICE HANDLING)** 🎉
+### Status: **FULLY OPERATIONAL (Universal Device Support + Dynamic Endpoint Mapping)** 🎉
 The proxy successfully emulates the physical device with:
 - **8kHz polling fully functional** for high-performance gaming mice
 - **Universal speed support** - correctly handles Low Speed (1.5 Mbps), Full Speed (12 Mbps), and High Speed (480 Mbps) devices
 - **Automatic speed adaptation** - Low Speed devices are transparently proxied at Full Speed for compatibility
 - **Non-compliant device support** - Request filtering handles devices that don't fully implement the USB specification
+- **Dynamic endpoint mapping** - Automatically detects and routes data to the correct endpoint based on EEPROM overrides
 - All HID data forwarded correctly without stalls
 - 100% transparent to the host PC
 
@@ -48,6 +50,7 @@ Data Flow:
 2. **USBDeviceProxy** - Custom polling-based USB Device Stack that presents the proxy device to the PC
 3. **HIDMouseDescriptorHandler** - Helper for parsing HID report descriptors
 4. **Main Loop** - High-frequency orchestration (~200-400kHz)
+5. **Dynamic Endpoint Mapper** - Automatically routes data based on device configuration and EEPROM overrides
 
 ---
 
@@ -68,6 +71,11 @@ Data Flow:
 - The proxy detects whether the physical device operates at Low Speed, Full Speed, or High Speed
 - Low Speed devices are automatically proxied at Full Speed (backwards compatible per USB spec)
 - EP0 packet size is dynamically configured (8 bytes for Low Speed, 64 bytes for Full/High Speed)
+
+#### 5. **Dynamic Endpoint Mapping**
+- The proxy automatically detects which endpoint is being used for mouse data
+- Supports EEPROM overrides for forcing specific interface/endpoint selection
+- Handles complex composite devices with multiple HID interfaces
 
 ### Key Solutions Implemented
 
@@ -161,6 +169,35 @@ if (pending_setup.bmRequestType == 0x21 && pending_setup.bRequest == 0x0A) {
 }
 ```
 
+#### 6. **Dynamic Endpoint Mapping: The EEPROM Override Solution**
+Complex composite devices (like the Logitech G307) have multiple HID interfaces, and the proxy needs to know which endpoint carries the mouse data.
+
+**The Problem:** Hardcoded endpoint mappings fail for devices with non-standard configurations where the mouse interface isn't on the first endpoint.
+
+**The Solution:** Dynamic endpoint mapping that:
+1. Queries the host driver to determine which endpoint it's using (based on EEPROM overrides)
+2. Builds a mapping table dynamically based on the device's actual configuration
+3. Routes mouse data to the correct endpoint on the proxy side
+
+```cpp
+void buildEndpointMapping() {
+    // Get the endpoint being used by the host driver (respects EEPROM overrides)
+    uint8_t mouse_endpoint_addr = usbHostDriver.getConfiguredMouseEndpoint();
+    uint8_t mouse_ep_num = mouse_endpoint_addr & 0x0F;
+    
+    // Build mapping based on actual interfaces
+    for (uint8_t i = 0; i < num_interfaces; i++) {
+        uint8_t ep_num = usbHostDriver.getEndpointAddress(i);
+        
+        // Check if this endpoint matches what the host driver is using
+        if (ep_num == mouse_ep_num) {
+            endpoint_map[i].is_mouse = true;
+            Serial4.println(" identified as mouse - MATCHES HOST DRIVER");
+        }
+    }
+}
+```
+
 This proactive filtering approach:
 - Prevents the physical device from entering a STALL state
 - Satisfies the host PC's enumeration requirements
@@ -187,10 +224,11 @@ The `configureEndpoint` function correctly sets:
 1. Physical mouse sends HID report
 2. `USBHostDriver::processInData()` receives the data
 3. `mouseDataCallback()` is called
-4. `sendDataOnEndpoint()` queues the data to the hardware endpoint
-5. Host PC polls at the configured rate (up to 8kHz)
-6. Teensy hardware responds and signals completion
-7. `pollDataEndpoints()` marks endpoint ready for next packet
+4. Dynamic endpoint mapping determines correct proxy endpoint
+5. `sendDataOnEndpoint()` queues the data to the hardware endpoint
+6. Host PC polls at the configured rate (up to 8kHz)
+7. Teensy hardware responds and signals completion
+8. `pollDataEndpoints()` marks endpoint ready for next packet
 
 ---
 
@@ -209,7 +247,14 @@ The `configureEndpoint` function correctly sets:
 0x20001000: Data buffers
 ```
 
-### Endpoint Mapping (Example Devices)
+### Endpoint Mapping Examples
+
+#### Logitech G307 (Full Speed, EEPROM Override)
+- **EP0**: Control (8 bytes)
+- **EP1**: HID Keyboard IN (64 bytes, 1ms interval) - Interface 0
+- **EP2**: HID Mouse IN (64 bytes, 1ms interval) - Interface 1 ← EEPROM forces this
+- **EP3**: HID Other IN (64 bytes, 1ms interval) - Interface 2
+
 #### Model O Wireless (Full Speed)
 - **EP0**: Control (64 bytes)
 - **EP1**: HID Mouse IN (64 bytes, 1ms interval)
@@ -237,6 +282,7 @@ The `configureEndpoint` function correctly sets:
 3. **Speed detection and matching**: Makes the proxy truly transparent for all device speeds
 4. **Dynamic EP0 configuration**: Handles varying packet sizes correctly
 5. **Meticulous debugging**: Essential for hardware state issues
+6. **Dynamic endpoint mapping**: Handles complex composite devices with EEPROM overrides
 
 ### Key Insights
 1. **The ZLT Bit**: The non-intuitive **ZLT bit (bit 29)** is critical for preventing endpoint stalls
@@ -245,6 +291,8 @@ The `configureEndpoint` function correctly sets:
 4. **PHY Configuration Timing**: Speed must be configured BEFORE starting the USB controller
 5. **Reference Implementation**: The official `usb.c` is the ultimate source of truth
 6. **Non-Compliant Devices**: Many real-world devices don't fully implement the USB spec - proactive request filtering is essential for compatibility
+7. **Endpoint Address Handling**: Be careful with endpoint addresses - some APIs include the direction bit (0x80), others don't
+8. **EEPROM Overrides**: Essential for devices where automatic interface detection isn't sufficient
 
 ### Debugging Indicators
 - **"One packet then stall"**: Missing ZLT bit in endpoint configuration
@@ -252,6 +300,7 @@ The `configureEndpoint` function correctly sets:
 - **Enumeration failures**: Check EP0 packet size for Low Speed devices
 - **Endpoint not ready**: Hardware completion signal not generated
 - **Control transfer STALL followed by timeout**: Device doesn't support certain optional requests - implement request filtering
+- **Wrong endpoint receiving data**: Endpoint mapping doesn't match actual device configuration - check EEPROM overrides
 
 ---
 
@@ -284,6 +333,12 @@ The `configureEndpoint` function correctly sets:
 - Added support for Device Qualifier and SET_IDLE handling
 - Successfully tested with Logitech G307 and similar devices
 
+### Phase 6: Dynamic Endpoint Mapping (Completed)
+- Implemented dynamic endpoint detection based on host driver configuration
+- Added support for EEPROM interface overrides
+- Fixed endpoint address comparison issues
+- Successfully tested with complex composite devices
+
 ---
 
 ## Verified Devices
@@ -302,8 +357,11 @@ The `configureEndpoint` function correctly sets:
   - Successfully proxied at Full Speed
 
 - **Logitech G307**
+  - VID: 0x046D, PID: 0xC53F
   - Non-compliant firmware (STALLs on Device Qualifier and SET_IDLE)
-  - Successfully proxied with request filtering
+  - 3 HID interfaces (Keyboard, Mouse, Other)
+  - Requires EEPROM override to select interface 1 (mouse)
+  - Successfully proxied with request filtering and dynamic endpoint mapping
   - Demonstrates robust handling of real-world device quirks
 
 ### High Speed (480 Mbps)
@@ -325,6 +383,7 @@ The `configureEndpoint` function correctly sets:
 2. **OUT Endpoint Support**: For devices requiring bidirectional communication
 3. **Configuration UI**: Web interface for advanced settings
 4. **Hub Support**: Handle multiple devices simultaneously
+5. **Automatic EEPROM Override Detection**: Automatically determine optimal interface selection
 
 ### Known Limitations
 1. **OUT endpoints** not implemented (not needed for most mice)
@@ -341,10 +400,11 @@ The USB proxy successfully creates a transparent, high-performance bridge betwee
 - ✅ Transparently converts Low Speed devices to Full Speed for compatibility
 - ✅ Dynamically configures EP0 size based on device speed
 - ✅ Handles non-compliant devices through intelligent request filtering
+- ✅ Dynamically maps endpoints based on device configuration and EEPROM overrides
 - ✅ Provides 100% transparent device emulation
 - ✅ Maintains sub-millisecond latency
 
-The project demonstrates successful implementation of a custom USB device stack with proper hardware configuration for high-frequency polling, dynamic speed matching, universal device support, and robust handling of real-world device quirks.
+The project demonstrates successful implementation of a custom USB device stack with proper hardware configuration for high-frequency polling, dynamic speed matching, universal device support, robust handling of real-world device quirks, and intelligent endpoint routing.
 
 ## References
 
