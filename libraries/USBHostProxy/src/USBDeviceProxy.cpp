@@ -439,7 +439,6 @@ void USBDeviceProxy::handlePortChange() {
     }
 }
 
-// Handle setup packet
 void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
     Serial4.print("S: SETUP: bmRequestType=0x");
     Serial4.print(pending_setup.bmRequestType, HEX);
@@ -458,7 +457,30 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
         USB1_ENDPTCTRL0 = 0x00010001;  // STALL both directions
         return;
     }
-    
+
+    // ============================ NEW REQUEST FILTERING LOGIC ============================
+    // Some devices (like Logitech) STALL on standard-but-optional requests.
+    // Instead of forwarding and recovering from the stall, we intercept and handle them here.
+
+    // Filter 1: GET_DESCRIPTOR for Device Qualifier (wValue = 0x0600)
+    // Full-speed devices are not required to have this. We can just ACK (stall).
+    if (pending_setup.bmRequestType == 0x80 && pending_setup.bRequest == 0x06 && pending_setup.wValue == 0x0600) {
+        Serial4.println("I: Filtering GET_DESCRIPTOR(DeviceQualifier) request. Stalling.");
+        USB1_ENDPTCTRL0 = 0x00010001; // STALL both directions
+        control_stage = CONTROL_IDLE;
+        return;
+    }
+
+    // Filter 2: SET_IDLE (bRequest = 0x0A)
+    // This HID class request is also optional and causes stalls on some devices.
+    if (pending_setup.bmRequestType == 0x21 && pending_setup.bRequest == 0x0A) {
+        Serial4.println("I: Filtering SET_IDLE request. Acknowledging and ignoring.");
+        receiveData(NULL, 0); // Send ZLP to acknowledge
+        control_stage = CONTROL_IDLE;
+        return;
+    }
+    // ========================== END OF NEW REQUEST FILTERING LOGIC =========================
+
     // Handle specific requests that need special treatment
     if (pending_setup.bmRequestType == 0x00 && pending_setup.bRequest == 0x05) {
         // SET_ADDRESS - must handle locally with proper timing

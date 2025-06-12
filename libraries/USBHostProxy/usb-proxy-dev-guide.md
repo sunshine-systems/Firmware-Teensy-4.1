@@ -12,12 +12,14 @@ A **fully functional HID input device proxy** for Teensy 4.1 that:
 - ✅ Appears 100% identical to the physical device, including its polling rate
 - ✅ **Automatically matches the USB speed of the connected device**
 - ✅ **NEW**: Supports Low Speed (1.5 Mbps) devices with automatic Full Speed conversion
+- ✅ **NEW**: Handles non-compliant devices through intelligent request filtering
 
-### Status: **FULLY OPERATIONAL (8kHz VERIFIED + UNIVERSAL SPEED SUPPORT)** 🎉
+### Status: **FULLY OPERATIONAL (8kHz VERIFIED + UNIVERSAL SPEED SUPPORT + NON-COMPLIANT DEVICE HANDLING)** 🎉
 The proxy successfully emulates the physical device with:
 - **8kHz polling fully functional** for high-performance gaming mice
 - **Universal speed support** - correctly handles Low Speed (1.5 Mbps), Full Speed (12 Mbps), and High Speed (480 Mbps) devices
 - **Automatic speed adaptation** - Low Speed devices are transparently proxied at Full Speed for compatibility
+- **Non-compliant device support** - Request filtering handles devices that don't fully implement the USB specification
 - All HID data forwarded correctly without stalls
 - 100% transparent to the host PC
 
@@ -131,6 +133,39 @@ if (device_speed == 0) {
 }
 ```
 
+#### 5. **Non-Compliant Device Support: Request Filtering**
+Many real-world USB devices don't fully comply with the USB specification, causing enumeration failures when certain optional requests cause the device to STALL its control endpoint.
+
+**The Problem:** Devices like the Logitech G307 would STALL on certain standard requests (e.g., GET_DESCRIPTOR for Device Qualifier, SET_IDLE for HID), causing subsequent control transfers to time out and triggering endless USB reset loops.
+
+**The Solution:** The proxy now intercepts and handles problematic requests locally, preventing them from reaching the physical device:
+
+```cpp
+// In handleSetupPacket() - filter problematic requests
+
+// GET_DESCRIPTOR (Device Qualifier) - Full Speed devices can legitimately STALL this
+if (pending_setup.bmRequestType == 0x80 && pending_setup.bRequest == 0x06 && 
+    (pending_setup.wValue >> 8) == 0x06) {
+    // Device Qualifier descriptor - STALL immediately for Full Speed devices
+    USB1_ENDPTCTRL0 = 0x00010001;  // STALL both directions
+    control_stage = CONTROL_IDLE;
+    return;
+}
+
+// SET_IDLE - Some HID devices don't support this optional request
+if (pending_setup.bmRequestType == 0x21 && pending_setup.bRequest == 0x0A) {
+    // HID SET_IDLE - just ACK it without forwarding
+    receiveData(NULL, 0);  // Send ZLP ACK
+    control_stage = CONTROL_IDLE;
+    return;
+}
+```
+
+This proactive filtering approach:
+- Prevents the physical device from entering a STALL state
+- Satisfies the host PC's enumeration requirements
+- Enables successful enumeration of non-compliant devices
+
 ---
 
 ## USB Protocol Implementation
@@ -209,12 +244,14 @@ The `configureEndpoint` function correctly sets:
 3. **EP0 Size Varies**: Low Speed devices typically use 8-byte EP0, not 64 bytes
 4. **PHY Configuration Timing**: Speed must be configured BEFORE starting the USB controller
 5. **Reference Implementation**: The official `usb.c` is the ultimate source of truth
+6. **Non-Compliant Devices**: Many real-world devices don't fully implement the USB spec - proactive request filtering is essential for compatibility
 
 ### Debugging Indicators
 - **"One packet then stall"**: Missing ZLT bit in endpoint configuration
 - **Speed mismatch in Device Viewer**: PHY not configured for correct speed
 - **Enumeration failures**: Check EP0 packet size for Low Speed devices
 - **Endpoint not ready**: Hardware completion signal not generated
+- **Control transfer STALL followed by timeout**: Device doesn't support certain optional requests - implement request filtering
 
 ---
 
@@ -241,6 +278,12 @@ The `configureEndpoint` function correctly sets:
 - Dynamic EP0 size configuration
 - Tested with Low Speed devices
 
+### Phase 5: Non-Compliant Device Support (Completed)
+- Identified enumeration failures with certain devices
+- Implemented request filtering for problematic requests
+- Added support for Device Qualifier and SET_IDLE handling
+- Successfully tested with Logitech G307 and similar devices
+
 ---
 
 ## Verified Devices
@@ -257,6 +300,11 @@ The `configureEndpoint` function correctly sets:
   - VID: 0x258A, PID: 0x2022
   - 3 HID interfaces, 64-byte endpoints
   - Successfully proxied at Full Speed
+
+- **Logitech G307**
+  - Non-compliant firmware (STALLs on Device Qualifier and SET_IDLE)
+  - Successfully proxied with request filtering
+  - Demonstrates robust handling of real-world device quirks
 
 ### High Speed (480 Mbps)
 - **Pwnage Wireless Gaming Mouse V3**
@@ -292,10 +340,11 @@ The USB proxy successfully creates a transparent, high-performance bridge betwee
 - ✅ Automatically detects and adapts to all USB speeds (Low/Full/High)
 - ✅ Transparently converts Low Speed devices to Full Speed for compatibility
 - ✅ Dynamically configures EP0 size based on device speed
+- ✅ Handles non-compliant devices through intelligent request filtering
 - ✅ Provides 100% transparent device emulation
 - ✅ Maintains sub-millisecond latency
 
-The project demonstrates successful implementation of a custom USB device stack with proper hardware configuration for high-frequency polling, dynamic speed matching, and universal device support.
+The project demonstrates successful implementation of a custom USB device stack with proper hardware configuration for high-frequency polling, dynamic speed matching, universal device support, and robust handling of real-world device quirks.
 
 ## References
 
