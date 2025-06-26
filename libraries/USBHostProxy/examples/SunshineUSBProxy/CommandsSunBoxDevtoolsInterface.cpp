@@ -4,6 +4,10 @@
 #include "SunBoxEEPROM.h"
 #include "SunBoxStartup.h"
 
+// Global state for vendor monitoring
+static bool vendorMonitorEnabled = false;
+static uint32_t vendorTransferCount = 0;
+
 CommandsSunBoxDevtoolsInterface::CommandsSunBoxDevtoolsInterface()
     : usbHostDriver(nullptr), hidHandler(nullptr), debugEnabled(false) {
 }
@@ -42,6 +46,15 @@ void CommandsSunBoxDevtoolsInterface::handleCommand(const String& cmd) {
     else if (baseCommand == "claimclear") {
         handleClaimClear();
     }
+    else if (baseCommand == "vendortest") {
+        handleVendorTest();
+    }
+    else if (baseCommand == "vendorsend") {
+        handleVendorSend();
+    }
+    else if (baseCommand == "monitorvendor") {
+        handleMonitorVendor();
+    }
     else {
         Serial4.print("S: Unknown command: ");
         Serial4.println(baseCommand);
@@ -58,6 +71,9 @@ void CommandsSunBoxDevtoolsInterface::handleHelp() {
     Serial4.println("I: claimcorrection vid,pid,interface,endpoint - Force specific interface");
     Serial4.println("I:                Example: claimcorrection 046d,c53f,1,82");
     Serial4.println("I: claimclear     - Clear forced interface configuration");
+    Serial4.println("I: vendortest     - Test vendor control transfers (Pwnage mouse)");
+    Serial4.println("I: vendorsend     - Send single vendor SET_REPORT");
+    Serial4.println("I: monitorvendor  - Toggle vendor transfer monitoring");
     Serial4.println("I: =================================");
 }
 
@@ -92,6 +108,16 @@ void CommandsSunBoxDevtoolsInterface::handleStatus() {
     Serial4.print("I: Debug Mode: ");
     Serial4.print(debugEnabled ? "ON" : "OFF");
     Serial4.println(" (persistent)");
+    
+    // Vendor monitoring
+    Serial4.print("I: Vendor Monitor: ");
+    Serial4.print(vendorMonitorEnabled ? "ON" : "OFF");
+    if (vendorTransferCount > 0) {
+        Serial4.print(" (");
+        Serial4.print(vendorTransferCount);
+        Serial4.print(" transfers)");
+    }
+    Serial4.println();
     
     // Force claim config
     ClaimConfig config;
@@ -185,4 +211,144 @@ void CommandsSunBoxDevtoolsInterface::handleClaimCorrection(const String& args) 
 void CommandsSunBoxDevtoolsInterface::handleClaimClear() {
     sunboxEEPROM.clearClaimConfig();
     Serial4.println("S: Claim correction configuration cleared");
+}
+
+void CommandsSunBoxDevtoolsInterface::handleVendorTest() {
+    if (!usbHostDriver || !usbHostDriver->isReady()) {
+        Serial4.println("E: No device connected!");
+        return;
+    }
+    
+    Serial4.println("\nS: === Vendor Control Transfer Test ===");
+    Serial4.println("S: Testing Pwnage mouse vendor commands...");
+    
+    // Test data from the logs - this is what the software sends
+    uint8_t testData[] = {
+        0x00, 0x00, 0x02, 0x06, 0x00, 0x81, 0x00, 0x00, 
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    
+    // First, let's send a SET_REPORT through the host driver
+    Serial4.println("\nS: Test 1: Sending SET_REPORT via host driver...");
+    
+    // Pause any data transfers
+    usbHostDriver->pauseDataTransfers();
+    
+    // Try the control transfer
+    uint16_t actualLen = 0;
+    bool success = usbHostDriver->controlTransfer(
+        0x21,   // bmRequestType: Host-to-Device, Class, Interface
+        0x09,   // bRequest: SET_REPORT
+        0x0300, // wValue: Report Type (3=Feature) and Report ID (0)
+        0x0002, // wIndex: Interface 2
+        64,     // wLength: 64 bytes
+        testData,
+        &actualLen,
+        1000    // 1 second timeout
+    );
+    
+    if (success) {
+        Serial4.print("S: SET_REPORT successful! Device accepted ");
+        Serial4.print(actualLen);
+        Serial4.println(" bytes");
+    } else {
+        Serial4.println("E: SET_REPORT failed!");
+    }
+    
+    // Now try a GET_REPORT to see what the device responds with
+    Serial4.println("\nS: Test 2: Sending GET_REPORT via host driver...");
+    
+    uint8_t responseBuffer[64];
+    memset(responseBuffer, 0, sizeof(responseBuffer));
+    
+    success = usbHostDriver->controlTransfer(
+        0xA1,   // bmRequestType: Device-to-Host, Class, Interface
+        0x01,   // bRequest: GET_REPORT
+        0x0300, // wValue: Report Type (3=Feature) and Report ID (0)
+        0x0002, // wIndex: Interface 2
+        64,     // wLength: 64 bytes
+        responseBuffer,
+        &actualLen,
+        1000    // 1 second timeout
+    );
+    
+    if (success && actualLen > 0) {
+        Serial4.print("S: GET_REPORT successful! Received ");
+        Serial4.print(actualLen);
+        Serial4.println(" bytes:");
+        
+        Serial4.print("S: Response: ");
+        for (uint16_t i = 0; i < actualLen && i < 16; i++) {
+            if (responseBuffer[i] < 0x10) Serial4.print("0");
+            Serial4.print(responseBuffer[i], HEX);
+            Serial4.print(" ");
+        }
+        if (actualLen > 16) Serial4.print("...");
+        Serial4.println();
+    } else {
+        Serial4.println("E: GET_REPORT failed or returned no data!");
+    }
+    
+    // Resume data transfers
+    usbHostDriver->resumeDataTransfers();
+    
+    Serial4.println("\nS: === Vendor Test Complete ===");
+}
+
+void CommandsSunBoxDevtoolsInterface::handleVendorSend() {
+    if (!usbHostDriver || !usbHostDriver->isReady()) {
+        Serial4.println("E: No device connected!");
+        return;
+    }
+    
+    Serial4.println("\nS: Sending single vendor SET_REPORT...");
+    
+    // Simple test data
+    uint8_t testData[64] = {0};
+    testData[0] = 0x00;
+    testData[1] = 0x00;
+    testData[2] = 0x02;
+    testData[3] = 0x01;
+    testData[4] = 0x00;
+    testData[5] = 0x85;
+    
+    // Pause data transfers
+    usbHostDriver->pauseDataTransfers();
+    
+    uint16_t actualLen = 0;
+    bool success = usbHostDriver->controlTransfer(
+        0x21,   // bmRequestType
+        0x09,   // SET_REPORT
+        0x0300, // wValue
+        0x0002, // Interface 2
+        64,     // wLength
+        testData,
+        &actualLen,
+        500
+    );
+    
+    Serial4.print("S: Result: ");
+    Serial4.println(success ? "SUCCESS" : "FAILED");
+    
+    // Resume data transfers
+    usbHostDriver->resumeDataTransfers();
+}
+
+void CommandsSunBoxDevtoolsInterface::handleMonitorVendor() {
+    vendorMonitorEnabled = !vendorMonitorEnabled;
+    
+    Serial4.print("S: Vendor transfer monitoring ");
+    Serial4.println(vendorMonitorEnabled ? "ENABLED" : "DISABLED");
+    
+    if (!vendorMonitorEnabled) {
+        Serial4.print("S: Total transfers monitored: ");
+        Serial4.println(vendorTransferCount);
+        vendorTransferCount = 0;
+    }
 }

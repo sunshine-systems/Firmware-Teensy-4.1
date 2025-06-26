@@ -55,6 +55,26 @@ struct EndpointMapping {
 static EndpointMapping endpoint_map[8];
 static uint8_t endpoint_map_count = 0;
 
+// Vendor command simulation
+struct VendorCommand {
+    uint32_t nextTime;
+    uint8_t sequence;
+    bool active;
+};
+static VendorCommand vendorSim = {0, 0, false};
+
+// =============================================================================
+// Function Declarations
+// =============================================================================
+
+void printBanner();
+void updateUSBDeviceStatus();
+void updateStatusLED();
+void mouseDataCallback(const uint8_t* data, uint32_t length);
+void buildEndpointMapping();
+void forwardMouseData();
+void simulateVendorCommands();
+
 // =============================================================================
 // Setup
 // =============================================================================
@@ -180,6 +200,9 @@ void loop() {
         syntheticOutput.process();
     }
     
+    // Simulate vendor commands if enabled
+    simulateVendorCommands();
+    
     // Update status based on USB device proxy state
     if (usbDeviceProxyStarted) {
         updateUSBDeviceStatus();
@@ -187,6 +210,88 @@ void loop() {
     
     // Update status LED
     updateStatusLED();
+}
+
+// =============================================================================
+// Vendor Command Simulation
+// =============================================================================
+
+void simulateVendorCommands() {
+    if (!vendorSim.active) return;
+    if (!usbHostDriver.isReady()) return;
+    if (millis() < vendorSim.nextTime) return;
+    
+    // Simulate the vendor command sequence from the logs
+    static const uint8_t commands[][6] = {
+        {0x00, 0x00, 0x00, 0x06, 0x00, 0x81},  // First command
+        {0x00, 0x00, 0x02, 0x01, 0x00, 0x85},  // Second command
+        {0x00, 0x00, 0x02, 0x02, 0x01, 0x80},  // Third command
+        {0x00, 0x00, 0x02, 0x1A, 0x01, 0x81},  // Fourth command
+        {0x00, 0x00, 0x02, 0x02, 0x00, 0x83},  // Fifth command
+        {0x00, 0x00, 0x02, 0x03, 0x00, 0x87},  // Sixth command
+        {0x00, 0x00, 0x02, 0x06, 0x00, 0x81},  // Seventh command
+        {0x00, 0x00, 0x02, 0x13, 0x02, 0x81},  // Eighth command
+    };
+    
+    if (vendorSim.sequence >= sizeof(commands)/sizeof(commands[0])) {
+        vendorSim.sequence = 0;
+    }
+    
+    // Build the 64-byte command
+    uint8_t cmdData[64] = {0};
+    memcpy(cmdData, commands[vendorSim.sequence], 6);
+    
+    Serial4.print("\nS: Vendor Sim: Sending command ");
+    Serial4.print(vendorSim.sequence + 1);
+    Serial4.print("/");
+    Serial4.print(sizeof(commands)/sizeof(commands[0]));
+    Serial4.print(": ");
+    for (int i = 0; i < 6; i++) {
+        if (cmdData[i] < 0x10) Serial4.print("0");
+        Serial4.print(cmdData[i], HEX);
+        Serial4.print(" ");
+    }
+    Serial4.println();
+    
+    // Send SET_REPORT
+    usbHostDriver.pauseDataTransfers();
+    
+    uint16_t actualLen = 0;
+    bool success = usbHostDriver.controlTransfer(
+        0x21, 0x09, 0x0300, 0x0002, 64,
+        cmdData, &actualLen, 100
+    );
+    
+    if (success) {
+        Serial4.println("S: SET_REPORT OK");
+        
+        // Get response
+        uint8_t response[64];
+        success = usbHostDriver.controlTransfer(
+            0xA1, 0x01, 0x0300, 0x0002, 64,
+            response, &actualLen, 100
+        );
+        
+        if (success && actualLen > 0) {
+            Serial4.print("S: GET_REPORT response (");
+            Serial4.print(actualLen);
+            Serial4.print(" bytes): ");
+            for (int i = 0; i < 16 && i < actualLen; i++) {
+                if (response[i] < 0x10) Serial4.print("0");
+                Serial4.print(response[i], HEX);
+                Serial4.print(" ");
+            }
+            Serial4.println();
+        }
+    } else {
+        Serial4.println("E: SET_REPORT failed");
+    }
+    
+    usbHostDriver.resumeDataTransfers();
+    
+    // Next command in 50ms
+    vendorSim.sequence++;
+    vendorSim.nextTime = millis() + 50;
 }
 
 // =============================================================================

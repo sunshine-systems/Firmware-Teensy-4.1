@@ -1,5 +1,5 @@
-#ifndef _COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H_
-#define _COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H_
+#ifndef COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H
+#define COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H
 
 #include <Arduino.h>
 
@@ -12,15 +12,13 @@ public:
     CommandsSunBoxDevtoolsInterface();
     
     void begin();
+    void handleCommand(const String& cmd);
     
-    // Handle a command
-    void handleCommand(const String& command);
-    
-    // Set references to components (for dump/status commands)
+    // Set component references
     void setUSBHostDriver(USBHostDriver* driver) { usbHostDriver = driver; }
     void setHIDHandler(HIDMouseDescriptorHandler* handler) { hidHandler = handler; }
     
-    // Debug mode
+    // Get current debug state
     bool isDebugEnabled() const { return debugEnabled; }
     
 private:
@@ -28,7 +26,7 @@ private:
     USBHostDriver* usbHostDriver;
     HIDMouseDescriptorHandler* hidHandler;
     
-    // Settings
+    // State
     bool debugEnabled;
     
     // Command handlers
@@ -38,6 +36,9 @@ private:
     void handleDump();
     void handleClaimCorrection(const String& args);
     void handleClaimClear();
+    void handleVendorTest();      // NEW: Test vendor control transfers
+    void handleVendorSend();       // NEW: Send specific vendor command
+    void handleMonitorVendor();    // NEW: Monitor vendor traffic
 };
 
-#endif // _COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H_
+#endif // COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H
