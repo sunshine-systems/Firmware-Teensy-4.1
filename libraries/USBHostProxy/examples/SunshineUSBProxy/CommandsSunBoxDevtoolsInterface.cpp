@@ -222,25 +222,33 @@ void CommandsSunBoxDevtoolsInterface::handleVendorTest() {
     Serial4.println("\nS: === Vendor Control Transfer Test ===");
     Serial4.println("S: Testing Pwnage mouse vendor commands...");
     
-    // Test data from the logs - this is what the software sends
-    uint8_t testData[] = {
-        0x00, 0x00, 0x02, 0x06, 0x00, 0x81, 0x00, 0x00, 
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-    };
+    // Prepare SET_REPORT data in a buffer
+    uint8_t setReportData[64];
+    memset(setReportData, 0, 64);
     
-    // First, let's send a SET_REPORT through the host driver
+    // Test data from the logs - this is what the software sends
+    setReportData[0] = 0x00;
+    setReportData[1] = 0x00;
+    setReportData[2] = 0x02;
+    setReportData[3] = 0x02;
+    setReportData[4] = 0x00;
+    setReportData[5] = 0x83;
+    
+    // First, let's send a SET_REPORT
     Serial4.println("\nS: Test 1: Sending SET_REPORT via host driver...");
+    
+    Serial4.print("S: SET_REPORT data to send: ");
+    for (int i = 0; i < 16; i++) {
+        if (setReportData[i] < 0x10) Serial4.print("0");
+        Serial4.print(setReportData[i], HEX);
+        Serial4.print(" ");
+    }
+    Serial4.println("...");
     
     // Pause any data transfers
     usbHostDriver->pauseDataTransfers();
     
-    // Try the control transfer
+    // Try the control transfer with the data buffer
     uint16_t actualLen = 0;
     bool success = usbHostDriver->controlTransfer(
         0x21,   // bmRequestType: Host-to-Device, Class, Interface
@@ -248,18 +256,19 @@ void CommandsSunBoxDevtoolsInterface::handleVendorTest() {
         0x0300, // wValue: Report Type (3=Feature) and Report ID (0)
         0x0002, // wIndex: Interface 2
         64,     // wLength: 64 bytes
-        testData,
+        setReportData,  // Pass our data buffer
         &actualLen,
         1000    // 1 second timeout
     );
     
     if (success) {
-        Serial4.print("S: SET_REPORT successful! Device accepted ");
-        Serial4.print(actualLen);
-        Serial4.println(" bytes");
+        Serial4.println("S: SET_REPORT successful!");
     } else {
         Serial4.println("E: SET_REPORT failed!");
     }
+    
+    // Small delay between requests
+    delay(50);
     
     // Now try a GET_REPORT to see what the device responds with
     Serial4.println("\nS: Test 2: Sending GET_REPORT via host driver...");
@@ -291,6 +300,41 @@ void CommandsSunBoxDevtoolsInterface::handleVendorTest() {
         }
         if (actualLen > 16) Serial4.print("...");
         Serial4.println();
+        
+        // Check if response matches expected pattern
+        Serial4.println("\nS: Response Analysis:");
+        if (actualLen >= 8) {
+            Serial4.print("S:   Byte 0 (expect 0xA1 or similar): 0x");
+            Serial4.println(responseBuffer[0], HEX);
+            
+            Serial4.print("S:   Bytes 2-5 match SET_REPORT data: ");
+            bool match = true;
+            for (int i = 2; i < 6; i++) {
+                if (responseBuffer[i] != setReportData[i]) {
+                    match = false;
+                    break;
+                }
+            }
+            Serial4.println(match ? "YES" : "NO");
+            
+            if (!match) {
+                Serial4.print("S:   Expected: ");
+                for (int i = 2; i < 6; i++) {
+                    if (setReportData[i] < 0x10) Serial4.print("0");
+                    Serial4.print(setReportData[i], HEX);
+                    Serial4.print(" ");
+                }
+                Serial4.println();
+                
+                Serial4.print("S:   Got:      ");
+                for (int i = 2; i < 6; i++) {
+                    if (responseBuffer[i] < 0x10) Serial4.print("0");
+                    Serial4.print(responseBuffer[i], HEX);
+                    Serial4.print(" ");
+                }
+                Serial4.println();
+            }
+        }
     } else {
         Serial4.println("E: GET_REPORT failed or returned no data!");
     }
@@ -309,14 +353,23 @@ void CommandsSunBoxDevtoolsInterface::handleVendorSend() {
     
     Serial4.println("\nS: Sending single vendor SET_REPORT...");
     
-    // Simple test data
-    uint8_t testData[64] = {0};
+    // Prepare test data in a buffer
+    uint8_t testData[64];
+    memset(testData, 0, 64);
     testData[0] = 0x00;
     testData[1] = 0x00;
     testData[2] = 0x02;
     testData[3] = 0x01;
     testData[4] = 0x00;
     testData[5] = 0x85;
+    
+    Serial4.print("S: Data to send: ");
+    for (int i = 0; i < 8; i++) {
+        if (testData[i] < 0x10) Serial4.print("0");
+        Serial4.print(testData[i], HEX);
+        Serial4.print(" ");
+    }
+    Serial4.println("...");
     
     // Pause data transfers
     usbHostDriver->pauseDataTransfers();
@@ -328,7 +381,7 @@ void CommandsSunBoxDevtoolsInterface::handleVendorSend() {
         0x0300, // wValue
         0x0002, // Interface 2
         64,     // wLength
-        testData,
+        testData,  // Pass the data buffer
         &actualLen,
         500
     );

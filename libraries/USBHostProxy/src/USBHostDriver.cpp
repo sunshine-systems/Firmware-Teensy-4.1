@@ -441,8 +441,6 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     Serial4.print(" wLength=");
     Serial4.println(wLength);
     
-    // NOTE: pauseDataTransfers() now handles waiting for pending transfers
-    
     // Small delay to let device stabilize after stopping interrupt transfers
     delay(5);
     
@@ -460,7 +458,27 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     control_length_received = 0;
     control_last_token = 0;
     
-    // Queue the transfer
+    // CRITICAL FIX: For OUT transfers, ensure data is in control_buffer
+    if (!(bmRequestType & 0x80) && wLength > 0 && data != nullptr) {
+        Serial4.print("S: OUT transfer - copying ");
+        Serial4.print(wLength);
+        Serial4.println(" bytes to control buffer");
+        
+        // Copy the provided data to control_buffer
+        memcpy(control_buffer, data, min(wLength, sizeof(control_buffer)));
+        
+        // Debug: Print first few bytes of OUT data
+        Serial4.print("S: OUT data: ");
+        for (int i = 0; i < min(wLength, (uint16_t)16); i++) {
+            if (control_buffer[i] < 0x10) Serial4.print("0");
+            Serial4.print(control_buffer[i], HEX);
+            Serial4.print(" ");
+        }
+        if (wLength > 16) Serial4.print("...");
+        Serial4.println();
+    }
+    
+    // Queue the transfer - always use control_buffer
     Serial4.print("S: Queuing control transfer");
     bool queue_result = queue_Control_Transfer(device, &control_setup, control_buffer, this);
     Serial4.println(queue_result ? "...success" : "...failed");
@@ -488,12 +506,19 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
         return false;
     }
     
+    // For OUT transfers, we might get 0 bytes back (just ACK)
+    if (!(bmRequestType & 0x80)) {
+        Serial4.println("S: OUT transfer completed successfully");
+        if (actualLength) *actualLength = 0;
+        return true;
+    }
+    
     if (control_length_received == 0 && wLength > 0) {
         Serial4.println("S: Control transfer returned no data");
         return false;
     }
     
-    // Success - copy data
+    // Success - copy data for IN transfers
     Serial4.print("S: Control transfer complete, received ");
     Serial4.print(control_length_received);
     Serial4.println(" bytes");
