@@ -51,11 +51,14 @@ USBDeviceProxy::USBDeviceProxy() :
     poll_count(0),
     endpoint0_notify_mask(0),
     endpointN_notify_mask(0),
+    pending_has_data(false),
     num_endpoints(0),
     hostDriver(nullptr),
     device_high_speed(true) {  // Default to high speed
     
     memset(&pending_setup, 0, sizeof(pending_setup));
+    memset(&pending_setup_saved, 0, sizeof(pending_setup_saved));
+    memset(setup_data_buffer, 0, sizeof(setup_data_buffer));
     memset(endpoints, 0, sizeof(endpoints));
     memset(endpoint_ready, 0, sizeof(endpoint_ready));
 }
@@ -280,6 +283,33 @@ void USBDeviceProxy::pollControlEndpoint() {
         
         setupstatus = USB1_ENDPTSETUPSTAT;
     }
+    
+    // Check for endpoint0 completions
+    uint32_t completestatus = USB1_ENDPTCOMPLETE;
+    if (completestatus & ((1<<0) | (1<<16))) { // Endpoint 0 IN or OUT
+        // Clear the endpoint0 completion flags
+        USB1_ENDPTCOMPLETE = (1<<0) | (1<<16);
+        
+        // Handle completion based on the current state
+        if (control_stage == CONTROL_DATA_OUT) {
+            // Data OUT stage completed (e.g., for SET_REPORT)
+            // The data should now be in the buffer
+            Serial4.println("I: EP0 OUT data received");
+            
+            // Now process the control transfer
+            processControlTransfer();
+        }
+        else if (control_stage == CONTROL_DATA_IN && (completestatus & (1<<16))) {
+            Serial4.println("I: EP0 TX complete");
+            control_stage = CONTROL_STATUS_OUT;
+            // Prepare to receive status
+            receiveData(NULL, 0);
+        }
+        else if (control_stage == CONTROL_STATUS_OUT) {
+            Serial4.println("I: Control transfer complete!");
+            control_stage = CONTROL_IDLE;
+        }
+    }
 }
 
 // Poll data endpoints for IN token from host
@@ -358,17 +388,27 @@ void USBDeviceProxy::handleUSBInterrupt() {
         }
         
         // Handle endpoint 0 completions
-        if (ep0_status & proxy_endpoint0_notify_mask) {
+        if (ep0_status & (1<<0)) {  // EP0 OUT completion (for SET_REPORT data)
+            if (control_stage == CONTROL_DATA_OUT) {
+                Serial4.println("I: EP0 OUT data phase complete");
+                // Don't call processControlTransfer here - let pollControlEndpoint handle it
+            }
+        }
+        
+        if (ep0_status & (1<<16)) {  // EP0 IN completion
+            if (control_stage == CONTROL_DATA_IN) {
+                Serial4.println("I: EP0 IN data phase complete");
+                control_stage = CONTROL_STATUS_OUT;
+                // Prepare to receive status
+                receiveData(NULL, 0);
+            }
+        }
+        
+        if (ep0_status & endpoint0_notify_mask) {
             proxy_endpoint0_notify_mask = 0;
             endpoint0_notify_mask = 0;
             // Handle completion based on control stage
-            if (control_stage == CONTROL_DATA_IN) {
-                Serial4.println("I: EP0 TX complete");
-                control_stage = CONTROL_STATUS_OUT;
-                // Prepare to receive status
-                receiveData(proxy_endpoint0_buffer, 0);
-            }
-            else if (control_stage == CONTROL_STATUS_OUT) {
+            if (control_stage == CONTROL_STATUS_OUT) {
                 Serial4.println("I: Control transfer complete!");
                 control_stage = CONTROL_IDLE;
             }
@@ -539,6 +579,39 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
         hostDriver->resumeDataTransfers();
         return;
     }
+
+    // Handle HID Class SET_REPORT request specially
+    if (pending_setup.bmRequestType == 0x21 && pending_setup.bRequest == 0x09) {
+        // This is a SET_REPORT request (Host->Device, Class, Interface)
+        uint16_t report_type = (pending_setup.wValue >> 8);
+        uint16_t report_id = (pending_setup.wValue & 0xFF);
+        uint16_t interface = pending_setup.wIndex;
+        
+        Serial4.print("I: SET_REPORT for interface ");
+        Serial4.print(interface);
+        Serial4.print(", type=");
+        Serial4.print(report_type);
+        Serial4.print(", ID=");
+        Serial4.print(report_id);
+        Serial4.print(", length=");
+        Serial4.println(pending_setup.wLength);
+        
+        // Store setup packet for later forwarding
+        memcpy(&pending_setup_saved, &pending_setup, sizeof(setup_packet_t));
+        
+        // We need to receive data from host first, then forward to device
+        if (pending_setup.wLength > 0) {
+            Serial4.println("I: Receiving SET_REPORT data from host...");
+            
+            // Receive data from host
+            receiveData(setup_data_buffer, pending_setup.wLength);
+            pending_has_data = true;
+            control_stage = CONTROL_DATA_OUT;
+            
+            // Setup data will be forwarded in processControlTransfer after receiving
+            return;
+        }
+    }
     
     // Handle GET_DESCRIPTOR for strings specially to ensure proper forwarding
     if (pending_setup.bmRequestType == 0x80 && pending_setup.bRequest == 0x06) {
@@ -581,6 +654,77 @@ void USBDeviceProxy::handleSetAddress() {
 
 // Process control transfer state machine
 void USBDeviceProxy::processControlTransfer() {
+    if (control_stage == CONTROL_IDLE) {
+        return;
+    }
+    
+    // Handle data-out phase completion for SET_REPORT
+    if (control_stage == CONTROL_DATA_OUT && pending_has_data) {
+        // We've received data for a SET_REPORT request
+        Serial4.println("I: SET_REPORT data received from host");
+        
+        // Debug: print first few bytes
+        Serial4.print("I: Data: ");
+        for (int i = 0; i < 16 && i < pending_setup_saved.wLength; i++) {
+            if (setup_data_buffer[i] < 0x10) Serial4.print("0");
+            Serial4.print(setup_data_buffer[i], HEX);
+            Serial4.print(" ");
+        }
+        if (pending_setup_saved.wLength > 16) Serial4.print("...");
+        Serial4.println();
+        
+        // Temporarily pause data transfers while we forward the request
+        if (hostDriver) hostDriver->pauseDataTransfers();
+        
+        // Forward the SET_REPORT with data to the device
+        uint16_t actual_len = 0;
+        bool success = false;
+        
+        if (pending_setup_saved.wLength > 0) {
+            success = hostDriver->controlTransfer(
+                pending_setup_saved.bmRequestType,
+                pending_setup_saved.bRequest,
+                pending_setup_saved.wValue,
+                pending_setup_saved.wIndex,
+                pending_setup_saved.wLength,
+                setup_data_buffer,  // This contains the data from the host
+                &actual_len,
+                500  // 500ms timeout
+            );
+        } else {
+            success = hostDriver->controlTransfer(
+                pending_setup_saved.bmRequestType,
+                pending_setup_saved.bRequest,
+                pending_setup_saved.wValue,
+                pending_setup_saved.wIndex,
+                0,
+                nullptr,
+                &actual_len,
+                500
+            );
+        }
+        
+        // Resume data transfers
+        if (hostDriver) hostDriver->resumeDataTransfers();
+        
+        if (success) {
+            // Successfully forwarded to device, acknowledge to host
+            Serial4.println("I: SET_REPORT forwarded to device successfully");
+            
+            // ACK to host (ZLP for successful control transfer)
+            sendZLP();
+            control_stage = CONTROL_IDLE;
+        } else {
+            // Failed to forward to device
+            Serial4.println("E: Failed to forward SET_REPORT to device");
+            USB1_ENDPTCTRL0 = 0x00010001;  // STALL
+            control_stage = CONTROL_IDLE;
+        }
+        
+        pending_has_data = false;
+        return;
+    }
+    
     if (control_stage != CONTROL_SETUP) {
         return;
     }
@@ -634,6 +778,13 @@ void USBDeviceProxy::processControlTransfer() {
                 }
             }
             
+            // Special handling for HID GET_REPORT responses
+            if (pending_setup.bmRequestType == 0xA1 && pending_setup.bRequest == 0x01) {
+                Serial4.println("I: Processing HID GET_REPORT response");
+                // First byte in proxy_descriptor_buffer might need to be preserved
+                // This is device-specific handling if needed
+            }
+            
             // Send data to host
             setup_data_len = actual_len;
             sendData(proxy_descriptor_buffer, actual_len);
@@ -651,7 +802,8 @@ void USBDeviceProxy::processControlTransfer() {
     } else {
         // Host-to-device (OUT) transfer
         if (pending_setup.wLength > 0) {
-            // Need to receive data from host first
+            // For SET_REPORT, this should be handled above after data is received
+            // For other OUT transfers, they're not supported yet
             Serial4.println("E: OUT transfers not implemented yet");
             USB1_ENDPTCTRL0 = 0x00010001;
             control_stage = CONTROL_IDLE;

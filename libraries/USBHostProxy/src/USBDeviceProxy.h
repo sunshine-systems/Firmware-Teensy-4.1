@@ -147,6 +147,11 @@ private:
     // Setup packet - not in initialization list
     setup_packet_t pending_setup;
     
+    // SET_REPORT handling
+    setup_packet_t pending_setup_saved;   // Saved setup for SET_REPORT
+    uint8_t setup_data_buffer[512];      // Buffer for SET_REPORT data
+    bool pending_has_data;               // Flag indicating we have data for pending request
+    
     // Endpoint tracking - not in initialization list
     static const uint8_t MAX_PROXY_ENDPOINTS = 16;
     EndpointInfo endpoints[MAX_PROXY_ENDPOINTS];
