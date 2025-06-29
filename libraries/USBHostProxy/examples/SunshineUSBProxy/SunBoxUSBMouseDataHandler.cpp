@@ -1,5 +1,6 @@
 #include "SunBoxUSBMouseDataHandler.h"
 #include "SunBoxStartup.h"
+#include "SunBoxLogger.h"
 
 // Static instance for callback
 SunBoxUSBMouseDataHandler* SunBoxUSBMouseDataHandler::instance = nullptr;
@@ -11,14 +12,11 @@ SunBoxUSBMouseDataHandler::SunBoxUSBMouseDataHandler(USBHostDriver& hostDriver,
       deviceReady(false), hidReady(false) {
     
     memset(rawData, 0, sizeof(rawData));
-    currentMouseState.clear();
+    lastMouseState.clear();
     instance = this;
 }
 
 void SunBoxUSBMouseDataHandler::begin() {
-    // Don't set up callback here - let the main sketch do it
-    // This allows the main sketch to use its own callback for data forwarding
-    
     // Initialize HID handler
     hidHandler.begin(&hostDriver);
 }
@@ -56,51 +54,37 @@ void SunBoxUSBMouseDataHandler::check() {
         deviceReady = false;
         hidReady = false;
         dataAvailable = false;
-        currentMouseState.clear();
+        rawDataLength = 0;
         Serial4.println("S: Device disconnected");
     }
 }
 
 void SunBoxUSBMouseDataHandler::dataCallback(const uint8_t* data, uint32_t length) {
     if (instance && data && length > 0) {
-        // Store raw data
+        // Just store raw data - no parsing in callback
         uint32_t copyLen = (length > sizeof(instance->rawData)) ? sizeof(instance->rawData) : length;
         memcpy(instance->rawData, data, copyLen);
         instance->rawDataLength = copyLen;
+        instance->dataAvailable = true;
         
-        // Parse if HID is ready
+        // Parse and check for button changes
         if (instance->hidReady && instance->hidHandler.isReady()) {
-            // Store previous state to detect changes
-            MouseState previousState = instance->currentMouseState;
-            
-            // Parse new data
-            if (instance->hidHandler.parseMouseData(data, length, instance->currentMouseState)) {
-                // Check if anything changed (buttons, movement, or wheel)
-                if (previousState.buttons != instance->currentMouseState.buttons ||
-                    previousState.x != instance->currentMouseState.x ||
-                    previousState.y != instance->currentMouseState.y ||
-                    previousState.wheel != instance->currentMouseState.wheel) {
-                    
-                    // Mark data as available only if something changed
-                    instance->dataAvailable = true;
-                    
-                    // Print the parsed state for debugging
-                    if (SunBoxStartup::isDebugEnabled()) {
-                        instance->hidHandler.printMouseState(instance->currentMouseState);
-                    }
+            MouseState state;
+            if (instance->hidHandler.parseMouseData(data, length, state)) {
+                // Check if buttons changed
+                if (state.buttons != instance->lastMouseState.buttons) {
+                    // Log button event
+                    logger.mousef("%02X", state.buttons);
+                    instance->lastMouseState.buttons = state.buttons;
                 }
             }
-        } else {
-            // Just mark raw data as available if HID not ready
-            instance->dataAvailable = true;
         }
     }
 }
 
-void SunBoxUSBMouseDataHandler::resetData() {
+void SunBoxUSBMouseDataHandler::reset() {
     dataAvailable = false;
-    // Don't clear the mouse state here - keep the last known state
-    // This prevents "jumps" when transitioning between data sources
+    // Keep raw data and length for debugging if needed
 }
 
 bool SunBoxUSBMouseDataHandler::isReady() const {

@@ -767,21 +767,3 @@ void HIDMouseDescriptorHandler::printDescriptorInfo() {
     
     logger.debug("==========================\n");
 }
-
-void HIDMouseDescriptorHandler::printMouseState(const MouseState& state) {
-    if (debug_enabled) {
-        logger.debugf("Mouse: Buttons=0x%02X (", state.buttons);
-        
-        // Check all possible buttons
-        if (state.buttons & 0x01) logger.debug("L");
-        if (state.buttons & 0x02) logger.debug("R"); 
-        if (state.buttons & 0x04) logger.debug("M");
-        if (state.buttons & 0x08) logger.debug("B4");  // Button 4 (thumb back)
-        if (state.buttons & 0x10) logger.debug("B5");  // Button 5 (thumb forward)
-        if (state.buttons & 0x20) logger.debug("B6");  // Button 6 (if exists)
-        if (state.buttons & 0x40) logger.debug("B7");  // Button 7 (if exists)
-        if (state.buttons & 0x80) logger.debug("B8");  // Button 8 (if exists)
-        
-        logger.debugf(") X=%d Y=%d Wheel=%d", state.x, state.y, state.wheel);
-    }
-}

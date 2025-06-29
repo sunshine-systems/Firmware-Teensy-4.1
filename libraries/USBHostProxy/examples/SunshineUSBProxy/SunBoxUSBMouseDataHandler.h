@@ -12,42 +12,44 @@ public:
     // Initialize the handler
     void begin();
     
-    // Check for new data from USB device
+    // Check for device status changes only (no data processing)
     void check();
     
     // Check if data is available
     bool hasData() const { return dataAvailable; }
     
-    // Get the current mouse state
-    MouseState getMouseState() const { return currentMouseState; }
-    
-    // Get raw data
+    // Get the raw data
     const uint8_t* getRawData() const { return rawData; }
     uint32_t getRawDataLength() const { return rawDataLength; }
     
-    // Reset data flag
-    void resetData();
+    // Get HID handler for parsing
+    HIDMouseDescriptorHandler& getHIDHandler() { return hidHandler; }
+    
+    // Reset data flag (prevents ghosting)
+    void reset();
     
     // Check if USB device is ready
     bool isReady() const;
+    
+    // Static callback for USB data
+    static void dataCallback(const uint8_t* data, uint32_t length);
     
 private:
     // References
     USBHostDriver& hostDriver;
     HIDMouseDescriptorHandler& hidHandler;
     
-    // Data storage
+    // Raw data storage (no parsing in callback)
     uint8_t rawData[64];
     uint32_t rawDataLength;
-    MouseState currentMouseState;
     bool dataAvailable;
     
     // State
     bool deviceReady;
     bool hidReady;
+    MouseState lastMouseState;  // Track last state for button change detection
     
-    // Callback for USB data
-    static void dataCallback(const uint8_t* data, uint32_t length);
+    // Static instance for callback
     static SunBoxUSBMouseDataHandler* instance;
 };
 

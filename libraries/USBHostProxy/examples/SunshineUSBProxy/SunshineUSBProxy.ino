@@ -7,9 +7,9 @@
 #include "SunBoxSyntheticHandleOutput.h"
 #include "CommandsSunBoxDevtoolsInterface.h"
 #include "SunBoxEEPROM.h"
-#include "SunBoxStartup.h"  // Add this include
-#include "SunBoxLogger.h"    // Add logger include
-#include "USBDeviceProxy.h"  // NEW: Add our custom USB device stack
+#include "SunBoxStartup.h"
+#include "SunBoxLogger.h"
+#include "USBDeviceProxy.h"
 
 // =============================================================================
 // Configuration
@@ -35,23 +35,19 @@ SunBoxUSBMouseDataHandler usbMouseHandler(usbHostDriver, hidMouseHandler);
 // Output handler
 SunBoxSyntheticHandleOutput syntheticOutput(sunboxCommands, usbMouseHandler);
 
-// USB Device Proxy - NEW: Our custom USB device stack
+// USB Device Proxy
 USBDeviceProxy usbDeviceProxy;
 
 // State tracking
 bool systemInitialized = false;
-bool usbDeviceProxyStarted = false;  // Track if device proxy has been started
-
-// Data forwarding buffers
-static uint8_t mouse_buffer[64];
-static uint32_t mouse_data_len = 0;
-static bool mouse_data_available = false;
+bool usbDeviceProxyStarted = false;
+uint8_t configuredMouseEndpoint = 0;
 
 // Track which endpoints map to which interface
 struct EndpointMapping {
     uint8_t ep_num;
     uint8_t interface_num;
-    bool is_mouse;  // true for mouse interface, false for keyboard/other
+    bool is_mouse;
 };
 static EndpointMapping endpoint_map[8];
 static uint8_t endpoint_map_count = 0;
@@ -64,7 +60,6 @@ void updateUSBDeviceStatus();
 void updateStatusLED();
 void mouseDataCallback(const uint8_t* data, uint32_t length);
 void buildEndpointMapping();
-void forwardMouseData();
 
 // =============================================================================
 // Setup
@@ -81,6 +76,7 @@ void setup() {
     sunboxCommands.begin();
     usbMouseHandler.begin();
     syntheticOutput.begin();
+    syntheticOutput.setUSBDeviceProxy(&usbDeviceProxy);
     
     // Set up component references for devtools
     CommandsSunBoxDevtoolsInterface* devtools = sunboxCommands.getDevtools();
@@ -118,7 +114,7 @@ void setup() {
 }
 
 // =============================================================================
-// Main Loop
+// Main Loop - Simplified for consistent flow
 // =============================================================================
 
 void loop() {
@@ -159,36 +155,37 @@ void loop() {
         // Build endpoint mapping based on what we know about the device
         buildEndpointMapping();
         
+        // Configure synthetic output with mouse endpoint
+        for (int i = 0; i < endpoint_map_count; i++) {
+            if (endpoint_map[i].is_mouse) {
+                configuredMouseEndpoint = endpoint_map[i].ep_num;
+                syntheticOutput.setMouseEndpoint(configuredMouseEndpoint);
+                logger.debugf("Configured synthetic output for mouse EP%d", configuredMouseEndpoint);
+                break;
+            }
+        }
     }
     
     // Only poll USB Device proxy if it's been started
     if (usbDeviceProxyStarted) {
         // Poll USB Device proxy - CRITICAL: Must be called as often as possible!
         usbDeviceProxy.poll();
-        
-        // Process any buffered mouse data
-        if (mouse_data_available) {
-            forwardMouseData();
-        }
     }
     
-    // Check for commands
-    sunboxCommands.check();
-    
-    // Check for USB data
+    // ========== CONSISTENT DATA FLOW ==========
+    // 1. Check USB device status (no data processing)
     usbMouseHandler.check();
     
-    // Process output if any data is available from serial commands
-    if (sunboxCommands.hasData()) {
-        syntheticOutput.process();
-    }
+    // 2. Check for serial commands/data
+    sunboxCommands.check();
     
-    // Update status based on USB device proxy state
+    // 3. Process all data through synthetic output
+    syntheticOutput.process();
+    
+    // Update status
     if (usbDeviceProxyStarted) {
         updateUSBDeviceStatus();
     }
-    
-    // Update status LED
     updateStatusLED();
 }
 
@@ -196,72 +193,10 @@ void loop() {
 // Data Forwarding
 // =============================================================================
 
-// Callback for USB mouse data
+// Callback for USB mouse data - just flags data availability
 void mouseDataCallback(const uint8_t* data, uint32_t length) {
-    static uint32_t packet_count = 0;  // Move this outside the debug block
-    packet_count++;
-    
-    // Only process if device proxy is configured
-    if (!usbDeviceProxyStarted || !usbDeviceProxy.isConfigured()) {
-        logger.debug("Mouse data received but proxy not ready");
-        return;
-    }
-    
-    // DEBUG: Log when mouse data is received
-    // Log every 100th packet
-    if ((packet_count % 100) == 1) {
-        logger.debugf("Mouse packet #%lu len=%lu data: %02X %02X %02X %02X %02X",
-                      packet_count, length,
-                      (length > 0) ? data[0] : 0,
-                      (length > 1) ? data[1] : 0,
-                      (length > 2) ? data[2] : 0,
-                      (length > 3) ? data[3] : 0,
-                      (length > 4) ? data[4] : 0);
-    }
-    
-    // Forward data immediately if we can
-    if (length > 0 && length <= sizeof(mouse_buffer)) {
-        // Find the mouse endpoint
-        bool found_mouse_ep = false;
-        for (int i = 0; i < endpoint_map_count; i++) {
-            if (endpoint_map[i].is_mouse) {
-                found_mouse_ep = true;
-                uint8_t ep_num = endpoint_map[i].ep_num;
-                
-                if ((packet_count % 100) == 1) {
-                    logger.debugf("Found mouse endpoint: EP%d", ep_num);
-                }
-                
-                // Check if endpoint is ready
-                if (usbDeviceProxy.isEndpointReady(ep_num)) {
-                    // Send immediately
-                    usbDeviceProxy.sendDataOnEndpoint(ep_num, data, length);
-                    
-                    static uint32_t immediate_count = 0;
-                    immediate_count++;
-                    if ((immediate_count % 100) == 1) {
-                        logger.debugf("Forwarded immediately to EP%d", ep_num);
-                    }
-                } else {
-                    // Buffer for later
-                    memcpy(mouse_buffer, data, length);
-                    mouse_data_len = length;
-                    mouse_data_available = true;
-                    
-                    static uint32_t buffer_count = 0;
-                    buffer_count++;
-                    if ((buffer_count % 100) == 1) {
-                        logger.debugf("EP%d busy, buffered data", ep_num);
-                    }
-                }
-                break;
-            }
-        }
-        
-        if (!found_mouse_ep) {
-            logger.error("No mouse endpoint in mapping!");
-        }
-    }
+    // The static callback in SunBoxUSBMouseDataHandler handles this
+    SunBoxUSBMouseDataHandler::dataCallback(data, length);
 }
 
 // Build endpoint mapping based on parsed configuration
@@ -356,33 +291,10 @@ void buildEndpointMapping() {
     logger.debugf("Built endpoint mapping with %d endpoints", endpoint_map_count);
 }
 
-// Forward buffered mouse data to the appropriate endpoint
-void forwardMouseData() {
-    if (!mouse_data_available) return;
-    
-    // Find the mouse endpoint
-    for (int i = 0; i < endpoint_map_count; i++) {
-        if (endpoint_map[i].is_mouse) {
-            uint8_t ep_num = endpoint_map[i].ep_num;
-            
-            // Check if endpoint is ready
-            if (usbDeviceProxy.isEndpointReady(ep_num)) {
-                // Send the buffered data
-                usbDeviceProxy.sendDataOnEndpoint(ep_num, mouse_buffer, mouse_data_len);
-                mouse_data_available = false;
-                
-                logger.debugf("Forwarded buffered data to EP%d (endpoint became ready)", ep_num);
-                break;
-            }
-        }
-    }
-}
-
 // =============================================================================
 // Helper Functions
 // =============================================================================
 
-// NEW: Replace initializeUSBDevice() with status monitoring
 void updateUSBDeviceStatus() {
     static unsigned long lastStatusTime = 0;
     static bool lastConnected = false;

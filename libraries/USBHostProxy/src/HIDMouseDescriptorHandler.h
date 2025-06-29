@@ -148,7 +148,6 @@ public:
     // Debug output
     void printInterfaceInfo();
     void printDescriptorInfo();
-    void printMouseState(const MouseState& state);
     
     // Enable/disable debug output
     void setDebugOutput(bool enable) { debug_enabled = enable; }
