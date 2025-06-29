@@ -3,10 +3,7 @@
 #include "HIDMouseDescriptorHandler.h"
 #include "SunBoxEEPROM.h"
 #include "SunBoxStartup.h"
-
-// Global state for vendor monitoring
-static bool vendorMonitorEnabled = false;
-static uint32_t vendorTransferCount = 0;
+#include "SunBoxLogger.h"
 
 CommandsSunBoxDevtoolsInterface::CommandsSunBoxDevtoolsInterface()
     : usbHostDriver(nullptr), hidHandler(nullptr), debugEnabled(false) {
@@ -46,95 +43,60 @@ void CommandsSunBoxDevtoolsInterface::handleCommand(const String& cmd) {
     else if (baseCommand == "claimclear") {
         handleClaimClear();
     }
-    else if (baseCommand == "vendortest") {
-        handleVendorTest();
-    }
-    else if (baseCommand == "vendorsend") {
-        handleVendorSend();
-    }
-    else if (baseCommand == "monitorvendor") {
-        handleMonitorVendor();
-    }
     else {
-        Serial4.print("S: Unknown command: ");
-        Serial4.println(baseCommand);
-        Serial4.println("S: Type 'help' for available commands");
+        logger.infof("Unknown command: %s", baseCommand.c_str());
+        logger.info("Type 'help' for available commands");
     }
 }
 
 void CommandsSunBoxDevtoolsInterface::handleHelp() {
-    Serial4.println("\nI: === SunBox DevTools Commands ===");
-    Serial4.println("I: help           - Show this help");
-    Serial4.println("I: status         - Show system status");
-    Serial4.println("I: debug          - Toggle debug mode (persistent)");
-    Serial4.println("I: dump           - Dump USB device descriptors");
-    Serial4.println("I: claimcorrection vid,pid,interface,endpoint - Force specific interface");
-    Serial4.println("I:                Example: claimcorrection 046d,c53f,1,82");
-    Serial4.println("I: claimclear     - Clear forced interface configuration");
-    Serial4.println("I: vendortest     - Test vendor control transfers (Pwnage mouse)");
-    Serial4.println("I: vendorsend     - Send single vendor SET_REPORT");
-    Serial4.println("I: monitorvendor  - Toggle vendor transfer monitoring");
-    Serial4.println("I: =================================");
+    logger.info("=== SunBox DevTools Commands ===");
+    logger.info("help           - Show this help");
+    logger.info("status         - Show system status");
+    logger.info("debug          - Toggle debug mode (persistent)");
+    logger.info("dump           - Dump USB device descriptors");
+    logger.info("claimcorrection vid,pid,interface,endpoint - Force specific interface");
+    logger.info("               Example: claimcorrection 046d,c53f,1,82");
+    logger.info("claimclear     - Clear forced interface configuration");
+    logger.info("=================================");
 }
 
 void CommandsSunBoxDevtoolsInterface::handleStatus() {
-    Serial4.println("\nI: === System Status ===");
+    logger.info("=== System Status ===");
     
     // USB Device status
-    Serial4.print("I: USB Device: ");
+    logger.info("USB Device: ");
     if (usbHostDriver && usbHostDriver->isReady()) {
-        Serial4.print("Connected (VID:0x");
-        Serial4.print(usbHostDriver->getVendorID(), HEX);
-        Serial4.print(" PID:0x");
-        Serial4.print(usbHostDriver->getProductID(), HEX);
-        Serial4.println(")");
+        logger.infof("Connected (VID:0x%04X PID:0x%04X)", 
+                    usbHostDriver->getVendorID(), 
+                    usbHostDriver->getProductID());
     } else {
-        Serial4.println("Not connected");
+        logger.info("Not connected");
     }
     
     // HID Handler status
-    Serial4.print("I: HID Handler: ");
+    logger.info("HID Handler: ");
     if (hidHandler && hidHandler->isReady()) {
-        Serial4.print("Ready (Interface ");
-        Serial4.print(hidHandler->getInterfaceNumber());
-        Serial4.print(", EP 0x");
-        Serial4.print(hidHandler->getEndpointAddress() | 0x80, HEX);
-        Serial4.println(")");
+        logger.infof("Ready (Interface %d, EP 0x%02X)",
+                    hidHandler->getInterfaceNumber(),
+                    hidHandler->getEndpointAddress() | 0x80);
     } else {
-        Serial4.println("Not ready");
+        logger.info("Not ready");
     }
     
     // Debug mode
-    Serial4.print("I: Debug Mode: ");
-    Serial4.print(debugEnabled ? "ON" : "OFF");
-    Serial4.println(" (persistent)");
-    
-    // Vendor monitoring
-    Serial4.print("I: Vendor Monitor: ");
-    Serial4.print(vendorMonitorEnabled ? "ON" : "OFF");
-    if (vendorTransferCount > 0) {
-        Serial4.print(" (");
-        Serial4.print(vendorTransferCount);
-        Serial4.print(" transfers)");
-    }
-    Serial4.println();
+    logger.infof("Debug Mode: %s (persistent)", debugEnabled ? "ON" : "OFF");
     
     // Force claim config
     ClaimConfig config;
     if (sunboxEEPROM.loadClaimConfig(config)) {
-        Serial4.print("I: Claim Correction: VID=0x");
-        Serial4.print(config.vid, HEX);
-        Serial4.print(" PID=0x");
-        Serial4.print(config.pid, HEX);
-        Serial4.print(" Interface=");
-        Serial4.print(config.interface_num);
-        Serial4.print(" Endpoint=0x");
-        Serial4.println(config.endpoint_addr, HEX);
+        logger.infof("Claim Correction: VID=0x%04X PID=0x%04X Interface=%d Endpoint=0x%02X",
+                    config.vid, config.pid, config.interface_num, config.endpoint_addr);
     } else {
-        Serial4.println("I: Claim Correction: Not configured");
+        logger.info("Claim Correction: Not configured");
     }
     
-    Serial4.println("I: ====================");
+    logger.info("====================");
 }
 
 void CommandsSunBoxDevtoolsInterface::handleDebug() {
@@ -149,16 +111,14 @@ void CommandsSunBoxDevtoolsInterface::handleDebug() {
         hidHandler->setDebugOutput(debugEnabled);
     }
     
-    Serial4.print("S: Debug mode ");
-    Serial4.print(debugEnabled ? "ON" : "OFF");
-    Serial4.println(" (saved to EEPROM)");
+    logger.infof("Debug mode %s (saved to EEPROM)", debugEnabled ? "ON" : "OFF");
 }
 
 void CommandsSunBoxDevtoolsInterface::handleDump() {
     if (usbHostDriver) {
         usbHostDriver->dumpDeviceInfo();
     } else {
-        Serial4.println("S: USB Host Driver not available");
+        logger.info("USB Host Driver not available");
     }
 }
 
@@ -174,8 +134,8 @@ void CommandsSunBoxDevtoolsInterface::handleClaimCorrection(const String& args) 
     }
     
     if (commaCount != 3) {
-        Serial4.println("S: Invalid format! Use: claimcorrection vid,pid,interface,endpoint");
-        Serial4.println("S: Example: claimcorrection 046d,c53f,1,82");
+        logger.info("Invalid format! Use: claimcorrection vid,pid,interface,endpoint");
+        logger.info("Example: claimcorrection 046d,c53f,1,82");
         return;
     }
     
@@ -193,215 +153,16 @@ void CommandsSunBoxDevtoolsInterface::handleClaimCorrection(const String& args) 
     
     // Save to EEPROM
     if (sunboxEEPROM.saveClaimConfig(vid, pid, iface, ep)) {
-        Serial4.println("S: Claim correction configuration saved:");
-        Serial4.print("S: VID=0x");
-        Serial4.print(vid, HEX);
-        Serial4.print(" PID=0x");
-        Serial4.print(pid, HEX);
-        Serial4.print(" Interface=");
-        Serial4.print(iface);
-        Serial4.print(" Endpoint=0x");
-        Serial4.println(ep, HEX);
-        Serial4.println("S: Configuration will be used on next device connection");
+        logger.info("Claim correction configuration saved:");
+        logger.infof("VID=0x%04X PID=0x%04X Interface=%d Endpoint=0x%02X",
+                    vid, pid, iface, ep);
+        logger.info("Configuration will be used on next device connection");
     } else {
-        Serial4.println("S: Failed to save configuration");
+        logger.info("Failed to save configuration");
     }
 }
 
 void CommandsSunBoxDevtoolsInterface::handleClaimClear() {
     sunboxEEPROM.clearClaimConfig();
-    Serial4.println("S: Claim correction configuration cleared");
-}
-
-void CommandsSunBoxDevtoolsInterface::handleVendorTest() {
-    if (!usbHostDriver || !usbHostDriver->isReady()) {
-        Serial4.println("E: No device connected!");
-        return;
-    }
-    
-    Serial4.println("\nS: === Vendor Control Transfer Test ===");
-    Serial4.println("S: Testing Pwnage mouse vendor commands...");
-    
-    // Prepare SET_REPORT data in a buffer
-    uint8_t setReportData[64];
-    memset(setReportData, 0, 64);
-    
-    // Test data from the logs - this is what the software sends
-    setReportData[0] = 0x00;
-    setReportData[1] = 0x00;
-    setReportData[2] = 0x02;
-    setReportData[3] = 0x02;
-    setReportData[4] = 0x00;
-    setReportData[5] = 0x83;
-    
-    // First, let's send a SET_REPORT
-    Serial4.println("\nS: Test 1: Sending SET_REPORT via host driver...");
-    
-    Serial4.print("S: SET_REPORT data to send: ");
-    for (int i = 0; i < 16; i++) {
-        if (setReportData[i] < 0x10) Serial4.print("0");
-        Serial4.print(setReportData[i], HEX);
-        Serial4.print(" ");
-    }
-    Serial4.println("...");
-    
-    // Pause any data transfers
-    usbHostDriver->pauseDataTransfers();
-    
-    // Try the control transfer with the data buffer
-    uint16_t actualLen = 0;
-    bool success = usbHostDriver->controlTransfer(
-        0x21,   // bmRequestType: Host-to-Device, Class, Interface
-        0x09,   // bRequest: SET_REPORT
-        0x0300, // wValue: Report Type (3=Feature) and Report ID (0)
-        0x0002, // wIndex: Interface 2
-        64,     // wLength: 64 bytes
-        setReportData,  // Pass our data buffer
-        &actualLen,
-        1000    // 1 second timeout
-    );
-    
-    if (success) {
-        Serial4.println("S: SET_REPORT successful!");
-    } else {
-        Serial4.println("E: SET_REPORT failed!");
-    }
-    
-    // Small delay between requests
-    delay(50);
-    
-    // Now try a GET_REPORT to see what the device responds with
-    Serial4.println("\nS: Test 2: Sending GET_REPORT via host driver...");
-    
-    uint8_t responseBuffer[64];
-    memset(responseBuffer, 0, sizeof(responseBuffer));
-    
-    success = usbHostDriver->controlTransfer(
-        0xA1,   // bmRequestType: Device-to-Host, Class, Interface
-        0x01,   // bRequest: GET_REPORT
-        0x0300, // wValue: Report Type (3=Feature) and Report ID (0)
-        0x0002, // wIndex: Interface 2
-        64,     // wLength: 64 bytes
-        responseBuffer,
-        &actualLen,
-        1000    // 1 second timeout
-    );
-    
-    if (success && actualLen > 0) {
-        Serial4.print("S: GET_REPORT successful! Received ");
-        Serial4.print(actualLen);
-        Serial4.println(" bytes:");
-        
-        Serial4.print("S: Response: ");
-        for (uint16_t i = 0; i < actualLen && i < 16; i++) {
-            if (responseBuffer[i] < 0x10) Serial4.print("0");
-            Serial4.print(responseBuffer[i], HEX);
-            Serial4.print(" ");
-        }
-        if (actualLen > 16) Serial4.print("...");
-        Serial4.println();
-        
-        // Check if response matches expected pattern
-        Serial4.println("\nS: Response Analysis:");
-        if (actualLen >= 8) {
-            Serial4.print("S:   Byte 0 (expect 0xA1 or similar): 0x");
-            Serial4.println(responseBuffer[0], HEX);
-            
-            Serial4.print("S:   Bytes 2-5 match SET_REPORT data: ");
-            bool match = true;
-            for (int i = 2; i < 6; i++) {
-                if (responseBuffer[i] != setReportData[i]) {
-                    match = false;
-                    break;
-                }
-            }
-            Serial4.println(match ? "YES" : "NO");
-            
-            if (!match) {
-                Serial4.print("S:   Expected: ");
-                for (int i = 2; i < 6; i++) {
-                    if (setReportData[i] < 0x10) Serial4.print("0");
-                    Serial4.print(setReportData[i], HEX);
-                    Serial4.print(" ");
-                }
-                Serial4.println();
-                
-                Serial4.print("S:   Got:      ");
-                for (int i = 2; i < 6; i++) {
-                    if (responseBuffer[i] < 0x10) Serial4.print("0");
-                    Serial4.print(responseBuffer[i], HEX);
-                    Serial4.print(" ");
-                }
-                Serial4.println();
-            }
-        }
-    } else {
-        Serial4.println("E: GET_REPORT failed or returned no data!");
-    }
-    
-    // Resume data transfers
-    usbHostDriver->resumeDataTransfers();
-    
-    Serial4.println("\nS: === Vendor Test Complete ===");
-}
-
-void CommandsSunBoxDevtoolsInterface::handleVendorSend() {
-    if (!usbHostDriver || !usbHostDriver->isReady()) {
-        Serial4.println("E: No device connected!");
-        return;
-    }
-    
-    Serial4.println("\nS: Sending single vendor SET_REPORT...");
-    
-    // Prepare test data in a buffer
-    uint8_t testData[64];
-    memset(testData, 0, 64);
-    testData[0] = 0x00;
-    testData[1] = 0x00;
-    testData[2] = 0x02;
-    testData[3] = 0x01;
-    testData[4] = 0x00;
-    testData[5] = 0x85;
-    
-    Serial4.print("S: Data to send: ");
-    for (int i = 0; i < 8; i++) {
-        if (testData[i] < 0x10) Serial4.print("0");
-        Serial4.print(testData[i], HEX);
-        Serial4.print(" ");
-    }
-    Serial4.println("...");
-    
-    // Pause data transfers
-    usbHostDriver->pauseDataTransfers();
-    
-    uint16_t actualLen = 0;
-    bool success = usbHostDriver->controlTransfer(
-        0x21,   // bmRequestType
-        0x09,   // SET_REPORT
-        0x0300, // wValue
-        0x0002, // Interface 2
-        64,     // wLength
-        testData,  // Pass the data buffer
-        &actualLen,
-        500
-    );
-    
-    Serial4.print("S: Result: ");
-    Serial4.println(success ? "SUCCESS" : "FAILED");
-    
-    // Resume data transfers
-    usbHostDriver->resumeDataTransfers();
-}
-
-void CommandsSunBoxDevtoolsInterface::handleMonitorVendor() {
-    vendorMonitorEnabled = !vendorMonitorEnabled;
-    
-    Serial4.print("S: Vendor transfer monitoring ");
-    Serial4.println(vendorMonitorEnabled ? "ENABLED" : "DISABLED");
-    
-    if (!vendorMonitorEnabled) {
-        Serial4.print("S: Total transfers monitored: ");
-        Serial4.println(vendorTransferCount);
-        vendorTransferCount = 0;
-    }
+    logger.info("Claim correction configuration cleared");
 }

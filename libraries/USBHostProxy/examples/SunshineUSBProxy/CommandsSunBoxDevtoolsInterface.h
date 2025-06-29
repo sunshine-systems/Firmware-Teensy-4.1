@@ -36,9 +36,6 @@ private:
     void handleDump();
     void handleClaimCorrection(const String& args);
     void handleClaimClear();
-    void handleVendorTest();      // NEW: Test vendor control transfers
-    void handleVendorSend();       // NEW: Send specific vendor command
-    void handleMonitorVendor();    // NEW: Monitor vendor traffic
 };
 
 #endif // COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H

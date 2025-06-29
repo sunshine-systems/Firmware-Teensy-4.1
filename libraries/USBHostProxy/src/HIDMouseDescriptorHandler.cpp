@@ -1,5 +1,6 @@
 #include "HIDMouseDescriptorHandler.h"
 #include "SunBoxStartup.h"
+#include "SunBoxLogger.h"
 
 HIDMouseDescriptorHandler::HIDMouseDescriptorHandler() 
     : host_driver(nullptr), handler_state(HID_STATE_IDLE),
@@ -23,14 +24,14 @@ void HIDMouseDescriptorHandler::begin(USBHostDriver* driver) {
     debug_enabled = SunBoxStartup::isDebugEnabled();
     
     if (debug_enabled) {
-        Serial4.println("I: Initialized with USBHostDriver");
+        logger.startup("Starting HID Mouse Descriptor Parsing..");
     }
 }
 
 bool HIDMouseDescriptorHandler::setupMouseInterface() {
     if (!host_driver || !host_driver->isReady()) {
         if (debug_enabled) {
-            Serial4.println("I: No driver or device not ready");
+            logger.warning("No driver or device not ready");
         }
         return false;
     }
@@ -38,17 +39,14 @@ bool HIDMouseDescriptorHandler::setupMouseInterface() {
     // Find mouse interface
     if (!findMouseInterface()) {
         if (debug_enabled) {
-            Serial4.println("I: No mouse interface found");
+            logger.warning("No mouse interface found");
         }
         handler_state = HID_STATE_ERROR;
         return false;
     }
     
     if (debug_enabled) {
-        Serial4.print("I: Found mouse interface ");
-        Serial4.print(interface_number);
-        Serial4.print(" at index ");
-        Serial4.println(interface_index);
+        logger.debugf("Found mouse interface %d at index %d", interface_number, interface_index);
     }
     
     return true;
@@ -67,7 +65,7 @@ bool HIDMouseDescriptorHandler::findMouseInterface() {
         endpoint_interval = host_driver->getEndpointInterval(idx);
         
         if (debug_enabled) {
-            Serial4.println("I: Found HID mouse interface (protocol=2)");
+            logger.debug("Found HID mouse interface (protocol=2)");
         }
         return true;
     }
@@ -84,8 +82,7 @@ bool HIDMouseDescriptorHandler::findMouseInterface() {
         endpoint_interval = host_driver->getEndpointInterval(idx);
         
         if (debug_enabled) {
-            Serial4.print("I: Found HID interface with protocol=");
-            Serial4.println(interface_protocol);
+            logger.debugf("Found HID interface with protocol=%d", interface_protocol);
         }
         return true;
     }
@@ -96,7 +93,7 @@ bool HIDMouseDescriptorHandler::findMouseInterface() {
 bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     if (!host_driver || interface_index == 0xFF) {
         if (debug_enabled) {
-            Serial4.println("I: Cannot request descriptor - no interface");
+            logger.warning("Cannot request descriptor - no interface");
         }
         return false;
     }
@@ -104,17 +101,15 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     handler_state = HID_STATE_WAIT_DESCRIPTOR;
     
     if (debug_enabled) {
-        Serial4.print("I: Requesting HID descriptor for interface ");
-        Serial4.print(interface_number);
-        Serial4.print(", expected length: ");
-        Serial4.println(descriptor_length);
+        logger.debugf("Requesting HID descriptor for interface %d, expected length: %d", 
+                     interface_number, descriptor_length);
     }
     
     // Try to retrieve the HID descriptor
     if (!retrieveHIDDescriptor(timeout_ms)) {
         // If retrieval failed, use boot protocol
         if (debug_enabled) {
-            Serial4.println("I: Descriptor retrieval failed, using boot protocol");
+            logger.warning("Descriptor retrieval failed, using boot protocol");
         }
         setBootMouseFormat();
         handler_state = HID_STATE_READY;
@@ -126,7 +121,7 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     if (!parseDescriptor(hid_descriptor, hid_descriptor_size)) {
         // If parsing failed, try boot protocol
         if (debug_enabled) {
-            Serial4.println("I: Parse failed, using boot protocol");
+            logger.warning("Parse failed, using boot protocol");
         }
         setBootMouseFormat();
     }
@@ -134,7 +129,7 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     handler_state = HID_STATE_READY;
     
     if (debug_enabled) {
-        Serial4.println("I: HID descriptor ready!");
+        logger.debug("HID descriptor ready!");
     }
     
     return true;
@@ -144,7 +139,7 @@ bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
     // If descriptor length is 0, we might not have a report descriptor
     if (descriptor_length == 0) {
         if (debug_enabled) {
-            Serial4.println("I: No HID descriptor length, using boot protocol");
+            logger.warning("No HID descriptor length, using boot protocol");
         }
         return false;
     }
@@ -168,25 +163,20 @@ bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
         hid_descriptor_size = actual_length;
         
         if (debug_enabled) {
-            Serial4.print("I: Retrieved ");
-            Serial4.print(actual_length);
-            Serial4.println(" bytes of HID descriptor");
+            logger.debugf("Retrieved %d bytes of HID descriptor", actual_length);
             
             // Print first few bytes for debugging
-            Serial4.print("I: First bytes: ");
+            logger.debug("First bytes: ");
             for (uint16_t i = 0; i < min(actual_length, (uint16_t)16); i++) {
-                if (hid_descriptor[i] < 0x10) Serial4.print("0");
-                Serial4.print(hid_descriptor[i], HEX);
-                Serial4.print(" ");
+                logger.debugf("%02X ", hid_descriptor[i]);
             }
-            Serial4.println();
         }
         
         return true;
     }
     
     if (debug_enabled) {
-        Serial4.println("I: Failed to retrieve HID descriptor");
+        logger.warning("Failed to retrieve HID descriptor");
     }
     
     return false;
@@ -195,13 +185,13 @@ bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
 bool HIDMouseDescriptorHandler::activateInterface() {
     if (!host_driver || interface_index == 0xFF) {
         if (debug_enabled) {
-            Serial4.println("I: Cannot activate - no interface");
+            logger.error("Error cannot activate no device interface found, report this error to the developer");
         }
         return false;
     }
     
     if (debug_enabled) {
-        Serial4.println("I: Interface activation complete");
+        logger.debug("Interface activation complete");
     }
     
     // Note: SET_IDLE and SET_PROTOCOL are optional HID commands that many devices
@@ -223,7 +213,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
     bool debug_enabled = SunBoxStartup::isDebugEnabled();
     
     if (debug_enabled) {
-        Serial4.println("\nI: === Parsing HID Report Descriptor ===");
+        logger.debug("\n=== Parsing HID Report Descriptor ===");
     }
     
     ParseState state = {0};
@@ -269,39 +259,28 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
         if (debug_enabled && ((type == HID_GLOBAL_USAGE_PAGE) || 
             (type == HID_LOCAL_USAGE) || 
             (type == HID_MAIN_INPUT))) {
-            Serial4.print("I:   [");
-            Serial4.print(offset, HEX);
-            Serial4.print("] ");
+            logger.debugf("  [%X] ", offset);
             
             switch(type) {
                 case HID_GLOBAL_USAGE_PAGE:
-                    Serial4.print("Usage Page: 0x");
-                    Serial4.println(value, HEX);
+                    logger.debugf("Usage Page: 0x%X", value);
                     break;
                 case HID_LOCAL_USAGE:
-                    Serial4.print("Usage: 0x");
-                    Serial4.print(value, HEX);
+                    logger.debugf("Usage: 0x%X", value);
                     if (state.usage_page == HID_USAGE_PAGE_GENERIC_DESKTOP) {
-                        Serial4.print(" (");
                         switch(value) {
-                            case HID_USAGE_X: Serial4.print("X"); break;
-                            case HID_USAGE_Y: Serial4.print("Y"); break;
-                            case HID_USAGE_WHEEL: Serial4.print("Wheel"); break;
-                            case HID_USAGE_POINTER: Serial4.print("Pointer"); break;
-                            case HID_USAGE_MOUSE: Serial4.print("Mouse"); break;
-                            default: Serial4.print("?"); break;
+                            case HID_USAGE_X: logger.debug(" (X)"); break;
+                            case HID_USAGE_Y: logger.debug(" (Y)"); break;
+                            case HID_USAGE_WHEEL: logger.debug(" (Wheel)"); break;
+                            case HID_USAGE_POINTER: logger.debug(" (Pointer)"); break;
+                            case HID_USAGE_MOUSE: logger.debug(" (Mouse)"); break;
+                            default: logger.debug(" (?)"); break;
                         }
-                        Serial4.print(")");
                     }
-                    Serial4.println();
                     break;
                 case HID_MAIN_INPUT:
-                    Serial4.print("Input: Count=");
-                    Serial4.print(state.report_count);
-                    Serial4.print(" Size=");
-                    Serial4.print(state.report_size);
-                    Serial4.print(" Bits @ offset ");
-                    Serial4.println(current_bit);
+                    logger.debugf("Input: Count=%d Size=%d Bits @ offset %d", 
+                                 state.report_count, state.report_size, current_bit);
                     break;
             }
         }
@@ -368,14 +347,9 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             x_field.is_signed = state.logical_min < 0;
                             has_x = true;
                             
-                            Serial4.print("S: >>> Found X: offset=");
-                            Serial4.print(x_field.bit_offset);
-                            Serial4.print(" bits=");
-                            Serial4.print(x_field.bit_count);
-                            Serial4.print(" range=");
-                            Serial4.print(x_field.logical_min);
-                            Serial4.print("..");
-                            Serial4.println(x_field.logical_max);
+                            logger.debugf(">>> Found X: offset=%d bits=%d range=%d..%d", 
+                                        x_field.bit_offset, x_field.bit_count, 
+                                        x_field.logical_min, x_field.logical_max);
                         }
                         else if (usage == HID_USAGE_Y && !has_y) {
                             y_field.usage_page = state.usage_page;
@@ -388,14 +362,9 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             y_field.is_signed = state.logical_min < 0;
                             has_y = true;
                             
-                            Serial4.print("S: >>> Found Y: offset=");
-                            Serial4.print(y_field.bit_offset);
-                            Serial4.print(" bits=");
-                            Serial4.print(y_field.bit_count);
-                            Serial4.print(" range=");
-                            Serial4.print(y_field.logical_min);
-                            Serial4.print("..");
-                            Serial4.println(y_field.logical_max);
+                            logger.debugf(">>> Found Y: offset=%d bits=%d range=%d..%d", 
+                                        y_field.bit_offset, y_field.bit_count, 
+                                        y_field.logical_min, y_field.logical_max);
                         }
                         else if (usage == HID_USAGE_WHEEL && !has_wheel) {
                             wheel_field.usage_page = state.usage_page;
@@ -408,10 +377,8 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             wheel_field.is_signed = state.logical_min < 0;
                             has_wheel = true;
                             
-                            Serial4.print("S: >>> Found Wheel: offset=");
-                            Serial4.print(wheel_field.bit_offset);
-                            Serial4.print(" bits=");
-                            Serial4.println(wheel_field.bit_count);
+                            logger.debugf(">>> Found Wheel: offset=%d bits=%d", 
+                                        wheel_field.bit_offset, wheel_field.bit_count);
                         }
                     }
                     else if (state.usage_page == HID_USAGE_PAGE_BUTTON && !has_buttons) {
@@ -424,12 +391,8 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                         button_count = state.report_count;
                         has_buttons = true;
                         
-                        Serial4.print("S: >>> Found Buttons: offset=");
-                        Serial4.print(buttons_field.bit_offset);
-                        Serial4.print(" count=");
-                        Serial4.print(button_count);
-                        Serial4.print(" bits=");
-                        Serial4.println(buttons_field.bit_count);
+                        logger.debugf(">>> Found Buttons: offset=%d count=%d bits=%d", 
+                                    buttons_field.bit_offset, button_count, buttons_field.bit_count);
                     }
                 }
                 
@@ -449,18 +412,13 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
     report_size_bytes = (total_bits + 7) / 8;
     report_id = state.report_id;
     
-    Serial4.print("\nS: Total bits: ");
-    Serial4.print(total_bits);
-    Serial4.print(" = ");
-    Serial4.print(report_size_bytes);
-    Serial4.println(" bytes");
+    logger.debugf("\nTotal bits: %d = %d bytes", total_bits, report_size_bytes);
     
-    Serial4.print("S: Found: ");
-    if (has_buttons) Serial4.print("Buttons ");
-    if (has_x) Serial4.print("X ");
-    if (has_y) Serial4.print("Y ");
-    if (has_wheel) Serial4.print("Wheel");
-    Serial4.println();
+    logger.debug("Found: ");
+    if (has_buttons) logger.debug("Buttons ");
+    if (has_x) logger.debug("X ");
+    if (has_y) logger.debug("Y ");
+    if (has_wheel) logger.debug("Wheel");
     
     // Check if we have minimum requirements
     if (has_x && has_y) {
@@ -469,7 +427,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
     }
     
     // If parsing failed or incomplete, use boot mouse format
-    Serial4.println("\nS: Missing X or Y - using boot mouse format");
+    logger.warning("\nMissing X or Y - using boot mouse format");
     setBootMouseFormat();
     return true;  // Return true because we have a valid format now
 }
@@ -517,7 +475,7 @@ void HIDMouseDescriptorHandler::setBootMouseFormat() {
     wheel_field.is_signed = true;
     wheel_field.is_relative = true;
     
-    Serial4.println("S: Set boot mouse format");
+    logger.debug("Set boot mouse format");
 }
 
 int32_t HIDMouseDescriptorHandler::extractValue(const uint8_t* data, uint16_t bit_offset, uint8_t bit_count,
@@ -722,168 +680,108 @@ bool HIDMouseDescriptorHandler::formatMouseData(const MouseState& state, uint8_t
 }
 
 void HIDMouseDescriptorHandler::printInterfaceInfo() {
-    Serial4.println("\nI: === HID Mouse Interface Info ===");
+    logger.debug("\n=== HID Mouse Interface Info ===");
     
     if (interface_index == 0xFF) {
-        Serial4.println("I: No mouse interface found");
+        logger.error("No mouse interface found");
         return;
     }
     
-    Serial4.print("I: Interface Index: ");
-    Serial4.println(interface_index);
-    Serial4.print("I: Interface Number: ");
-    Serial4.println(interface_number);
-    Serial4.print("I: Protocol: ");
-    Serial4.print(interface_protocol);
+    logger.debugf("Interface Index: %d", interface_index);
+    logger.debugf("Interface Number: %d", interface_number);
+    logger.debugf("Protocol: %d", interface_protocol);
     
     switch (interface_protocol) {
-        case 0: Serial4.println(" (None)"); break;
-        case 1: Serial4.println(" (Keyboard)"); break;
-        case 2: Serial4.println(" (Mouse)"); break;
-        default: Serial4.println(" (Unknown)"); break;
+        case 0: logger.debug(" (None)"); break;
+        case 1: logger.debug(" (Keyboard)"); break;
+        case 2: logger.debug(" (Mouse)"); break;
+        default: logger.debug(" (Unknown)"); break;
     }
     
-    Serial4.print("I: HID Descriptor Length: ");
-    Serial4.println(descriptor_length);
+    logger.debugf("HID Descriptor Length: %d", descriptor_length);
     
-    Serial4.print("I: Endpoint: 0x");
-    if (endpoint_address < 0x10) Serial4.print("0");
-    Serial4.print(endpoint_address | 0x80, HEX);  // IN endpoint
-    Serial4.print(" (");
-    Serial4.print(endpoint_size);
-    Serial4.print(" bytes, interval ");
-    Serial4.print(endpoint_interval);
-    Serial4.println("ms)");
+    logger.debugf("Endpoint: 0x%02X (%d bytes, interval %dms)", 
+                 endpoint_address | 0x80, endpoint_size, endpoint_interval);
     
-    Serial4.print("I: State: ");
+    logger.debug("State: ");
     switch (handler_state) {
-        case HID_STATE_IDLE: Serial4.println("IDLE"); break;
-        case HID_STATE_WAIT_DESCRIPTOR: Serial4.println("WAIT_DESCRIPTOR"); break;
-        case HID_STATE_PARSING: Serial4.println("PARSING"); break;
-        case HID_STATE_READY: Serial4.println("READY"); break;
-        case HID_STATE_ERROR: Serial4.println("ERROR"); break;
+        case HID_STATE_IDLE: logger.debug("IDLE"); break;
+        case HID_STATE_WAIT_DESCRIPTOR: logger.debug("WAIT_DESCRIPTOR"); break;
+        case HID_STATE_PARSING: logger.debug("PARSING"); break;
+        case HID_STATE_READY: logger.debug("READY"); break;
+        case HID_STATE_ERROR: logger.error("ERROR"); break;
     }
     
-    Serial4.print("I: Descriptor Valid: ");
-    Serial4.println(valid ? "Yes" : "No");
+    logger.debugf("Descriptor Valid: %s", valid ? "Yes" : "No");
     
     if (valid && hid_descriptor_size > 0) {
-        Serial4.print("I: Descriptor Size: ");
-        Serial4.print(hid_descriptor_size);
-        Serial4.println(" bytes");
+        logger.debugf("Descriptor Size: %d bytes", hid_descriptor_size);
     }
     
-    Serial4.println("I: ===============================");
+    logger.debug("===============================");
 }
 
 void HIDMouseDescriptorHandler::printDescriptorInfo() {
-    Serial4.println("\nI: === HID Report Structure ===");
-    Serial4.print("I: Valid: ");
-    Serial4.println(valid ? "Yes" : "No");
+    logger.debug("\n=== HID Report Structure ===");
+    logger.debugf("Valid: %s", valid ? "Yes" : "No");
     
     if (!valid) return;
     
-    Serial4.print("I: Report ID: ");
-    Serial4.println(report_id);
-    Serial4.print("I: Report Size: ");
-    Serial4.print(report_size_bytes);
-    Serial4.print(" bytes (");
-    Serial4.print(total_bits);
-    Serial4.println(" bits)");
+    logger.debugf("Report ID: %d", report_id);
+    logger.debugf("Report Size: %d bytes (%d bits)", report_size_bytes, total_bits);
     
     if (has_buttons) {
-        Serial4.print("\nI: Buttons: ");
-        Serial4.print(button_count);
-        Serial4.println(" buttons");
-        Serial4.print("I:   Bit offset: ");
-        Serial4.println(buttons_field.bit_offset);
-        Serial4.print("I:   Total bits: ");
-        Serial4.println(buttons_field.bit_count);
+        logger.debugf("\nButtons: %d buttons", button_count);
+        logger.debugf("  Bit offset: %d", buttons_field.bit_offset);
+        logger.debugf("  Total bits: %d", buttons_field.bit_count);
     }
     
     if (has_x) {
-        Serial4.println("\nI: X Axis:");
-        Serial4.print("I:   Bit offset: ");
-        Serial4.print(x_field.bit_offset);
-        Serial4.print(" (byte ");
-        Serial4.print(x_field.bit_offset / 8);
-        Serial4.print(" bit ");
-        Serial4.print(x_field.bit_offset % 8);
-        Serial4.println(")");
-        Serial4.print("I:   Size: ");
-        Serial4.print(x_field.bit_count);
-        Serial4.println(" bits");
-        Serial4.print("I:   Range: ");
-        Serial4.print(x_field.logical_min);
-        Serial4.print(" to ");
-        Serial4.println(x_field.logical_max);
-        Serial4.print("I:   Type: ");
-        Serial4.print(x_field.is_relative ? "Relative" : "Absolute");
-        Serial4.print(", ");
-        Serial4.println(x_field.is_signed ? "Signed" : "Unsigned");
+        logger.debug("\nX Axis:");
+        logger.debugf("  Bit offset: %d (byte %d bit %d)", 
+                     x_field.bit_offset, x_field.bit_offset / 8, x_field.bit_offset % 8);
+        logger.debugf("  Size: %d bits", x_field.bit_count);
+        logger.debugf("  Range: %d to %d", x_field.logical_min, x_field.logical_max);
+        logger.debugf("  Type: %s, %s", 
+                     x_field.is_relative ? "Relative" : "Absolute",
+                     x_field.is_signed ? "Signed" : "Unsigned");
     }
     
     if (has_y) {
-        Serial4.println("\nI: Y Axis:");
-        Serial4.print("I:   Bit offset: ");
-        Serial4.print(y_field.bit_offset);
-        Serial4.print(" (byte ");
-        Serial4.print(y_field.bit_offset / 8);
-        Serial4.print(" bit ");
-        Serial4.print(y_field.bit_offset % 8);
-        Serial4.println(")");
-        Serial4.print("I:   Size: ");
-        Serial4.print(y_field.bit_count);
-        Serial4.println(" bits");
-        Serial4.print("I:   Range: ");
-        Serial4.print(y_field.logical_min);
-        Serial4.print(" to ");
-        Serial4.println(y_field.logical_max);
-        Serial4.print("I:   Type: ");
-        Serial4.print(y_field.is_relative ? "Relative" : "Absolute");
-        Serial4.print(", ");
-        Serial4.println(y_field.is_signed ? "Signed" : "Unsigned");
+        logger.debug("\nY Axis:");
+        logger.debugf("  Bit offset: %d (byte %d bit %d)", 
+                     y_field.bit_offset, y_field.bit_offset / 8, y_field.bit_offset % 8);
+        logger.debugf("  Size: %d bits", y_field.bit_count);
+        logger.debugf("  Range: %d to %d", y_field.logical_min, y_field.logical_max);
+        logger.debugf("  Type: %s, %s", 
+                     y_field.is_relative ? "Relative" : "Absolute",
+                     y_field.is_signed ? "Signed" : "Unsigned");
     }
     
     if (has_wheel) {
-        Serial4.println("\nI: Wheel:");
-        Serial4.print("I:   Bit offset: ");
-        Serial4.print(wheel_field.bit_offset);
-        Serial4.print(" (byte ");
-        Serial4.print(wheel_field.bit_offset / 8);
-        Serial4.print(" bit ");
-        Serial4.print(wheel_field.bit_offset % 8);
-        Serial4.println(")");
-        Serial4.print("I:   Size: ");
-        Serial4.print(wheel_field.bit_count);
-        Serial4.println(" bits");
+        logger.debug("\nWheel:");
+        logger.debugf("  Bit offset: %d (byte %d bit %d)", 
+                     wheel_field.bit_offset, wheel_field.bit_offset / 8, wheel_field.bit_offset % 8);
+        logger.debugf("  Size: %d bits", wheel_field.bit_count);
     }
     
-    Serial4.println("I: ==========================\n");
+    logger.debug("==========================\n");
 }
 
 void HIDMouseDescriptorHandler::printMouseState(const MouseState& state) {
     if (debug_enabled) {
-        Serial4.print("I: Mouse: Buttons=0x");
-        if (state.buttons < 0x10) Serial4.print("0");
-        Serial4.print(state.buttons, HEX);
-        Serial4.print(" (");
+        logger.debugf("Mouse: Buttons=0x%02X (", state.buttons);
         
         // Check all possible buttons
-        if (state.buttons & 0x01) Serial4.print("L");
-        if (state.buttons & 0x02) Serial4.print("R"); 
-        if (state.buttons & 0x04) Serial4.print("M");
-        if (state.buttons & 0x08) Serial4.print("B4");  // Button 4 (thumb back)
-        if (state.buttons & 0x10) Serial4.print("B5");  // Button 5 (thumb forward)
-        if (state.buttons & 0x20) Serial4.print("B6");  // Button 6 (if exists)
-        if (state.buttons & 0x40) Serial4.print("B7");  // Button 7 (if exists)
-        if (state.buttons & 0x80) Serial4.print("B8");  // Button 8 (if exists)
+        if (state.buttons & 0x01) logger.debug("L");
+        if (state.buttons & 0x02) logger.debug("R"); 
+        if (state.buttons & 0x04) logger.debug("M");
+        if (state.buttons & 0x08) logger.debug("B4");  // Button 4 (thumb back)
+        if (state.buttons & 0x10) logger.debug("B5");  // Button 5 (thumb forward)
+        if (state.buttons & 0x20) logger.debug("B6");  // Button 6 (if exists)
+        if (state.buttons & 0x40) logger.debug("B7");  // Button 7 (if exists)
+        if (state.buttons & 0x80) logger.debug("B8");  // Button 8 (if exists)
         
-        Serial4.print(") X=");
-        Serial4.print(state.x);
-        Serial4.print(" Y=");
-        Serial4.print(state.y);
-        Serial4.print(" Wheel=");
-        Serial4.println(state.wheel);
+        logger.debugf(") X=%d Y=%d Wheel=%d", state.x, state.y, state.wheel);
     }
 }

@@ -1,4 +1,6 @@
 #include "SunBoxEEPROM.h"
+#include "SunBoxLogger.h"
+#include "SunBoxStartup.h"
 
 // Global instance
 SunBoxEEPROM sunboxEEPROM;
@@ -10,10 +12,40 @@ void SunBoxEEPROM::begin() {
     // Initialize EEPROM if needed
     isInitialized = true;
     
+    logger.startup("Reading EEPROM...");
+    
     // Verify EEPROM size is adequate
     if (EEPROM.length() < (EEPROM_DEBUG_ADDR + sizeof(DebugConfig))) {
-        Serial4.println("[EEPROM]: Warning - EEPROM size may be insufficient");
+        logger.warning("EEPROM size may be insufficient");
     }
+    
+    // Read and display all EEPROM values if debug is enabled
+    if (SunBoxStartup::isDebugEnabled()) {
+        // Check debug configuration
+        DebugConfig debugConfig;
+        EEPROM.get(EEPROM_DEBUG_ADDR, debugConfig);
+        if (debugConfig.magic == EEPROM_DEBUG_MAGIC) {
+            logger.debugf("Debug config: %s", debugConfig.debugEnabled ? "ENABLED" : "DISABLED");
+        } else {
+            logger.debug("No valid debug configuration found");
+        }
+        
+        // Check claim configuration
+        ClaimConfig claimConfig;
+        EEPROM.get(EEPROM_CLAIM_ADDR, claimConfig);
+        if (claimConfig.magic == EEPROM_CLAIM_MAGIC) {
+            logger.debug("Found claim configuration:");
+            logger.debugf("  VID: 0x%04X", claimConfig.vid);
+            logger.debugf("  PID: 0x%04X", claimConfig.pid);
+            logger.debugf("  Interface: %d", claimConfig.interface_num);
+            logger.debugf("  Endpoint: 0x%02X", claimConfig.endpoint_addr);
+            logger.debugf("  Endpoint Size: %d", claimConfig.endpoint_size);
+        } else {
+            logger.debug("No claim configuration found");
+        }
+    }
+    
+    logger.startup("Finished reading EEPROM");
 }
 
 bool SunBoxEEPROM::saveClaimConfig(uint16_t vid, uint16_t pid, uint8_t interface_num, 

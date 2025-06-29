@@ -3,6 +3,7 @@
 #include "Arduino.h"
 #include <EEPROM.h>
 #include "SunBoxEEPROM.h"  // For the struct definitions and constants
+#include "SunBoxLogger.h"  // For logger
 
 // Static member initialization
 bool SunBoxStartup::initialized = false;
@@ -20,6 +21,10 @@ void SunBoxStartup::begin() {
     Serial4.begin(115200);
     delay(100);
     
+    // Initialize logger with Serial4
+    logger.begin(&Serial4);
+    logger.startup("SunBox Initilizing...");
+    
     // Load debug mode from EEPROM directly (can't use sunboxEEPROM object yet)
     DebugConfig config;
     EEPROM.get(EEPROM_DEBUG_ADDR, config);
@@ -30,7 +35,7 @@ void SunBoxStartup::begin() {
         debugEnabled = false;
     }
     
-    Serial4.println("S: SunBox early initialization complete.");
+    logger.startup("SunBox Initalized...");
     
     // Don't create any USB objects here - let the main sketch do it
     ready = true;
@@ -48,7 +53,7 @@ void SunBoxStartup::setDebugEnabled(bool enabled) {
     debugEnabled = enabled;
 }
 
-// C-callable wrapper functions
+// C-callable wrapper functions - MUST be in extern "C" block
 extern "C" {
     void SunBoxStartup_begin(void) {
         SunBoxStartup::begin();
