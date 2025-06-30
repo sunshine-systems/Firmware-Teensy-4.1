@@ -6,10 +6,10 @@
 #include "USBDeviceProxy.h"
 
 // Mouse button definitions (matching Arduino)
-#define MOUSE_LEFT      1
-#define MOUSE_RIGHT     2
-#define MOUSE_MIDDLE    4
-#define MOUSE_BUTTON4   8
+#define MOUSE_LEFT      0x1
+#define MOUSE_RIGHT     0x2
+#define MOUSE_MIDDLE    0x4
+#define MOUSE_BUTTON4   0x8
 #define MOUSE_BUTTON5   0x10
 
 // Forward declarations
@@ -47,6 +47,7 @@ private:
     uint8_t previousUsbButtons;
     
     // State tracking for Serial
+    MouseState previousSerialState;
     uint8_t previousSerialButtons;
     
     // Timestamps for button events
@@ -76,7 +77,6 @@ private:
     bool shouldExcludeButton(uint8_t currentButtons, uint8_t previousButtons, uint8_t buttonMask);
     void handleMouseButtonConfigCheck(uint8_t& buttons, uint8_t unmodifiedButtons, uint8_t previousButtons, 
                                      uint8_t buttonMask, int disablePassthroughOption, unsigned long& lastPressTime);
-    void logMouseEvent(uint8_t buttons);
 };
 
 #endif // _SUNBOX_SYNTHETIC_HANDLE_OUTPUT_H_

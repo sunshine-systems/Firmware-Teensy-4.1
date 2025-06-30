@@ -13,6 +13,7 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
       sensReductionXAccumulator(0), sensReductionYAccumulator(0),
       spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0) {
     previousUsbState.clear();
+    previousSerialState.clear();
 }
 
 void SunBoxSyntheticHandleOutput::begin() {
@@ -90,6 +91,9 @@ void SunBoxSyntheticHandleOutput::process() {
     
     // Get serial data if available
     if (hasSerialData) {
+        // Save previous state BEFORE getting new state
+        previousSerialButtons = previousSerialState.buttons;
+        
         serialState = commands.getMouseState();
         
         // Check for sensitivity reduction trigger (scroll wheel = 1)
@@ -97,17 +101,17 @@ void SunBoxSyntheticHandleOutput::process() {
             activationTimestamp4MouseMovementLockout = millis() + sensReductionDurationMilliseconds;
         }
         
-        previousSerialButtons = serialState.buttons;
+        // Update previous state for next cycle
+        previousSerialState = serialState;
         commands.resetData();
     } else {
         serialState.clear();
+        // Use saved previous serial buttons
+        previousSerialButtons = previousSerialState.buttons;
     }
     
     // Handle MMB press for exclusion window
     if (usbState.buttons & MOUSE_MIDDLE) {
-        // Log the event
-        logMouseEvent(usbState.buttons);
-        
         // Update exclusion timestamp
         activationTimestamp4MouseButtonExclusion = millis();
         
@@ -116,20 +120,6 @@ void SunBoxSyntheticHandleOutput::process() {
             // Passthrough disabled, clear the byte
             usbState.buttons &= ~MOUSE_MIDDLE;
         }
-    }
-    
-    // Log button changes for other buttons
-    if ((usbState.buttons & MOUSE_RIGHT) != (previousUsbButtons & MOUSE_RIGHT)) {
-        logMouseEvent(usbState.buttons);
-    }
-    if ((usbState.buttons & MOUSE_LEFT) != (previousUsbButtons & MOUSE_LEFT)) {
-        logMouseEvent(usbState.buttons);
-    }
-    if ((usbState.buttons & MOUSE_BUTTON4) != (previousUsbButtons & MOUSE_BUTTON4)) {
-        logMouseEvent(usbState.buttons);
-    }
-    if ((usbState.buttons & MOUSE_BUTTON5) != (previousUsbButtons & MOUSE_BUTTON5)) {
-        logMouseEvent(usbState.buttons);
     }
     
     // Apply button filtering
@@ -172,7 +162,8 @@ void SunBoxSyntheticHandleOutput::process() {
                 finalButtons |= buttonMask;
             }
         } else {
-            // Normal handling for other buttons
+            // Normal handling for other buttons (MMB, MB4, MB5)
+            // Just take the USB state for these buttons (after filtering)
             if (usbState.buttons & buttonMask) {
                 finalButtons |= buttonMask;
             }
@@ -191,6 +182,14 @@ void SunBoxSyntheticHandleOutput::process() {
     
     // Convert from standard format to device format
     usbHandler.getHIDHandler().formatMouseData(finalState, outputBuffer, outputLength);
+    
+    // WORKAROUND: The formatMouseData function incorrectly handles button bitfields
+    // It treats each button as an individual 1-bit field rather than a combined 8-bit field
+    // This causes any non-zero button value to be converted to 0x01 (left click)
+    // Override the first byte with our correct button state
+    if (outputLength > 0) {
+        outputBuffer[0] = finalState.buttons;
+    }
     
     // Send the formatted data
     outputMouseData(outputBuffer, outputLength);
@@ -354,8 +353,4 @@ void SunBoxSyntheticHandleOutput::handleMouseButtonConfigCheck(uint8_t& buttons,
         // Button released
         lastPressTime = currentTime;
     }
-}
-
-void SunBoxSyntheticHandleOutput::logMouseEvent(uint8_t buttons) {
-    logger.mousef("%02X", buttons);
 }
