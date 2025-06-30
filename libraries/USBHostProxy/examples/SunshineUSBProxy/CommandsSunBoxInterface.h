@@ -6,11 +6,12 @@
 
 // Firmware settings structure
 struct FirmwareSettings {
-    uint8_t sensitivity;
-    uint8_t acceleration;
-    uint8_t smoothing;
-    
+    // This struct now just handles the update logic
+    // Actual settings are stored as globals in Config.cpp
     void updateSettings(const uint8_t* data);
+    
+private:
+    void printSettingChange(const String& settingName, const String& value) const;
 };
 
 class CommandsSunBoxInterface {
@@ -58,6 +59,7 @@ private:
     // Parse functions (to be implemented based on actual protocol)
     int16_t parseX_00A6(const uint8_t* data);
     int16_t parseY_00A6(const uint8_t* data);
+    int16_t twosComplement_00A6(uint8_t highByte, uint8_t lowByte);
 };
 
 #endif // _COMMANDS_SUNBOX_INTERFACE_H_

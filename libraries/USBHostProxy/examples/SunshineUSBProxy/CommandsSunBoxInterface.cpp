@@ -1,11 +1,90 @@
 #include "CommandsSunBoxInterface.h"
 #include "SunBoxStartup.h"
+#include "SunBoxLogger.h"
+#include "Config.h"
 
 // FirmwareSettings implementation
 void FirmwareSettings::updateSettings(const uint8_t* data) {
-    sensitivity = data[0];
-    acceleration = data[1];
-    smoothing = data[2];
+    uint8_t settingId = data[0];
+    int16_t settingValue = data[1] | (data[2] << 8);  // Combine two bytes into a 16-bit integer
+
+    switch (settingId) {
+        case 0:
+            logger.info("V: 5");
+            break;
+        case 1:
+            logPerformanceMetrics = settingValue;
+            printSettingChange("logPerformanceMetrics", String(logPerformanceMetrics));
+            break;
+        case 2:
+            enableSensReduction = settingValue;
+            printSettingChange("enableSensReduction", String(enableSensReduction));
+            break;
+        case 3:
+            sensReductionDurationMilliseconds = settingValue;
+            printSettingChange("sensReductionDurationMilliseconds", String(sensReductionDurationMilliseconds));
+            break;
+        case 4:
+            sensReductionAmmountX = settingValue;
+            printSettingChange("sensReductionAmmountX", String(sensReductionAmmountX));
+            break;
+        case 5:
+            sensReductionAmmountY = settingValue;
+            printSettingChange("sensReductionAmmountY", String(sensReductionAmmountY));
+            break;
+        case 6:
+            enableSpinning = settingValue;
+            printSettingChange("enableSpinning", String(enableSpinning));
+            break;
+        case 7:
+            spinAmountPerRotation = settingValue;
+            printSettingChange("spinAmountPerRotation", String(spinAmountPerRotation));
+            break;
+        case 8:
+            spinNumberOfRotations = settingValue;
+            printSettingChange("spinNumberOfRotations", String(spinNumberOfRotations));
+            break;
+        case 9:
+            spinDelayBetweenRotationsMilliseconds = settingValue;
+            printSettingChange("spinDelayBetweenRotationsMilliseconds", String(spinDelayBetweenRotationsMilliseconds));
+            break;
+        case 10:
+            spinLockoutMouseUntilCompletion = settingValue;
+            printSettingChange("spinLockoutMouseUntilCompletion", String(spinLockoutMouseUntilCompletion));
+            break;
+        case 11:
+            spinBeforeAfterMouseEvent = settingValue;
+            printSettingChange("spinBeforeAfterMouseEvent", String(spinBeforeAfterMouseEvent));
+            break;
+        case 12:
+            disablePassthroughForMMB = settingValue;
+            printSettingChange("disablePassthroughForMMB", String(disablePassthroughForMMB));
+            break;
+        case 13:
+            disablePassthroughForRMB = settingValue;
+            printSettingChange("disablePassthroughForRMB", String(disablePassthroughForRMB));
+            break;
+        case 14:
+            disablePassthroughForLMB = settingValue;
+            printSettingChange("disablePassthroughForLMB", String(disablePassthroughForLMB));
+            break;
+        case 15:
+            disablePassthroughForMB4 = settingValue;
+            printSettingChange("disablePassthroughForMB4", String(disablePassthroughForMB4));
+            break;
+        case 16:
+            disablePassthroughForMB5 = settingValue;
+            printSettingChange("disablePassthroughForMB5", String(disablePassthroughForMB5));
+            break;
+        default:
+            logger.info("I: Unknown setting ID received -> " + String(settingId));
+            logger.info("I: Unknown setting ID Value received -> " + String(settingValue));
+            break;
+    }
+}
+
+void FirmwareSettings::printSettingChange(const String& settingName, const String& value) const {
+    logger.info("I: Setting changed - " + settingName + ": " + value);
 }
 
 // CommandsSunBoxInterface implementation
@@ -44,7 +123,6 @@ void CommandsSunBoxInterface::processSerial(Stream& serial) {
         } else if (expectedLength == 3) {
             // If the length byte is 3, it's a settings message
             firmwareSettings.updateSettings(commandBuffer);
-            Serial4.println("S: Settings updated");
         }
     }
 }
@@ -81,17 +159,43 @@ void CommandsSunBoxInterface::processAndSetHIDReportData(const uint8_t* data) {
 }
 
 int16_t CommandsSunBoxInterface::parseX_00A6(const uint8_t* data) {
-    // TODO: Implement based on actual protocol
-    // This is a placeholder - implement based on your actual data format
-    // Assuming bytes 1-2 are X movement (little-endian)
-    return (int16_t)(data[1] | (data[2] << 8));
+    int16_t x;
+    uint8_t overflowByte = data[1];
+
+    if (overflowByte == 0x80 || overflowByte == 0x7F) {
+        x = twosComplement_00A6(data[5], data[4]);
+    } else {
+        x = static_cast<int16_t>(data[1]);
+        if (x & (1 << 7)) {
+            x -= 1 << 8;
+        }
+    }
+
+    return x;
 }
 
 int16_t CommandsSunBoxInterface::parseY_00A6(const uint8_t* data) {
-    // TODO: Implement based on actual protocol
-    // This is a placeholder - implement based on your actual data format
-    // Assuming bytes 4-5 are Y movement (little-endian)
-    return (int16_t)(data[4] | (data[5] << 8));
+    int16_t y;
+    uint8_t overflowByte = data[2];
+
+    if (overflowByte == 0x80 || overflowByte == 0x7F) {
+        y = twosComplement_00A6(data[7], data[6]);
+    } else {
+        y = static_cast<int16_t>(data[2]);
+        if (y & (1 << 7)) {
+            y -= 1 << 8;
+        }
+    }
+
+    return y;
+}
+
+int16_t CommandsSunBoxInterface::twosComplement_00A6(uint8_t highByte, uint8_t lowByte) {
+    int16_t value = (highByte << 8) | lowByte;
+    if (value & (1 << 15)) {
+        value -= 1UL << 16;
+    }
+    return value;
 }
 
 void CommandsSunBoxInterface::reset() {
