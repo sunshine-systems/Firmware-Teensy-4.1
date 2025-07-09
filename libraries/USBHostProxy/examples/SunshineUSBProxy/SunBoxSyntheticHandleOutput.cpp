@@ -99,6 +99,8 @@ void SunBoxSyntheticHandleOutput::process() {
         // Check for sensitivity reduction trigger (scroll wheel = 1)
         if (serialState.wheel == 1) {
             activationTimestamp4MouseMovementLockout = millis() + sensReductionDurationMilliseconds;
+            // Clear the scroll wheel so it doesn't get sent to host
+            serialState.wheel = 0;
         }
         
         // Update previous state for next cycle
@@ -124,6 +126,10 @@ void SunBoxSyntheticHandleOutput::process() {
     
     // Apply button filtering
     performButtonFiltering(usbState.buttons, previousUsbButtons, unmodifiedUsbButtons);
+    
+    // Apply button filtering to serial buttons too
+    uint8_t unmodifiedSerialButtons = serialState.buttons;
+    performButtonFiltering(serialState.buttons, previousSerialButtons, unmodifiedSerialButtons);
     
     // Handle spin bot activation
     bool lmbPressed = !(previousUsbButtons & MOUSE_LEFT) && (usbState.buttons & MOUSE_LEFT);
@@ -183,10 +189,7 @@ void SunBoxSyntheticHandleOutput::process() {
     // Convert from standard format to device format
     usbHandler.getHIDHandler().formatMouseData(finalState, outputBuffer, outputLength);
     
-    // WORKAROUND: The formatMouseData function incorrectly handles button bitfields
-    // It treats each button as an individual 1-bit field rather than a combined 8-bit field
-    // This causes any non-zero button value to be converted to 0x01 (left click)
-    // Override the first byte with our correct button state
+    // TEMPORARY FIX - Override first byte with raw buttons
     if (outputLength > 0) {
         outputBuffer[0] = finalState.buttons;
     }
