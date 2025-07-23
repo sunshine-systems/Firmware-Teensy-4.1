@@ -148,6 +148,12 @@ public:
     // Check if device uses Report ID
     bool hasReportId() const { return report_id > 0; }
     
+    // Get button byte offset (which byte contains button data)
+    uint8_t getButtonByteOffset() const { 
+        if (!has_buttons) return 0;
+        return buttons_field.bit_offset / 8; 
+    }
+    
     // Debug output
     void printInterfaceInfo();
     void printDescriptorInfo();

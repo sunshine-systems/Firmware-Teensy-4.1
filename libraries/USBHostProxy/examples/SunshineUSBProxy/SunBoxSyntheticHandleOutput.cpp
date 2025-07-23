@@ -3,6 +3,7 @@
 #include "SunBoxUSBMouseDataHandler.h"
 #include "SunBoxLogger.h"
 #include "Config.h"
+#include "SunBoxStartup.h"
 
 SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& commands, 
                                                        SunBoxUSBMouseDataHandler& usbHandler)
@@ -188,6 +189,33 @@ void SunBoxSyntheticHandleOutput::process() {
     
     // Convert from standard format to device format
     usbHandler.getHIDHandler().formatMouseData(finalState, outputBuffer, outputLength);
+    
+    // Debug logging to understand the issue
+    bool debug_enabled = SunBoxStartup::isDebugEnabled();
+    if (debug_enabled && finalState.buttons != 0) {
+        logger.debugf("Button state: 0x%02X, Button byte offset: %d", 
+                     finalState.buttons, 
+                     usbHandler.getHIDHandler().getButtonByteOffset());
+        logger.debugf("Output data: %02X %02X %02X %02X %02X %02X %02X %02X",
+                     outputLength > 0 ? outputBuffer[0] : 0,
+                     outputLength > 1 ? outputBuffer[1] : 0,
+                     outputLength > 2 ? outputBuffer[2] : 0,
+                     outputLength > 3 ? outputBuffer[3] : 0,
+                     outputLength > 4 ? outputBuffer[4] : 0,
+                     outputLength > 5 ? outputBuffer[5] : 0,
+                     outputLength > 6 ? outputBuffer[6] : 0,
+                     outputLength > 7 ? outputBuffer[7] : 0);
+    }
+    
+    // Proper fix: Place buttons at the correct byte position based on HID descriptor
+    uint8_t buttonByteOffset = usbHandler.getHIDHandler().getButtonByteOffset();
+    if (outputLength > buttonByteOffset) {
+        // Only override if the current byte doesn't match expected button state
+        // This preserves the work of formatMouseData if it's correct
+        if (outputBuffer[buttonByteOffset] != finalState.buttons) {
+            outputBuffer[buttonByteOffset] = finalState.buttons;
+        }
+    }
     
     // Send the formatted data
     outputMouseData(outputBuffer, outputLength);

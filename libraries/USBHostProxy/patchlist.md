@@ -74,3 +74,31 @@ Removed the offset adjustment logic from `formatMouseData`. The function now use
 - `examples/SunshineUSBProxy/SunBoxSyntheticHandleOutput.cpp` - Removed temporary button override
 
 ---
+
+## 2025-07-23: Dynamic Button Positioning Fix
+
+**Issue:** All mouse button presses were being interpreted as left clicks by Windows, even though the M: logs showed correct button values (0x02 for right, 0x04 for middle, etc.)
+
+**Affected Device:** Endgame Gear HS Dongle (VID: 0x3367, PID: 0x1970)
+
+**Symptoms:**
+- M: logs showed correct button values (0x01, 0x02, 0x04, 0x08, 0x10)
+- Windows interpreted all buttons as left clicks
+- Mouse movement worked correctly
+
+**Root Cause:**
+The `formatMouseData` function was not correctly placing button data at the expected byte position. The HID parser knows where buttons should be placed based on the descriptor, but the formatting wasn't working properly.
+
+**Fix Applied:**
+Added dynamic button positioning based on HID descriptor:
+- Added `getButtonByteOffset()` method to get correct button position from HID parser
+- Modified `SunBoxSyntheticHandleOutput::process()` to place buttons at the correct byte
+- Works for any device format (with or without Report ID)
+- Only overrides button byte if `formatMouseData` didn't place it correctly
+- Added debug logging to help diagnose formatMouseData issues
+
+**Files Modified:**
+- `src/HIDMouseDescriptorHandler.h` - Added getButtonByteOffset() method
+- `examples/SunshineUSBProxy/SunBoxSyntheticHandleOutput.cpp` - Dynamic button positioning with debug logging
+
+---
