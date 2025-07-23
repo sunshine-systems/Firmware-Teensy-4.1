@@ -10,7 +10,7 @@ void FirmwareSettings::updateSettings(const uint8_t* data) {
 
     switch (settingId) {
         case 0:
-            logger.info("V: 5");
+            logger.infof("V: %.2f", FIRMWARE_VERSION);
             break;
         case 1:
             logPerformanceMetrics = settingValue;

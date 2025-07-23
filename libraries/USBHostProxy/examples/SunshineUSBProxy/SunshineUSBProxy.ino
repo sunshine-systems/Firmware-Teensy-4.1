@@ -10,6 +10,7 @@
 #include "SunBoxStartup.h"
 #include "SunBoxLogger.h"
 #include "USBDeviceProxy.h"
+#include "Config.h"
 
 // =============================================================================
 // Configuration
@@ -110,7 +111,7 @@ void setup() {
     }
     
     systemInitialized = true;
-    logger.startup("System initialized - type 'help' for commands");
+    logger.startupf("SunBox %.2f initialized - type 'help' for developer debug commands", FIRMWARE_VERSION);
 }
 
 // =============================================================================
