@@ -587,10 +587,12 @@ bool HIDMouseDescriptorHandler::parseMouseData(const uint8_t* raw_data, uint32_t
     
     // Skip report ID if present
     const uint8_t* data = raw_data;
+    uint16_t offset_adjustment = 0;
     if (report_id > 0 && length > 0) {
         if (raw_data[0] == report_id) {
             data++;
             length--;
+            offset_adjustment = 8;  // Adjust bit offsets by 8 bits (1 byte)
         }
     }
     
@@ -603,7 +605,7 @@ bool HIDMouseDescriptorHandler::parseMouseData(const uint8_t* raw_data, uint32_t
     
     // Extract buttons
     if (has_buttons) {
-        uint32_t button_bits = extractValue(data, buttons_field.bit_offset, 
+        uint32_t button_bits = extractValue(data, buttons_field.bit_offset - offset_adjustment, 
                                           buttons_field.bit_count,
                                           buttons_field.logical_min, 
                                           buttons_field.logical_max, false);
@@ -612,21 +614,21 @@ bool HIDMouseDescriptorHandler::parseMouseData(const uint8_t* raw_data, uint32_t
     
     // Extract X
     if (has_x) {
-        state.x = extractValue(data, x_field.bit_offset, x_field.bit_count,
+        state.x = extractValue(data, x_field.bit_offset - offset_adjustment, x_field.bit_count,
                               x_field.logical_min, x_field.logical_max, 
                               x_field.is_signed);
     }
     
     // Extract Y
     if (has_y) {
-        state.y = extractValue(data, y_field.bit_offset, y_field.bit_count,
+        state.y = extractValue(data, y_field.bit_offset - offset_adjustment, y_field.bit_count,
                               y_field.logical_min, y_field.logical_max,
                               y_field.is_signed);
     }
     
     // Extract wheel
     if (has_wheel) {
-        state.wheel = extractValue(data, wheel_field.bit_offset, wheel_field.bit_count,
+        state.wheel = extractValue(data, wheel_field.bit_offset - offset_adjustment, wheel_field.bit_count,
                                   wheel_field.logical_min, wheel_field.logical_max,
                                   wheel_field.is_signed);
     }
@@ -646,33 +648,31 @@ bool HIDMouseDescriptorHandler::formatMouseData(const MouseState& state, uint8_t
     memset(raw_data, 0, length);
     
     // Add report ID if needed
-    uint8_t* data = raw_data;
     if (report_id > 0) {
         raw_data[0] = report_id;
-        data = raw_data + 1;
     }
     
     // Insert buttons
     if (has_buttons) {
-        insertValue(data, buttons_field.bit_offset, buttons_field.bit_count,
+        insertValue(raw_data, buttons_field.bit_offset, buttons_field.bit_count,
                    state.buttons, buttons_field.logical_min, buttons_field.logical_max);
     }
     
     // Insert X
     if (has_x) {
-        insertValue(data, x_field.bit_offset, x_field.bit_count,
+        insertValue(raw_data, x_field.bit_offset, x_field.bit_count,
                    state.x, x_field.logical_min, x_field.logical_max);
     }
     
     // Insert Y
     if (has_y) {
-        insertValue(data, y_field.bit_offset, y_field.bit_count,
+        insertValue(raw_data, y_field.bit_offset, y_field.bit_count,
                    state.y, y_field.logical_min, y_field.logical_max);
     }
     
     // Insert wheel
     if (has_wheel) {
-        insertValue(data, wheel_field.bit_offset, wheel_field.bit_count,
+        insertValue(raw_data, wheel_field.bit_offset, wheel_field.bit_count,
                    state.wheel, wheel_field.logical_min, wheel_field.logical_max);
     }
     

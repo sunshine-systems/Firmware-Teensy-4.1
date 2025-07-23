@@ -189,11 +189,6 @@ void SunBoxSyntheticHandleOutput::process() {
     // Convert from standard format to device format
     usbHandler.getHIDHandler().formatMouseData(finalState, outputBuffer, outputLength);
     
-    // TEMPORARY FIX - Override first byte with raw buttons
-    if (outputLength > 0) {
-        outputBuffer[0] = finalState.buttons;
-    }
-    
     // Send the formatted data
     outputMouseData(outputBuffer, outputLength);
     

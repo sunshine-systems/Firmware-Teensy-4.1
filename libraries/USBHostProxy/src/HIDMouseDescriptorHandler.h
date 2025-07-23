@@ -145,6 +145,9 @@ public:
     uint8_t getEndpointAddress() const { return endpoint_address; }
     uint16_t getEndpointSize() const { return endpoint_size; }
     
+    // Check if device uses Report ID
+    bool hasReportId() const { return report_id > 0; }
+    
     // Debug output
     void printInterfaceInfo();
     void printDescriptorInfo();
