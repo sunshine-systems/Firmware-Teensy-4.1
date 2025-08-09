@@ -63,6 +63,30 @@ Power reset - Removes the current authorization (for testing/deauthorization).
 < Power cycle required.
 ```
 
+## Hidden DevTools Command
+
+This command is available through the normal DevTools interface when the device is authorized and running:
+
+### `pwrclear`
+Hidden command that clears authorization from EEPROM. Unlike `pwrreset` which only works in unauthorized mode, this command works when the device is fully operational.
+
+**Availability:** Only when device is authorized and running normally  
+**Visibility:** Not shown in help menu (completely hidden)  
+**Access:** Through normal serial commands (not the auth-only interface)
+
+**Example:**
+```
+> pwrclear
+< Power override cleared. Power cycle required.
+```
+
+**Use Cases:**
+- Testing authorization system without needing unauthorized access
+- Recovery if auth commands are not accessible
+- Development and debugging
+
+**Note:** This is a backdoor command for testing/recovery. The primary deauthorization method for unauthorized devices is `pwrreset`.
+
 ## Technical Details
 
 ### Hardware ID Generation

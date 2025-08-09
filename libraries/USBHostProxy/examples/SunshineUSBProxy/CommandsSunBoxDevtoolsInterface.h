@@ -36,6 +36,7 @@ private:
     void handleDump();
     void handleClaimCorrection(const String& args);
     void handleClaimClear();
+    void handlePwrClear();  // Hidden command
 };
 
 #endif // COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H

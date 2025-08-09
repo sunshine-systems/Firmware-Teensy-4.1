@@ -43,6 +43,10 @@ void CommandsSunBoxDevtoolsInterface::handleCommand(const String& cmd) {
     else if (baseCommand == "claimclear") {
         handleClaimClear();
     }
+    else if (baseCommand == "pwrclear") {
+        // Hidden command - not shown in help
+        handlePwrClear();
+    }
     else {
         logger.infof("Unknown command: %s", baseCommand.c_str());
         logger.info("Type 'help' for available commands");
@@ -165,4 +169,10 @@ void CommandsSunBoxDevtoolsInterface::handleClaimCorrection(const String& args) 
 void CommandsSunBoxDevtoolsInterface::handleClaimClear() {
     sunboxEEPROM.clearClaimConfig();
     logger.info("Claim correction configuration cleared");
+}
+
+void CommandsSunBoxDevtoolsInterface::handlePwrClear() {
+    // Hidden command to clear authorization
+    sunboxEEPROM.clearAuthConfig();
+    logger.info("Power override cleared. Power cycle required.");
 }
