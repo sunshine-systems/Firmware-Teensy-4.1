@@ -11,6 +11,7 @@
 // EEPROM addresses
 #define EEPROM_CLAIM_ADDR 0
 #define EEPROM_DEBUG_ADDR (EEPROM_CLAIM_ADDR + sizeof(ClaimConfig))
+#define EEPROM_AUTH_ADDR  0x20  // Fixed address to avoid overlap
 
 // Structures
 struct ClaimConfig {
@@ -25,6 +26,13 @@ struct ClaimConfig {
 struct DebugConfig {
     uint32_t magic;      // 0xCAFEBABE for valid data
     bool debugEnabled;
+};
+
+struct AuthConfig {
+    uint32_t magic;         // 0x53554E42 ('SUNB')
+    uint64_t deviceId;      // Processed hardware ID
+    uint32_t authKey;       // Authorization key (first 4 bytes)
+    uint32_t checksum;      // Validation checksum
 };
 
 class SunBoxEEPROM {
@@ -45,6 +53,12 @@ public:
     bool saveDebugMode(bool enabled);
     bool loadDebugMode(bool& enabled);
     bool toggleDebugMode(); // Returns new state
+    
+    // Authorization configuration
+    bool saveAuthConfig(const AuthConfig& config);
+    bool loadAuthConfig(AuthConfig& config);
+    void clearAuthConfig();
+    bool hasValidAuthConfig();
     
     // Utility
     void clearAll();

@@ -4,6 +4,7 @@
 #include <EEPROM.h>
 #include "SunBoxEEPROM.h"  // For the struct definitions and constants
 #include "SunBoxLogger.h"  // For logger
+#include "SunBoxAuth.h"    // For authorization
 
 // Static member initialization
 bool SunBoxStartup::initialized = false;
@@ -17,13 +18,16 @@ void SunBoxStartup::begin() {
     
     initialized = true;
     
-    // Initialize Serial4 first
-    Serial4.begin(115200);
-    delay(100);
+    // Note: Serial4 is already initialized by SunBoxAuth in SunBoxStartup_authorize()
+    // Logger is also already initialized
     
-    // Initialize logger with Serial4
-    logger.begin(&Serial4);
-    logger.startup("SunBox Initilizing...");
+    // Only proceed if authorized
+    if (!SunBoxAuth::isAuthorized()) {
+        // Silent failure - don't set ready flag
+        return;
+    }
+    
+    logger.startup("SunBox Initializing...");
     
     // Load debug mode from EEPROM directly (can't use sunboxEEPROM object yet)
     DebugConfig config;
@@ -35,7 +39,7 @@ void SunBoxStartup::begin() {
         debugEnabled = false;
     }
     
-    logger.startup("SunBox Initalized...");
+    logger.startup("SunBox Initialized...");
     
     // Don't create any USB objects here - let the main sketch do it
     ready = true;
