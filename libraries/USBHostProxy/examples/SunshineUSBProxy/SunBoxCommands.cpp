@@ -180,7 +180,6 @@ void SunBoxCommands::routeToLegacy() {
         } else if (expectedLength == 3) {
             // Settings message
             legacyInterface->getSettings().updateSettings(commandBuffer);
-            Serial4.println("S: Settings updated");
         }
         
         // Remove processed bytes from buffer
