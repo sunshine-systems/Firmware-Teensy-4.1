@@ -60,7 +60,7 @@
 
 
 // Uncomment this line to see lots of debugging info!
-//#define USBHOST_PRINT_DEBUG
+#define USBHOST_PRINT_DEBUG // WARNING: DO NOT TURN THIS OFF SOME DEVICES WILL NOT PROPERLY POWER WHEN ITS DISABLED (Logitech GPro 2)
 
 
 // This can let you control where to send the debugging messages
