@@ -515,13 +515,13 @@ void USBHostDriver::pauseDataTransfers() {
         logger.debug("Waiting for current transfer to complete...");
         uint32_t wait_start = millis();
         
-        // Wait up to 100ms for the transfer to complete naturally
-        while (pending_in_transfer && (millis() - wait_start) < 100) {
+        // Wait up to 20ms for the transfer to complete naturally
+        while (pending_in_transfer && (millis() - wait_start) < 20) {
             if (usbHost) {
                 usbHost->Task();
             }
             yield();
-            delay(2);
+            delayMicroseconds(100);  // Check more frequently
         }
         
         if (!pending_in_transfer) {
@@ -533,9 +533,9 @@ void USBHostDriver::pauseDataTransfers() {
         }
     }
     
-    // Small stabilization delay
+    // Minimal stabilization delay
     logger.debug("Stabilization delay...");
-    delay(50);  // Reduced from 100ms to 50ms
+    delay(5);  // Reduced to 5ms for configuration changes only
 }
 
 void USBHostDriver::resumeDataTransfers() { 

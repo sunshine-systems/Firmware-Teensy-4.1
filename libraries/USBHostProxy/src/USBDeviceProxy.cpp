@@ -510,7 +510,8 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
     
     // Handle SET_CONFIGURATION specially - need to configure endpoints
     if (pending_setup.bmRequestType == 0x00 && pending_setup.bRequest == 0x09) {
-        // Pause data transfers ONLY during SET_CONFIGURATION
+        // Note: SET_CONFIGURATION needs special handling but we'll keep data flowing
+        // Only pause if absolutely necessary for reconfiguration
         hostDriver->pauseDataTransfers();
         
         // Forward to device first
@@ -546,7 +547,7 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
             control_stage = CONTROL_IDLE;
         }
         
-        // Always resume data transfers after SET_CONFIGURATION
+        // Resume after configuration changes
         hostDriver->resumeDataTransfers();
         return;
     }
@@ -634,10 +635,7 @@ void USBDeviceProxy::processControlTransfer() {
         if (pending_setup_saved.wLength > 16) dataStr += "...";
         logger.debug(dataStr.c_str());
         
-        // Temporarily pause data transfers while we forward the request
-        if (hostDriver) hostDriver->pauseDataTransfers();
-        
-        // Forward the SET_REPORT with data to the device
+        // Forward the SET_REPORT with data to the device (no pause needed)
         uint16_t actual_len = 0;
         bool success = false;
         
@@ -664,9 +662,6 @@ void USBDeviceProxy::processControlTransfer() {
                 500
             );
         }
-        
-        // Resume data transfers
-        if (hostDriver) hostDriver->resumeDataTransfers();
         
         if (success) {
             // Successfully forwarded to device, acknowledge to host
