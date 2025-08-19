@@ -1,0 +1,1558 @@
+Terminal cleared by user.
+I: USB Device polling rate: ~159467 Hz
+
+***********IMXRT Startup**********
+test 1 -1234567 3
+CCM_ANALOG_PLL_USB1=80003000
+enable USB clocks
+CCM_ANALOG_PLL_USB1=80003040
+Increasing voltage to 1250 mV
+need to switch to alternate clock during reconfigure of ARM PLL
+USB PLL is running, so we can use 120 MHz
+Freq: 12 MHz * 100 / 2 / 1
+ARM PLL=80002042
+ARM PLL needs reconfigure
+ARM PLL=80002064
+New Frequency: ARM=600000000, IPG=150000000
+analogInit
+S: SunBox Authorized
+S: SunBox Initializing...
+S: SunBox Initialized...
+S: Reading EEPROM...
+D: Debug config: ENABLED
+D: No claim configuration found
+S: Finished reading EEPROM
+S: Debug mode enabled from EEPROM
+S: Starting HID Mouse Descriptor Parsing..
+S: Waiting for USB mouse before starting device proxy...
+S: Starting USB Host...
+USB2 PLL running
+
+--- USBHost::begin() Complete ---
+Final USBCMD: 0x8B15
+Final USBINTR: 0x30C0016
+Final PORTSC1: 0x1C001000
+Final USBPHY2_CTRL: 0x2820C000
+---------------------------------
+S: SunBox USB Host Driver initializing...
+S: SunBox USB Host Driver ready for device...
+S: SunBox 5.13 initialized - type 'help' for developer debug commands
+connect
+begin reset
+port enabled
+end recovery
+--- new_Device (Original Code Base) ---
+Speed detected: 480 (HS) Mbit/sec
+Setting Control Pipe MaxLen to: 64
+--- new_Pipe (Original Code Base) ---
+Device Speed: 2 (HS)
+Pipe Type: 0
+Endpoint: 0
+MaxLen: 64
+Calculated QH Cap[0]: 0xF0406000
+Calculated QH Cap[1]: 0x40000000
+Added QH as first to Async List
+--- new_Pipe End ---
+--- Checking QH State Post-Queue (Original Code Base) ---
+Invalidating QH & first qTD cache regions before read...
+Reading QH fields...
+QH Addr: 0x20007080
+QH Current qTD: 0x20007120
+QH Next qTD: 0x20007160
+QH Token: 0x8000
+Expected First qTD Addr (from QH.next): 0x20007160
+Reading first qTD token...
+First qTD Token (read back): 0x40 Inactive
+-----------------------------------------------------
+--- new_Device End ---
+enumeration:
+enumeration:
+enumeration:
+Device Descriptor:
+12 01 00 02 00 00 00 40 62 36 04 20 00 02 01 02 03 01
+VendorID = 3662, ProductID = 2004, Version = 0200
+Class/Subclass/Protocol = 0 / 0 / 0
+Number of Configurations = 1
+enumeration:
+enumeration:
+Manufacturer: Pwnage
+enumeration:
+Product: Wireless Gaming Mouse V3
+enumeration:
+Serial Number: 43B0DB9F0594
+enumeration:
+Config data length = 84
+enumeration:
+Configuration Descriptor:
+09 02 54 00 03 01 00 A0 32
+NumInterfaces = 3
+ConfigurationValue = 1
+09 04 00 00 01 03 01 02 00
+Interface = 0
+Number of endpoints = 1
+Class/Subclass/Protocol = 3(HID) / 1(Boot) / 2(Mouse)
+09 21 11 01 00 01 22 5B 00
+HID, 1 report descriptor
+07 05 81 03 08 00 01
+Endpoint = 1 IN
+Type = Interrupt
+Max Size = 8
+Polling Interval = 1
+09 04 01 00 01 03 01 01 00
+Interface = 1
+Number of endpoints = 1
+Class/Subclass/Protocol = 3(HID) / 1(Boot) / 1(Keyboard)
+09 21 11 01 00 01 22 A3 00
+HID, 1 report descriptor
+07 05 82 03 40 00 01
+Endpoint = 2 IN
+Type = Interrupt
+Max Size = 64
+Polling Interval = 1
+09 04 02 00 01 03 00 00 00
+Interface = 2
+Number of endpoints = 1
+Class/Subclass/Protocol = 3(HID) / 0 / 0
+09 21 11 01 00 01 22 14 00
+HID, 1 report descriptor
+07 05 83 03 40 00 01
+Endpoint = 3 IN
+Type = Interrupt
+Max Size = 64
+Polling Interval = 1
+enumeration:
+D:
+D: USBHostDriver::claim() called - type: 0, len: 75
+D: Device level claim (type 0) - storing device reference
+D: Device VID: 0x3662, PID: 0x2004
+Descriptor 4 = INTERFACE
+D:
+D: USBHostDriver::claim() called - type: 1, len: 75
+D: Interface level claim (type 1) - claiming device!
+D: SunBox Host Driver beginning claim process...
+D: Device VID: 0x3662, PID: 0x2004
+D: Descriptors length: 75
+D: Stored 75 bytes of configuration descriptor data
+D: Parsing descriptors...
+D: Found interface 0, class: 0x03 (HID Mouse)
+D: HID descriptor found! Report length: 91 for interface 0
+D: Found endpoint: addr=0x81 attr=0x03 size=8 interval=1
+D: Using as primary IN endpoint
+D: Found interface 1, class: 0x03 (HID Keyboard)
+D: HID descriptor found! Report length: 163 for interface 1
+D: Found endpoint: addr=0x82 attr=0x03 size=64 interval=1
+D: Found interface 2, class: 0x03 (HID)
+D: HID descriptor found! Report length: 20 for interface 2
+D: Found endpoint: addr=0x83 attr=0x03 size=64 interval=1
+D: Parsing complete - 3 interfaces found, IN endpoint: 1, OUT endpoint: 0
+D: Creating IN pipe for endpoint 1
+--- new_Pipe (Original Code Base) ---
+Device Speed: 2 (HS)
+Pipe Type: 3
+Endpoint: 1
+MaxLen: 8
+allocate_interrupt_pipe_bandwidth
+ep interval = 1
+interval = 1
+best_bandwidth = 3, at offset = 0
+Calculated QH Cap[0]: 0xF0082101
+Calculated QH Cap[1]: 0x400000FF
+Added QH to Periodic List
+--- new_Pipe End ---
+D: IN pipe created successfully
+S: SunBox Host Driver found physical device
+D: Starting data reading...
+D: IN pipe address: 0x200086C0
+D: Buffer address: 0x20008B20
+D: Endpoint size: 8
+D: Data transfer queued
+D: Pipe callback function: 0x00007DE5
+S: SunBox Host Driver claimed device
+Descriptor 33 = HID
+Descriptor 5 = ENDPOINT
+Descriptor 4 = INTERFACE
+Descriptor 33 = HID
+Descriptor 5 = ENDPOINT
+Descriptor 4 = INTERFACE
+Descriptor 33 = HID
+Descriptor 5 = ENDPOINT
+S: Device detected
+D: Found HID mouse interface (protocol=2)
+D: Found mouse interface 0 at index 0
+S: Mouse interface found
+D: Requesting HID descriptor for interface 0, expected length: 91
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0000 wLength=91
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 91 bytes
+D: Retrieved 91 bytes of HID descriptor
+D: First bytes:
+D: 05
+D: 01
+D: 09
+D: 02
+D: A1
+D: 01
+D: 09
+D: 01
+D: A1
+D: 00
+D: 05
+D: 09
+D: 19
+D: 01
+D: 29
+D: 05
+D:
+=== Parsing HID Report Descriptor ===
+D:   [0]
+D: Usage Page: 0x1
+D:   [2]
+D: Usage: 0x2
+D:  (Mouse)
+D:   [6]
+D: Usage: 0x1
+D:  (Pointer)
+D:   [A]
+D: Usage Page: 0x9
+D:   [18]
+D: Input: Count=5 Size=1 Bits @ offset 0
+D: >>> Found Buttons: offset=0 count=5 bits=5
+D:   [1E]
+D: Input: Count=3 Size=1 Bits @ offset 5
+D:   [20]
+D: Usage Page: 0x1
+D:   [22]
+D: Usage: 0x38
+D:  (Wheel)
+D:   [2C]
+D: Input: Count=1 Size=8 Bits @ offset 8
+D: >>> Found Wheel: offset=8 bits=8
+D:   [2E]
+D: Usage: 0x30
+D:  (X)
+D:   [30]
+D: Usage: 0x31
+D:  (Y)
+D:   [3C]
+D: Input: Count=2 Size=16 Bits @ offset 16
+D: >>> Found X: offset=16 bits=16 range=-32768..32767
+D: >>> Found Y: offset=32 bits=16 range=-32768..32767
+D:   [3E]
+D: Usage Page: 0xC
+D:   [40]
+D: Usage: 0x238
+D:   [4B]
+D: Input: Count=1 Size=8 Bits @ offset 48
+D:   [4D]
+D: Usage: 0x0
+D:   [57]
+D: Input: Count=1 Size=8 Bits @ offset 56
+D:
+Total bits: 64 = 8 bytes
+D: Found:
+D: Buttons
+D: X
+D: Y
+D: Wheel
+D: HID descriptor ready!
+S: HID ready
+D: Interface activation complete
+S: Mouse is ready, starting USB Device Proxy now!
+S: Found device with Speed High Speed (480 Mbps)
+S: Initializing USB Host Hardware...
+W: PHY needs reset
+D: USB reset took 6 loops
+S: USB Host configured for High Speed (480 Mbps) based on physical device
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0100 wIndex=0x0000 wLength=18
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=18
+D: Control transfer complete, received 18 bytes
+D: Device EP0 max packet size: 64 bytes
+D: Configuring USB Device EP0 with size from physical device: 64 bytes
+D: proxy_endpoint_queue_head address: 0x20000000
+D: USB1_ENDPOINTLISTADDR set to: 0x20000000
+S: USB Host Hardware Initialized
+D: Building endpoint mapping dynamically...
+D: Host driver is using endpoint 0x81 (EP1) for mouse data
+D: Interface 0 (EP1) identified as mouse - MATCHES HOST DRIVER
+D:   EP1 -> Interface 0 (Mouse - ACTIVE)
+D:   EP2 -> Interface 1 (HID Keyboard)
+D:   EP3 -> Interface 2 (HID Other)
+D: Built endpoint mapping with 3 endpoints
+D: Configured synthetic output for mouse EP1
+W: USB Reset detected
+D: High-speed device operation detected
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0100 wIndex=0x0000 wLength=64
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0100 wIndex=0x0000 wLength=64
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 64 bytes
+D: Got 64 bytes from mouse
+D: Data: 12 01 00 02 00 00 00 40 ...
+D: Sending 64 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00400080
+D: ENDPTCOMPLETE EP0 = 0x1
+D: SETUP: bmRequestType=0x00 bRequest=0x05 wValue=0x0001 wIndex=0x0000 wLength=0
+D: SET_ADDRESS: 1
+D: Preparing to receive 0 bytes
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0100 wIndex=0x0000 wLength=18
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0100 wIndex=0x0000 wLength=18
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=18
+D: Control transfer complete, received 18 bytes
+D: Got 18 bytes from mouse
+D: Data: 12 01 00 02 00 00 00 40 ...
+D: Sending 18 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00120080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0200 wIndex=0x0000 wLength=255
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0200 wIndex=0x0000 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 09 02 54 00 03 01 00 a0 ...
+D: Sending 255 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00FF0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=255
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0300 wIndex=0x0000 wLength=255
+D: GET_STRING_DESCRIPTOR index=0 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0300 wIndex=0x0000 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 04 03 09 04 33 00 42 00 ...
+D: String descriptor actual length: 4
+D: Sending 4 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00040080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=255
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0100 wIndex=0x0000 wLength=18
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0100 wIndex=0x0000 wLength=18
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 18 bytes
+D: Got 18 bytes from mouse
+D: Data: 12 01 00 02 00 00 00 40 ...
+D: Sending 18 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00120080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0200 wIndex=0x0000 wLength=9
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0200 wIndex=0x0000 wLength=9
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=9
+D: Control transfer complete, received 9 bytes
+D: Got 9 bytes from mouse
+D: Data: 09 02 54 00 03 01 00 a0 ...
+D: Sending 9 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00090080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0200 wIndex=0x0000 wLength=84
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0200 wIndex=0x0000 wLength=84
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=84
+D: Control transfer complete, received 84 bytes
+D: Got 84 bytes from mouse
+D: Data: 09 02 54 00 03 01 00 a0 ...
+D: Sending 84 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00540080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x00 bRequest=0x09 wValue=0x0001 wIndex=0x0000 wLength=0
+D: Data transfers paused
+D: Waiting for current transfer to complete...
+D: Transfer still pending after wait
+D: Stabilization delay...
+D: Control transfer: bmRequestType=0x00 bRequest=0x09 wValue=0x0001 wIndex=0x0000 wLength=0
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008100, length=0
+D: OUT transfer completed successfully
+D: SET_CONFIGURATION forwarded successfully
+D: Parsing configuration descriptor for endpoints...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0200 wIndex=0x0000 wLength=512
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got configuration descriptor, length: 512
+D: Total configuration length: 84
+D: Found endpoint 0x81 type=3 size=8 interval=1
+D: Found endpoint 0x82 type=3 size=64 interval=1
+D: Found endpoint 0x83 type=3 size=64 interval=1
+D: Found 3 endpoints to configure
+D: Configuring all endpoints...
+D: Configuring endpoint 1 IN type=3 size=8 interval=1
+D: Endpoint 1 configured successfully
+D: Configuring endpoint 2 IN type=3 size=64 interval=1
+D: Endpoint 2 configured successfully
+D: Configuring endpoint 3 IN type=3 size=64 interval=1
+D: Endpoint 3 configured successfully
+D: All endpoints configured
+D: Preparing to receive 0 bytes
+D: Data transfers resumed
+D: Queued new transfer after resume
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=4
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=4
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=4
+D: Control transfer complete, received 4 bytes
+D: Got 4 bytes from mouse
+D: Data: 32 03 57 00 ...
+D: Sending 4 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00040080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0300 wIndex=0x0000 wLength=255
+D: GET_STRING_DESCRIPTOR index=0 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0300 wIndex=0x0000 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 04 03 09 04 03 01 00 a0 ...
+D: String descriptor actual length: 4
+D: Sending 4 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00040080
+D: USB Device State: CONFIGURED
+D: ENDPTCOMPLETE EP0 = 0x10001
+D: EP0 IN data phase complete
+D: Preparing to receive 0 bytes
+D: Control transfer complete!
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=50
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=50
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=50
+D: Control transfer complete, received 50 bytes
+D: Got 50 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=255
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=4
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=4
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=4
+D: Control transfer complete, received 4 bytes
+D: Got 4 bytes from mouse
+D: Data: 32 03 57 00 ...
+D: Sending 4 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00040080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=255
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=50
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=50
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=50
+D: Control transfer complete, received 50 bytes
+D: Got 50 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0300 wIndex=0x0000 wLength=255
+D: GET_STRING_DESCRIPTOR index=0 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0300 wIndex=0x0000 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 04 03 09 04 69 00 72 00 ...
+D: String descriptor actual length: 4
+D: Sending 4 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00040080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=4
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=4
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 4 bytes
+D: Got 4 bytes from mouse
+D: Data: 32 03 57 00 ...
+D: Sending 4 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00040080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0300 wIndex=0x0000 wLength=255
+D: GET_STRING_DESCRIPTOR index=0 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0300 wIndex=0x0000 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 04 03 09 04 69 00 72 00 ...
+D: String descriptor actual length: 4
+D: Sending 4 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00040080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=50
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=50
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=50
+D: Control transfer complete, received 50 bytes
+D: Got 50 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=255
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x21 bRequest=0x0A wValue=0x0000 wIndex=0x0000 wLength=0
+D: Filtering SET_IDLE request. Acknowledging and ignoring.
+D: Preparing to receive 0 bytes
+D: ENDPTCOMPLETE EP0 = 0x10000
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=255
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0000 wLength=155
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0000 wLength=155
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=155
+D: Control transfer complete, received 155 bytes
+D: Got 155 bytes from mouse
+D: Data: 05 01 09 02 a1 01 09 01 ...
+D: Sending 155 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x009B0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=255
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x21 bRequest=0x0A wValue=0x0000 wIndex=0x0001 wLength=0
+D: Filtering SET_IDLE request. Acknowledging and ignoring.
+D: Preparing to receive 0 bytes
+D: ENDPTCOMPLETE EP0 = 0x10000
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=255
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=255
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=255
+D: Control transfer complete, received 255 bytes
+D: Got 255 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0001 wLength=227
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0001 wLength=227
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=227
+D: Control transfer complete, received 227 bytes
+D: Got 227 bytes from mouse
+D: Data: 05 0c 09 01 a1 01 85 01 ...
+D: Sending 227 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00E30080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x21 bRequest=0x0A wValue=0x0000 wIndex=0x0002 wLength=0
+D: Filtering SET_IDLE request. Acknowledging and ignoring.
+D: Preparing to receive 0 bytes
+D: ENDPTCOMPLETE EP0 = 0x10000
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0002 wLength=84
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0002 wLength=84
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=84
+D: Control transfer complete, received 84 bytes
+D: Got 84 bytes from mouse
+D: Data: 06 ff ff 09 00 a1 01 09 ...
+D: Sending 84 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00540080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x21 bRequest=0x09 wValue=0x0203 wIndex=0x0001 wLength=2
+D: SET_REPORT for interface 1, type=2, ID=3, length=2
+D: Receiving SET_REPORT data from host...
+D: Preparing to receive 2 bytes
+D: SET_REPORT data received from host
+D: Data: 03 00
+D: Control transfer: bmRequestType=0x21 bRequest=0x09 wValue=0x0203 wIndex=0x0001 wLength=2
+D: OUT transfer - copying 2 bytes to control buffer
+D: OUT data: 03 00
+D: Queuing control transfer
+DD: control() callback called
+D: Control transfer completed with token=0x0000810: ...success
+D: OUT transfer completed successfully
+D: SET_REPORT forwarded to device successfully
+D: Sending ZLP
+D: Sending 0 bytes to host
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=262
+D: Control transfer complete, received 262 bytes
+D: Got 262 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=262
+D: Control transfer complete, received 262 bytes
+D: Got 262 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=262
+D: Control transfer complete, received 262 bytes
+D: Got 262 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=262
+D: Control transfer complete, received 262 bytes
+D: Got 262 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=262
+D: Control transfer complete, received 262 bytes
+D: Got 262 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=262
+D: Control transfer complete, received 262 bytes
+D: Got 262 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=262
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=262
+D: Control transfer complete, received 262 bytes
+D: Got 262 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0000 wLength=91
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0000 wLength=91
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=91
+D: Control transfer complete, received 91 bytes
+D: Got 91 bytes from mouse
+D: Data: 05 01 09 02 a1 01 09 01 ...
+D: Sending 91 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x005B0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0000 wLength=510
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0000 wLength=510
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=510
+D: Control transfer complete, received 510 bytes
+D: Got 510 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0001 wLength=163
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0001 wLength=163
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=163
+D: Control transfer complete, received 163 bytes
+D: Got 163 bytes from mouse
+D: Data: 05 0c 09 01 a1 01 85 01 ...
+D: Sending 163 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00A30080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0000 wLength=510
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0000 wLength=510
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=510
+D: Control transfer complete, received 510 bytes
+D: Got 510 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0000 wLength=91
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0000 wLength=91
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 91 bytes
+D: Got 91 bytes from mouse
+D: Data: 05 01 09 02 a1 01 09 01 ...
+D: Sending 91 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x005B0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0001 wLength=163
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0001 wLength=163
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 163 bytes
+D: Got 163 bytes from mouse
+D: Data: 05 0c 09 01 a1 01 85 01 ...
+D: Sending 163 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00A30080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0002 wLength=20
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0002 wLength=20
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=20
+D: Control transfer complete, received 20 bytes
+D: Got 20 bytes from mouse
+D: Data: 06 ff ff 09 00 a1 01 09 ...
+D: Sending 20 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00140080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0000 wLength=510
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0000 wLength=510
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=510
+D: Control transfer complete, received 510 bytes
+D: Got 510 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0002 wLength=20
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x81 bRequest=0x06 wValue=0x2200 wIndex=0x0002 wLength=20
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=20
+D: Control transfer complete, received 20 bytes
+D: Got 20 bytes from mouse
+D: Data: 06 ff ff 09 00 a1 01 09 ...
+D: Sending 20 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00140080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0000 wLength=510
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0000 wLength=510
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=510
+D: Control transfer complete, received 510 bytes
+D: Got 510 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0000 wLength=510
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0000 wLength=510
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=510
+D: Control transfer complete, received 510 bytes
+D: Got 510 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0000 wLength=510
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0000 wLength=510
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=510
+D: Control transfer complete, received 510 bytes
+D: Got 510 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0000 wLength=510
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0000
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0000 wLength=510
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=510
+D: Control transfer complete, received 510 bytes
+D: Got 510 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=3 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0303 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 1a 03 34 00 33 00 42 00 ...
+D: String descriptor actual length: 26
+D: Sending 26 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x001A0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=1 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0301 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x0000800
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 0e 03 50 00 77 00 6e 00 ...
+D: String descriptor actual length: 14
+D: Sending 14 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x000E0080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+D: SETUP: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: GET_STRING_DESCRIPTOR index=2 langID=0x0409
+D: Forwarding IN request to mouse...
+D: Control transfer: bmRequestType=0x80 bRequest=0x06 wValue=0x0302 wIndex=0x0409 wLength=1026
+D: Queuing control transfer
+D: ...success
+D: control() callback called
+D: Control transfer completed with token=0x00008000, length=512
+D: Control transfer complete, received 512 bytes
+D: Got 512 bytes from mouse
+D: Data: 32 03 57 00 69 00 72 00 ...
+D: String descriptor actual length: 50
+D: Sending 50 bytes to host
+D: QH[1] next = 0x200075C0
+D: TD addr = 0x200075C0
+D: TD status = 0x00320080
+D: EP0 TX complete
+D: Preparing to receive 0 bytes
+I: USB Device polling rate: ~186151 Hz
+S: Received first mouse data packet, length: 8, data: 00 00 00 00 00 00 00 00, device should now be fully operational.
+D: Mouse packet #1 len=8 available=true proxy_configured=true
+D: processInData #1 paused=false ready=true pipe=valid
+D: Queued next transfer
+D: Data EP complete 0x20000 (#1)
+D: EP1 ready again (#1)
