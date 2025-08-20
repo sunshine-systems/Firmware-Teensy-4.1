@@ -377,8 +377,31 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     }
     
     // Always print debug for descriptor requests
-    logger.debugf("Control transfer: bmRequestType=0x%02X bRequest=0x%02X wValue=0x%04X wIndex=0x%04X wLength=%d",
-                bmRequestType, bRequest, wValue, wIndex, wLength);
+    // logger.debugf("Control transfer: bmRequestType=0x%02X bRequest=0x%02X wValue=0x%04X wIndex=0x%04X wLength=%d",
+    //             bmRequestType, bRequest, wValue, wIndex, wLength);
+    
+    // Log timestamp for timing analysis
+    uint32_t start_time = millis();
+    // logger.debugf("Control transfer starting at %lu ms", start_time);
+    
+    // // Log raw setup packet bytes - commented out for production
+    // uint8_t setup_bytes[8];
+    // setup_bytes[0] = bmRequestType;
+    // setup_bytes[1] = bRequest;
+    // setup_bytes[2] = wValue & 0xFF;
+    // setup_bytes[3] = (wValue >> 8) & 0xFF;
+    // setup_bytes[4] = wIndex & 0xFF;
+    // setup_bytes[5] = (wIndex >> 8) & 0xFF;
+    // setup_bytes[6] = wLength & 0xFF;
+    // setup_bytes[7] = (wLength >> 8) & 0xFF;
+    
+    // String setupStr = "Setup packet bytes: ";
+    // for (int i = 0; i < 8; i++) {
+    //     if (i > 0) setupStr += " ";
+    //     if (setup_bytes[i] < 0x10) setupStr += "0";
+    //     setupStr += String(setup_bytes[i], HEX);
+    // }
+    // logger.debug(setupStr.c_str());
     
     // Small delay to let device stabilize after stopping interrupt transfers
     delay(5);
@@ -415,19 +438,28 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     }
     
     // Queue the transfer - always use control_buffer
-    logger.debug("Queuing control transfer");
+    // logger.debug("Queuing control transfer");
+    // logger.debugf("Device address: %d, control pipe: %p", device ? device->address : -1, device ? device->control_pipe : nullptr);
     bool queue_result = queue_Control_Transfer(device, &control_setup, control_buffer, this);
-    logger.debug(queue_result ? "...success" : "...failed");
+    // logger.debug(queue_result ? "...success" : "...failed");
+    
+    if (!queue_result) {
+        logger.error("Failed to queue control transfer!");
+        return false;
+    }
     
     // Wait for completion
-    uint32_t start = millis();
-    while (!control_complete && (millis() - start) < timeout_ms) {
+    uint32_t wait_start = millis();
+    while (!control_complete && (millis() - wait_start) < timeout_ms) {
         // Process USB tasks while waiting
         if (usbHost) {
             usbHost->Task();
         }
         yield();
     }
+    
+    uint32_t duration = millis() - start_time;
+    // logger.debugf("Control transfer wait completed after %lu ms", duration);
     
     // Check completion status
     if (!control_complete) {
@@ -471,7 +503,7 @@ void USBHostDriver::control(const Transfer_t *transfer) {
     // Small delay to ensure previous Serial4 operations complete
     delayMicroseconds(100);
     
-    logger.debug("control() callback called");
+    // logger.debug("control() callback called");
     
     if (control_pending && transfer->buffer == control_buffer) {
         control_pending = false;
@@ -481,16 +513,83 @@ void USBHostDriver::control(const Transfer_t *transfer) {
         // Check for errors in the transfer
         uint32_t token = transfer->qtd.token;
         control_last_token = token;
-        control_success = ((token >> 0) & 0xFF) == 0;  // Status byte should be 0 for success
+        uint8_t status = (token >> 0) & 0xFF;
         
-        logger.debugf("Control transfer completed with token=0x%08X, length=%d", token, control_length_received);
+        // SOLUTION 1: Accept transfers despite ping error
+        // This handles the Razer Viper V3 Pro wireless false positive
+        // Handle both IN transfers with data and OUT transfers
+        if (status == 0x01) {
+            // Only Ping bit set - check transfer type
+            uint8_t pid_code = (token >> 8) & 0x03;
+            
+            // IN transfer with data received
+            if (control_length_received > 0) {
+                control_success = true;
+                logger.debug("WORKAROUND: IN transfer - Treating Ping-only error as success since data was received");
+                logger.debugf("Token=0x%08X, Status=0x01 (Ping only), Length=%d bytes", 
+                             token, control_length_received);
+            }
+            // OUT transfer (PID=1) with ping error  
+            else if (pid_code == 1) {
+                control_success = true;
+                logger.debug("WORKAROUND: OUT transfer - Treating Ping-only error as success for SET_CONFIGURATION");
+                logger.debugf("Token=0x%08X, Status=0x01 (Ping only), PID=%d (OUT)", token, pid_code);
+            }
+            else {
+                // Some other case with ping bit set
+                control_success = false;
+                logger.debugf("Ping error without data or OUT transfer, token=0x%08X", token);
+            }
+        } else {
+            // Normal success check - status byte should be 0
+            control_success = (status == 0);
+        }
+        
+        // logger.debugf("Control transfer completed with token=0x%08X, length=%d", token, control_length_received);
         
         if (!control_success) {
             logger.errorf("SunBox USB Host Driver Error: Control transfer error, token=0x%08X", token);
             
-            logger.debugf("Status=%d, PID=%d, Error=%d, Active=%d",
-                        (token >> 0) & 0xFF, (token >> 8) & 0x03,
-                        (token >> 10) & 0x03, (token >> 7) & 0x01);
+            // Commented out verbose token decoding for production
+            // uint8_t status = (token >> 0) & 0xFF;
+            // uint8_t pid_code = (token >> 8) & 0x03;
+            // uint8_t cerr = (token >> 10) & 0x03;  // Error counter
+            // uint8_t page = (token >> 12) & 0x07;  // Page select
+            // uint8_t ioc = (token >> 15) & 0x01;   // Interrupt on complete
+            // uint16_t total_bytes = (token >> 16) & 0x7FFF;  // Total bytes to transfer
+            // uint8_t dt = (token >> 31) & 0x01;    // Data toggle
+            
+            // logger.debugf("Token decode: Status=0x%02X, PID=%d, CERR=%d, Page=%d, IOC=%d, TotalBytes=%d, DT=%d",
+            //             status, pid_code, cerr, page, ioc, total_bytes, dt);
+            
+            // // Decode status bits
+            // uint8_t active = (status >> 7) & 0x01;
+            // uint8_t halted = (status >> 6) & 0x01;
+            // uint8_t data_buffer_err = (status >> 5) & 0x01;
+            // uint8_t babble = (status >> 4) & 0x01;
+            // uint8_t xact_err = (status >> 3) & 0x01;
+            // uint8_t missed_micro = (status >> 2) & 0x01;
+            // uint8_t split_state = (status >> 1) & 0x01;
+            // uint8_t ping_state = status & 0x01;
+            
+            // logger.debugf("Status bits: Active=%d, Halted=%d, DataBufErr=%d, Babble=%d, XactErr=%d, MissedMicro=%d, Split=%d, Ping=%d",
+            //             active, halted, data_buffer_err, babble, xact_err, missed_micro, split_state, ping_state);
+            
+            // // Log control buffer contents for failed transfers
+            // if (control_length_received > 0) {
+            //     String bufStr = "Control buffer (first 16 bytes): ";
+            //     for (uint16_t i = 0; i < 16 && i < control_length_received; i++) {
+            //         if (i > 0) bufStr += " ";
+            //         if (control_buffer[i] < 0x10) bufStr += "0";
+            //         bufStr += String(control_buffer[i], HEX);
+            //     }
+            //     logger.debug(bufStr.c_str());
+                
+            //     // Additional check - if we have data but status shows only ping error, warn about it
+            //     if (status == 0x01) {
+            //         logger.warning("NOTE: This looks like a false ping error - data is valid but not being used!");
+            //     }
+            // }
         }
     } else {
         logger.debug("control() called but not for our transfer");

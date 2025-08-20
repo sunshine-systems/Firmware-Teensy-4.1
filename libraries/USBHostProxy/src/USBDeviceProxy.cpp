@@ -458,9 +458,16 @@ void USBDeviceProxy::handlePortChange() {
 }
 
 void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
-    logger.debugf("SETUP: bmRequestType=0x%02X bRequest=0x%02X wValue=0x%04X wIndex=0x%04X wLength=%d",
-                  pending_setup.bmRequestType, pending_setup.bRequest, 
-                  pending_setup.wValue, pending_setup.wIndex, pending_setup.wLength);
+    // logger.debugf("SETUP: bmRequestType=0x%02X bRequest=0x%02X wValue=0x%04X wIndex=0x%04X wLength=%d",
+    //               pending_setup.bmRequestType, pending_setup.bRequest, 
+    //               pending_setup.wValue, pending_setup.wIndex, pending_setup.wLength);
+    
+    // // Log control transfer stage transition
+    // logger.debugf("Control stage transition: %s -> SETUP", 
+    //               control_stage == CONTROL_IDLE ? "IDLE" : 
+    //               control_stage == CONTROL_DATA_IN ? "DATA_IN" : 
+    //               control_stage == CONTROL_DATA_OUT ? "DATA_OUT" : "UNKNOWN");
+    control_stage = CONTROL_IDLE;  // Reset to idle for new setup
     
     // Check if we have a connected device to proxy
     if (!hostDriver || !hostDriver->isReady()) {
@@ -515,6 +522,8 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
         hostDriver->pauseDataTransfers();
         
         // Forward to device first
+        logger.debug("Forwarding SET_CONFIGURATION to device...");
+        uint32_t xfer_start = millis();
         uint16_t dummy_len;
         bool success = hostDriver->controlTransfer(
             pending_setup.bmRequestType,
@@ -526,6 +535,8 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
             &dummy_len,
             500
         );
+        uint32_t xfer_duration = millis() - xfer_start;
+        // logger.debugf("Control transfer completed in %lu ms, success=%s", xfer_duration, success ? "true" : "false");
         
         if (success) {
             logger.debug("SET_CONFIGURATION forwarded successfully");
@@ -691,7 +702,12 @@ void USBDeviceProxy::processControlTransfer() {
     
     if (pending_setup.bmRequestType & 0x80) {
         // Device-to-host (IN) transfer
-        logger.debug("Forwarding IN request to mouse...");
+        // logger.debug("Forwarding IN request to mouse...");
+        // logger.debugf("Request type: 0x%02X (Class: %s, Recipient: %s)",
+        //               pending_setup.bmRequestType,
+        //               ((pending_setup.bmRequestType & 0x60) == 0x20) ? "Class" : "Standard",
+        //               (pending_setup.bmRequestType & 0x1F) == 0 ? "Device" : 
+        //               (pending_setup.bmRequestType & 0x1F) == 1 ? "Interface" : "Other");
         
         // Add small delay for string descriptors to help with timing
         uint8_t desc_type = (pending_setup.wValue >> 8) & 0xFF;
@@ -699,6 +715,7 @@ void USBDeviceProxy::processControlTransfer() {
             delay(10); // Small delay for string descriptors
         }
         
+        uint32_t xfer_start = millis();
         success = hostDriver->controlTransfer(
             pending_setup.bmRequestType,
             pending_setup.bRequest,
@@ -709,6 +726,8 @@ void USBDeviceProxy::processControlTransfer() {
             &actual_len,
             500  // 500ms timeout
         );
+        uint32_t xfer_duration = millis() - xfer_start;
+        // logger.debugf("Control transfer completed in %lu ms", xfer_duration);
         
         if (success && actual_len > 0) {
             logger.debugf("Got %d bytes from mouse", actual_len);
@@ -750,8 +769,14 @@ void USBDeviceProxy::processControlTransfer() {
         } else {
             // Failed - STALL
             logger.debug("Control transfer to device failed!");
+            logger.debugf("Sending STALL to host (ENDPTCTRL0 = 0x00010001)");
             USB1_ENDPTCTRL0 = 0x00010001;
             control_stage = CONTROL_IDLE;
+            
+            // Log more details about the failed request
+            logger.debugf("Failed request was: Type=0x%02X Req=0x%02X Val=0x%04X Idx=0x%04X Len=%d",
+                         pending_setup.bmRequestType, pending_setup.bRequest,
+                         pending_setup.wValue, pending_setup.wIndex, pending_setup.wLength);
         }
     } else {
         // Host-to-device (OUT) transfer

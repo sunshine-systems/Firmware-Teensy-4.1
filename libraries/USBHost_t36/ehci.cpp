@@ -530,11 +530,11 @@ Pipe_t * USBHost::new_Pipe(Device_t *dev, uint32_t type, uint32_t endpoint,
 	uint32_t c=0, dtc=0;
 
     // <<< ADDED: Basic parameter logging >>>
-    println_("--- new_Pipe (Original Code Base) ---");
-    print_("  Device Speed: "); print_(dev->speed); if(dev->speed==0) print_(" (FS)"); else if (dev->speed==1) print_(" (LS)"); else if (dev->speed==2) print_(" (HS)"); println_();
-    print_("  Pipe Type: "); println_(type);
-    print_("  Endpoint: "); println_(endpoint);
-    print_("  MaxLen: "); println_(maxlen);
+    // println_("--- new_Pipe (Original Code Base) ---");
+    // print_("  Device Speed: "); print_(dev->speed); if(dev->speed==0) print_(" (FS)"); else if (dev->speed==1) print_(" (LS)"); else if (dev->speed==2) print_(" (HS)"); println_();
+    // print_("  Pipe Type: "); println_(type);
+    // print_("  Endpoint: "); println_(endpoint);
+    // print_("  MaxLen: "); println_(maxlen);
     // <<< END ADDED LOGGING >>>
 
 	pipe = allocate_Pipe();
@@ -573,8 +573,8 @@ Pipe_t * USBHost::new_Pipe(Device_t *dev, uint32_t type, uint32_t endpoint,
 		dev->hub_address, pipe->complete_mask, pipe->start_mask);
 
     // <<< ADDED: Log calculated capabilities >>>
-    print_("  Calculated QH Cap[0]: 0x"); println_(pipe->qh.capabilities[0], HEX);
-    print_("  Calculated QH Cap[1]: 0x"); println_(pipe->qh.capabilities[1], HEX);
+    // print_("  Calculated QH Cap[0]: 0x"); println_(pipe->qh.capabilities[0], HEX);
+    // print_("  Calculated QH Cap[1]: 0x"); println_(pipe->qh.capabilities[1], HEX);
     // <<< END ADDED LOGGING >>>
 
 	if (type == 0 || type == 2) { // control or bulk
@@ -584,17 +584,17 @@ Pipe_t * USBHost::new_Pipe(Device_t *dev, uint32_t type, uint32_t endpoint,
 			pipe->qh.horizontal_link = (uint32_t)&(pipe->qh) | 2; // 2=QH
 			USBHS_ASYNCLISTADDR = (uint32_t)&(pipe->qh);
 			USBHS_USBCMD |= USBHS_USBCMD_ASE; // enable async schedule
-            println_("  Added QH as first to Async List");
+            // println_("  Added QH as first to Async List");
 		} else {
 			pipe->qh.horizontal_link = list->qh.horizontal_link;
 			list->qh.horizontal_link = (uint32_t)&(pipe->qh) | 2;
-            println_("  Added QH to existing Async List");
+            // println_("  Added QH to existing Async List");
 		}
 	} else if (type == 3) { // interrupt
 		add_qh_to_periodic_schedule(pipe);
-        println_("  Added QH to Periodic List");
+        // println_("  Added QH to Periodic List");
 	}
-    println_("--- new_Pipe End ---");
+    // println_("--- new_Pipe End ---");
 	return pipe;
 }
 
