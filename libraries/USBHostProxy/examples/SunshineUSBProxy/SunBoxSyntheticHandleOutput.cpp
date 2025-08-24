@@ -108,7 +108,9 @@ void SunBoxSyntheticHandleOutput::process() {
         previousSerialState = serialState;
         commands.resetData();
     } else {
+        // No serial data this frame - preserve button state
         serialState.clear();
+        serialState.buttons = previousSerialState.buttons;  // Preserve last known button state
         // Use saved previous serial buttons
         previousSerialButtons = previousSerialState.buttons;
     }
@@ -153,15 +155,10 @@ void SunBoxSyntheticHandleOutput::process() {
     // Handle each button
     for (uint8_t buttonMask = 1; buttonMask <= 0x10; buttonMask <<= 1) {
         if (buttonMask == MOUSE_LEFT || buttonMask == MOUSE_RIGHT) {
-            // Special handling for LMB/RMB
-            // If USB mouse is still holding the button, ignore serial release
-            if ((usbState.buttons & buttonMask) && !(serialState.buttons & buttonMask) && (previousSerialButtons & buttonMask)) {
-                finalButtons |= buttonMask;
-                continue;
-            }
+            // Special handling for LMB/RMB - Simple OR logic
             // If both indicate release, release
             if (!(usbState.buttons & buttonMask) && !(serialState.buttons & buttonMask)) {
-                // Button is released
+                // Button is released - don't set the bit
                 continue;
             }
             // If either indicate press, press
