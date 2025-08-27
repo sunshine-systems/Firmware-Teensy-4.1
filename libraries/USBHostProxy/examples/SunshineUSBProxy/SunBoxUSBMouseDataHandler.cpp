@@ -9,7 +9,8 @@ SunBoxUSBMouseDataHandler::SunBoxUSBMouseDataHandler(USBHostDriver& hostDriver,
                                                    HIDMouseDescriptorHandler& hidHandler)
     : hostDriver(hostDriver), hidHandler(hidHandler),
       rawDataLength(0), dataAvailable(false),
-      deviceReady(false), hidReady(false) {
+      deviceReady(false), hidReady(false),
+      buttonStateChanged(false), pendingButtonState(0) {
     
     memset(rawData, 0, sizeof(rawData));
     lastMouseState.clear();
@@ -73,8 +74,9 @@ void SunBoxUSBMouseDataHandler::dataCallback(const uint8_t* data, uint32_t lengt
             if (instance->hidHandler.parseMouseData(data, length, state)) {
                 // Check if buttons changed
                 if (state.buttons != instance->lastMouseState.buttons) {
-                    // Log button event
-                    logger.mousef("%02X", state.buttons);
+                    // Store for deferred printing (safe from interrupts)
+                    instance->pendingButtonState = state.buttons;
+                    instance->buttonStateChanged = true;
                     instance->lastMouseState.buttons = state.buttons;
                 }
             }
@@ -89,4 +91,16 @@ void SunBoxUSBMouseDataHandler::reset() {
 
 bool SunBoxUSBMouseDataHandler::isReady() const {
     return deviceReady && hidReady;
+}
+
+void SunBoxUSBMouseDataHandler::processPendingButtonChanges() {
+    // Check if there's a pending button state change to print
+    if (buttonStateChanged) {
+        // Capture the state and clear the flag atomically
+        uint8_t buttonsToPrint = pendingButtonState;
+        buttonStateChanged = false;
+        
+        // Now safely print from main loop context (not interrupt)
+        logger.mousef("%02X", buttonsToPrint);
+    }
 }

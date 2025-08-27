@@ -202,6 +202,9 @@ void loop() {
     // 1. Check USB device status (no data processing)
     usbMouseHandler.check();
     
+    // Process any pending button state changes (deferred printing from interrupts)
+    usbMouseHandler.processPendingButtonChanges();
+    
     // 2. Check for serial commands/data
     sunboxCommands.check();
     

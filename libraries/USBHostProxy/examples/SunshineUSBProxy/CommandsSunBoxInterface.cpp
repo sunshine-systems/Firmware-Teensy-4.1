@@ -84,7 +84,7 @@ void FirmwareSettings::updateSettings(const uint8_t* data) {
 }
 
 void FirmwareSettings::printSettingChange(const String& settingName, const String& value) const {
-    logger.info("I: Setting changed - " + settingName + ": " + value);
+    logger.info("I: " + settingName + ": " + value);
 }
 
 // CommandsSunBoxInterface implementation

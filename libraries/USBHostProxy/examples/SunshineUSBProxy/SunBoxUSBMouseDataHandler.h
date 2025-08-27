@@ -34,6 +34,9 @@ public:
     // Static callback for USB data
     static void dataCallback(const uint8_t* data, uint32_t length);
     
+    // Process any pending button state changes (call from main loop)
+    void processPendingButtonChanges();
+    
 private:
     // References
     USBHostDriver& hostDriver;
@@ -48,6 +51,10 @@ private:
     bool deviceReady;
     bool hidReady;
     MouseState lastMouseState;  // Track last state for button change detection
+    
+    // Volatile variables for deferred button printing (safe from interrupts)
+    volatile bool buttonStateChanged;
+    volatile uint8_t pendingButtonState;
     
     // Static instance for callback
     static SunBoxUSBMouseDataHandler* instance;
