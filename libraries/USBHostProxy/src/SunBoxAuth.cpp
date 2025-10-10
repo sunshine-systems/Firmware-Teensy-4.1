@@ -23,6 +23,7 @@ void SunBoxAuth::begin() {
     
     // Initialize Serial4 for communication (always needed)
     Serial4.begin(115200);
+    Serial4.setTimeout(0);  // Make serial operations non-blocking to prevent stalling when FT232H buffer is full
     delay(100);
     
     // Initialize logger with Serial4

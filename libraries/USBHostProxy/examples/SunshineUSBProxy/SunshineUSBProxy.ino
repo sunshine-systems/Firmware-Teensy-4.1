@@ -62,6 +62,7 @@ void updateUSBDeviceStatus();
 void updateStatusLED();
 void mouseDataCallback(const uint8_t* data, uint32_t length);
 void buildEndpointMapping();
+void updatePollingRateStats();
 
 // =============================================================================
 // Setup
@@ -216,6 +217,9 @@ void loop() {
         updateUSBDeviceStatus();
     }
     updateStatusLED();
+
+    // Update polling rate statistics (always active)
+    updatePollingRateStats();
 }
 
 // =============================================================================
@@ -339,23 +343,37 @@ void updateUSBDeviceStatus() {
         logger.debugf("USB Device State: %s", usbDeviceProxy.getStateString());
         lastConnected = currentlyConnected;
     }
-    
-    // Log polling statistics periodically (every 10 seconds)
-    static unsigned long lastStatsTime = 0;
-    static uint32_t lastPollCount = 0;
-    
-    if (millis() - lastStatsTime > 10000) {
-        uint32_t currentPollCount = usbDeviceProxy.getPollCount();
-        uint32_t pollsDelta = currentPollCount - lastPollCount;
-        uint32_t timeDelta = millis() - lastStatsTime;
-        
-        // Calculate actual rate (polls per second)
-        uint32_t pollRate = (pollsDelta * 1000) / timeDelta;
-        
-        logger.infof("USB Device polling rate: ~%lu Hz", pollRate);
-        
-        lastPollCount = currentPollCount;
-        lastStatsTime = millis();
+
+}
+
+void updatePollingRateStats() {
+    static uint32_t lastMicros = 0;
+
+    // Initialize on first call
+    if (lastMicros == 0) {
+        lastMicros = micros();
+        return;
+    }
+
+    uint32_t currentMicros = micros();
+    uint32_t elapsedMicros = currentMicros - lastMicros;
+
+    // Check if 1 second has elapsed (1,000,000 microseconds)
+    if (elapsedMicros >= 1000000) {
+        // Get counters from each component (these functions also reset the counters)
+        uint32_t realCount = SunBoxUSBMouseDataHandler::getRealDeviceCount();
+        uint32_t serialCount = SunBoxSyntheticHandleOutput::getSerialDeviceCount();
+        uint32_t combinedCount = SunBoxSyntheticHandleOutput::getCombinedOutputCount();
+
+        // Calculate actual elapsed time in milliseconds for accuracy tracking
+        uint32_t elapsedMs = elapsedMicros / 1000;
+
+        // Print polling rate statistics
+        logger.infof("R: %04luhz, S: %04luhz, C: %04luhz, T: %04lums",
+                    realCount, serialCount, combinedCount, elapsedMs);
+
+        // Reset timer
+        lastMicros = currentMicros;
     }
 }
 

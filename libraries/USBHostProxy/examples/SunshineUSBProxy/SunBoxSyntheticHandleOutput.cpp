@@ -5,6 +5,10 @@
 #include "Config.h"
 #include "SunBoxStartup.h"
 
+// Static counter initialization
+uint32_t SunBoxSyntheticHandleOutput::serialDevicePacketCount = 0;
+uint32_t SunBoxSyntheticHandleOutput::combinedOutputPacketCount = 0;
+
 SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& commands, 
                                                        SunBoxUSBMouseDataHandler& usbHandler)
     : commands(commands), usbHandler(usbHandler), usbDeviceProxy(nullptr),
@@ -92,9 +96,12 @@ void SunBoxSyntheticHandleOutput::process() {
     
     // Get serial data if available
     if (hasSerialData) {
+        // Increment serial device packet counter (S)
+        serialDevicePacketCount++;
+
         // Save previous state BEFORE getting new state
         previousSerialButtons = previousSerialState.buttons;
-        
+
         serialState = commands.getMouseState();
         
         // Check for sensitivity reduction trigger (scroll wheel = 1)
@@ -226,6 +233,8 @@ void SunBoxSyntheticHandleOutput::process() {
 
 void SunBoxSyntheticHandleOutput::outputMouseData(const uint8_t* data, uint32_t length) {
     if (usbDeviceProxy && mouseEndpoint > 0) {
+        // Increment combined output packet counter (C)
+        combinedOutputPacketCount++;
         usbDeviceProxy->sendDataOnEndpoint(mouseEndpoint, data, length);
     }
 }

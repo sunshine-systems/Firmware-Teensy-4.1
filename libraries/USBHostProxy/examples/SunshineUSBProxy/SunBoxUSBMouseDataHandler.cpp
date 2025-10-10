@@ -5,6 +5,9 @@
 // Static instance for callback
 SunBoxUSBMouseDataHandler* SunBoxUSBMouseDataHandler::instance = nullptr;
 
+// Static counter for real device packets
+volatile uint32_t SunBoxUSBMouseDataHandler::realDevicePacketCount = 0;
+
 SunBoxUSBMouseDataHandler::SunBoxUSBMouseDataHandler(USBHostDriver& hostDriver, 
                                                    HIDMouseDescriptorHandler& hidHandler)
     : hostDriver(hostDriver), hidHandler(hidHandler),
@@ -62,12 +65,15 @@ void SunBoxUSBMouseDataHandler::check() {
 
 void SunBoxUSBMouseDataHandler::dataCallback(const uint8_t* data, uint32_t length) {
     if (instance && data && length > 0) {
+        // Increment real device packet counter (R)
+        realDevicePacketCount++;
+
         // Just store raw data - no parsing in callback
         uint32_t copyLen = (length > sizeof(instance->rawData)) ? sizeof(instance->rawData) : length;
         memcpy(instance->rawData, data, copyLen);
         instance->rawDataLength = copyLen;
         instance->dataAvailable = true;
-        
+
         // Parse and check for button changes
         if (instance->hidReady && instance->hidHandler.isReady()) {
             MouseState state;

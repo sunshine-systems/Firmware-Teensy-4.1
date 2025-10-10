@@ -36,7 +36,10 @@ public:
     
     // Process any pending button state changes (call from main loop)
     void processPendingButtonChanges();
-    
+
+    // Get and reset real device packet counter
+    static uint32_t getRealDeviceCount() { uint32_t count = realDevicePacketCount; realDevicePacketCount = 0; return count; }
+
 private:
     // References
     USBHostDriver& hostDriver;
@@ -58,6 +61,9 @@ private:
     
     // Static instance for callback
     static SunBoxUSBMouseDataHandler* instance;
+
+    // Static counter for real device packets (R)
+    static volatile uint32_t realDevicePacketCount;
 };
 
 #endif // _SUNBOX_USB_MOUSE_DATA_HANDLER_H_

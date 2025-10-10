@@ -32,7 +32,13 @@ public:
     
     // Process data from both sources and output
     void process();
-    
+
+    // Get and reset serial device packet counter (S)
+    static uint32_t getSerialDeviceCount() { uint32_t count = serialDevicePacketCount; serialDevicePacketCount = 0; return count; }
+
+    // Get and reset combined output packet counter (C)
+    static uint32_t getCombinedOutputCount() { uint32_t count = combinedOutputPacketCount; combinedOutputPacketCount = 0; return count; }
+
 private:
     // References
     SunBoxCommands& commands;
@@ -75,8 +81,12 @@ private:
     void handleSpinBot(uint8_t currentButtons, uint8_t previousButtons, bool isSerialPress);
     void updateSpinBot(int16_t& xMovement, int16_t& yMovement);
     bool shouldExcludeButton(uint8_t currentButtons, uint8_t previousButtons, uint8_t buttonMask);
-    void handleMouseButtonConfigCheck(uint8_t& buttons, uint8_t unmodifiedButtons, uint8_t previousButtons, 
+    void handleMouseButtonConfigCheck(uint8_t& buttons, uint8_t unmodifiedButtons, uint8_t previousButtons,
                                      uint8_t buttonMask, int disablePassthroughOption, unsigned long& lastPressTime);
+
+    // Static counters for polling rate measurement
+    static uint32_t serialDevicePacketCount;    // S counter
+    static uint32_t combinedOutputPacketCount;  // C counter
 };
 
 #endif // _SUNBOX_SYNTHETIC_HANDLE_OUTPUT_H_
