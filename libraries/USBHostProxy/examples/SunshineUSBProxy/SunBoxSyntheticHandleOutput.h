@@ -73,7 +73,13 @@ private:
     int spinRotationsRemaining;
     unsigned long spinNextMoveTime;
     int spinCurrentX;
-    
+
+    // CPS (auto-clicker) state
+    bool cpsEnabled;                  // Feature enabled via MMB+MB5 toggle
+    bool cpsClickState;               // Current synthetic button state (pressed/released)
+    unsigned long cpsNextActionTime;  // When to toggle next click/release
+    bool cpsThumbPressedInWindow;     // Track if MB5 was pressed during MMB exclusion window
+
     // Helper methods
     void outputMouseData(const uint8_t* data, uint32_t length);
     void performButtonFiltering(uint8_t& buttons, uint8_t previousButtons, uint8_t unmodifiedButtons);
@@ -83,6 +89,11 @@ private:
     bool shouldExcludeButton(uint8_t currentButtons, uint8_t previousButtons, uint8_t buttonMask);
     void handleMouseButtonConfigCheck(uint8_t& buttons, uint8_t unmodifiedButtons, uint8_t previousButtons,
                                      uint8_t buttonMask, int disablePassthroughOption, unsigned long& lastPressTime);
+
+    // CPS helper methods
+    void handleCPSToggle(uint8_t currentButtons, uint8_t previousButtons);
+    void updateCPS(uint8_t& finalButtons, uint8_t realButtons);
+    unsigned long calculateNextActionDelay();
 
     // Static counters for polling rate measurement
     static uint32_t serialDevicePacketCount;    // S counter

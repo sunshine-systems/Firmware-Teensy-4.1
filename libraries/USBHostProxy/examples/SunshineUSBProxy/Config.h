@@ -36,4 +36,9 @@ extern int disablePassthroughForLMB; //0 = False, 1 = True, 2 = Only if MMB has 
 extern int disablePassthroughForMB4; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration
 extern int disablePassthroughForMB5; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration
 
+/* CPS (Clicks Per Second) auto-clicker settings */
+const int CPS_RATE = 10;                    // Clicks per second when CPS is active
+const int CPS_VARIANCE_MIN_PERCENT = 7;     // Minimum timing variance %
+const int CPS_VARIANCE_MAX_PERCENT = 15;    // Maximum timing variance %
+
 #endif

@@ -9,14 +9,15 @@
 uint32_t SunBoxSyntheticHandleOutput::serialDevicePacketCount = 0;
 uint32_t SunBoxSyntheticHandleOutput::combinedOutputPacketCount = 0;
 
-SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& commands, 
+SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& commands,
                                                        SunBoxUSBMouseDataHandler& usbHandler)
     : commands(commands), usbHandler(usbHandler), usbDeviceProxy(nullptr),
       mouseEndpoint(0), previousUsbButtons(0), previousSerialButtons(0),
       activationTimestamp4MouseButtonExclusion(0), activationTimestamp4MouseMovementLockout(0),
       lastRMBPressTime(0), lastLMBPressTime(0), lastMB4PressTime(0), lastMB5PressTime(0),
       sensReductionXAccumulator(0), sensReductionYAccumulator(0),
-      spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0) {
+      spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0),
+      cpsEnabled(false), cpsClickState(false), cpsNextActionTime(0), cpsThumbPressedInWindow(false) {
     previousUsbState.clear();
     previousSerialState.clear();
 }
@@ -123,7 +124,6 @@ void SunBoxSyntheticHandleOutput::process() {
     }
     
     // Handle MMB press for exclusion window
-    bool mmbJustPressed = (usbState.buttons & MOUSE_MIDDLE) && !(previousUsbButtons & MOUSE_MIDDLE);
     if (usbState.buttons & MOUSE_MIDDLE) {
         // Update exclusion timestamp
         activationTimestamp4MouseButtonExclusion = millis();
@@ -135,17 +135,8 @@ void SunBoxSyntheticHandleOutput::process() {
         }
     }
 
-    // CPS Debug: Log when MMB is pressed (start of hotkey detection)
-    if (mmbJustPressed) {
-        logger.info("CPS: MMB pressed - reset state and started hotkey timer");
-    }
-
-    // CPS Debug: Check if MB5 (thumb button) is pressed within MMB exclusion window
-    bool mb5JustPressed = (unmodifiedUsbButtons & MOUSE_BUTTON5) && !(previousUsbButtons & MOUSE_BUTTON5);
-    bool inExclusionWindow = (millis() - activationTimestamp4MouseButtonExclusion) <= BUTTON_EXCLUSION_DURATION_MS;
-    if (mb5JustPressed && inExclusionWindow) {
-        logger.info("CPS: Thumb (MB5) pressed in window - ENABLED");
-    }
+    // Handle CPS toggle (MMB + MB5 combo or MMB alone)
+    handleCPSToggle(unmodifiedUsbButtons, previousUsbButtons);
 
     // Apply button filtering
     performButtonFiltering(usbState.buttons, previousUsbButtons, unmodifiedUsbButtons);
@@ -193,7 +184,10 @@ void SunBoxSyntheticHandleOutput::process() {
             }
         }
     }
-    
+
+    // Apply CPS auto-clicking if enabled
+    updateCPS(finalButtons, unmodifiedUsbButtons);
+
     // Build final state
     finalState.buttons = finalButtons;
     finalState.x = finalX;
@@ -397,5 +391,85 @@ void SunBoxSyntheticHandleOutput::handleMouseButtonConfigCheck(uint8_t& buttons,
     } else if (previousButtons & buttonMask) {
         // Button released
         lastPressTime = currentTime;
+    }
+}
+
+void SunBoxSyntheticHandleOutput::handleCPSToggle(uint8_t currentButtons, uint8_t previousButtons) {
+    bool mmbJustPressed = (currentButtons & MOUSE_MIDDLE) && !(previousButtons & MOUSE_MIDDLE);
+
+    // MB5 (back thumb) press within exclusion window = ENABLE CPS
+    bool thumbBtnJustPressed = (currentButtons & MOUSE_BUTTON5) && !(previousButtons & MOUSE_BUTTON5);
+    bool inExclusionWindow = (millis() - activationTimestamp4MouseButtonExclusion) <= BUTTON_EXCLUSION_DURATION_MS;
+
+    if (thumbBtnJustPressed && inExclusionWindow) {
+        cpsEnabled = true;
+        cpsClickState = false;
+        cpsNextActionTime = millis();
+        logger.info("CPS: ENABLED (MB5 pressed in window)");
+    }
+
+    // MMB press = DISABLE CPS (also resets window for next enable)
+    if (mmbJustPressed) {
+        if (cpsEnabled) {
+            cpsEnabled = false;
+            cpsClickState = false;
+            logger.info("CPS: DISABLED (MMB pressed)");
+        } else {
+            logger.info("CPS: MMB pressed - window started");
+        }
+    }
+}
+
+unsigned long SunBoxSyntheticHandleOutput::calculateNextActionDelay() {
+    // For 10 CPS, we need 10 complete cycles per second
+    // Each cycle = press + release = 2 actions
+    // So base interval per action = 1000ms / CPS_RATE / 2 = 50ms for 10 CPS
+    unsigned long baseInterval = 1000 / CPS_RATE / 2;
+
+    // Random variance between 7-15%
+    int variancePercent = random(CPS_VARIANCE_MIN_PERCENT, CPS_VARIANCE_MAX_PERCENT + 1);
+    int varianceMs = (baseInterval * variancePercent) / 100;
+
+    // Apply variance (randomly add or subtract)
+    if (random(2) == 0) {
+        return baseInterval + varianceMs;
+    } else {
+        return baseInterval - varianceMs;
+    }
+}
+
+void SunBoxSyntheticHandleOutput::updateCPS(uint8_t& finalButtons, uint8_t realButtons) {
+    if (!cpsEnabled) return;
+
+    // Check if real LMB is held
+    bool realLMBHeld = (realButtons & MOUSE_LEFT);
+
+    if (realLMBHeld) {
+        // Clear real LMB - we're replacing it with synthetic clicks
+        finalButtons &= ~MOUSE_LEFT;
+
+        // Check if it's time for next action
+        if (millis() >= cpsNextActionTime) {
+            // Toggle click state
+            cpsClickState = !cpsClickState;
+
+            // Schedule next action with randomized timing
+            cpsNextActionTime = millis() + calculateNextActionDelay();
+        }
+
+        // Apply current synthetic state
+        if (cpsClickState) {
+            finalButtons |= MOUSE_LEFT;
+        }
+        // else: LMB stays cleared (release state)
+
+    } else {
+        // Real LMB released - ensure clean exit
+        if (cpsClickState) {
+            // We were mid-press - ensure LMB is NOT set (clean release)
+            finalButtons &= ~MOUSE_LEFT;
+        }
+        // Reset for next activation
+        cpsClickState = false;
     }
 }
