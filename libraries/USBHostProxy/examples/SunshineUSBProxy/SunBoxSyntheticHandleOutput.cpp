@@ -123,17 +123,30 @@ void SunBoxSyntheticHandleOutput::process() {
     }
     
     // Handle MMB press for exclusion window
+    bool mmbJustPressed = (usbState.buttons & MOUSE_MIDDLE) && !(previousUsbButtons & MOUSE_MIDDLE);
     if (usbState.buttons & MOUSE_MIDDLE) {
         // Update exclusion timestamp
         activationTimestamp4MouseButtonExclusion = millis();
-        
+
         // Check passthrough condition based on disablePassthroughForMMB
         if (disablePassthroughForMMB == 1) {
             // Passthrough disabled, clear the byte
             usbState.buttons &= ~MOUSE_MIDDLE;
         }
     }
-    
+
+    // CPS Debug: Log when MMB is pressed (start of hotkey detection)
+    if (mmbJustPressed) {
+        logger.info("CPS: MMB pressed - reset state and started hotkey timer");
+    }
+
+    // CPS Debug: Check if MB5 (thumb button) is pressed within MMB exclusion window
+    bool mb5JustPressed = (unmodifiedUsbButtons & MOUSE_BUTTON5) && !(previousUsbButtons & MOUSE_BUTTON5);
+    bool inExclusionWindow = (millis() - activationTimestamp4MouseButtonExclusion) <= BUTTON_EXCLUSION_DURATION_MS;
+    if (mb5JustPressed && inExclusionWindow) {
+        logger.info("CPS: Thumb (MB5) pressed in window - ENABLED");
+    }
+
     // Apply button filtering
     performButtonFiltering(usbState.buttons, previousUsbButtons, unmodifiedUsbButtons);
     
