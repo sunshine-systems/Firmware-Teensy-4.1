@@ -52,14 +52,15 @@ void SunBoxSyntheticHandleOutput::process() {
         }
 
         // Handle CPS when enabled and LMB is held (from last known state)
-        if (cpsEnabled && (previousUsbState.buttons & MOUSE_LEFT)) {
+        // Only send packet when it's time for next CPS action (prevents flooding)
+        if (cpsEnabled && (previousUsbState.buttons & MOUSE_LEFT) && millis() >= cpsNextActionTime) {
             // Check if USB proxy is ready
             if (usbDeviceProxy && usbDeviceProxy->isConfigured() && mouseEndpoint > 0 &&
                 usbDeviceProxy->isEndpointReady(mouseEndpoint)) {
 
                 MouseState cpsState;
                 cpsState.clear();
-                uint8_t cpsButtons = 0;
+                uint8_t cpsButtons = previousUsbState.buttons;  // Preserve RMB, MMB, etc.
 
                 // Run CPS logic using last known button state
                 updateCPS(cpsButtons, previousUsbState.buttons);
