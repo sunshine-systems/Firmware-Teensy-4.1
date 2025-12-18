@@ -39,14 +39,43 @@ void SunBoxSyntheticHandleOutput::process() {
             emptyState.clear();
             int16_t xMove = 0, yMove = 0;
             updateSpinBot(xMove, yMove);
-            
+
             if (xMove != 0 || yMove != 0) {
                 emptyState.x = xMove;
                 emptyState.y = yMove;
-                
+
                 uint8_t outputBuffer[64];
                 uint32_t outputLength = sizeof(outputBuffer);
                 usbHandler.getHIDHandler().formatMouseData(emptyState, outputBuffer, outputLength);
+                outputMouseData(outputBuffer, outputLength);
+            }
+        }
+
+        // Handle CPS when enabled and LMB is held (from last known state)
+        if (cpsEnabled && (previousUsbState.buttons & MOUSE_LEFT)) {
+            // Check if USB proxy is ready
+            if (usbDeviceProxy && usbDeviceProxy->isConfigured() && mouseEndpoint > 0 &&
+                usbDeviceProxy->isEndpointReady(mouseEndpoint)) {
+
+                MouseState cpsState;
+                cpsState.clear();
+                uint8_t cpsButtons = 0;
+
+                // Run CPS logic using last known button state
+                updateCPS(cpsButtons, previousUsbState.buttons);
+                cpsState.buttons = cpsButtons;
+
+                // Send the packet
+                uint8_t outputBuffer[64];
+                uint32_t outputLength = sizeof(outputBuffer);
+                usbHandler.getHIDHandler().formatMouseData(cpsState, outputBuffer, outputLength);
+
+                // Ensure button byte is correct
+                uint8_t buttonByteOffset = usbHandler.getHIDHandler().getButtonByteOffset();
+                if (outputLength > buttonByteOffset) {
+                    outputBuffer[buttonByteOffset] = cpsState.buttons;
+                }
+
                 outputMouseData(outputBuffer, outputLength);
             }
         }
