@@ -79,6 +79,7 @@ private:
     bool cpsClickState;               // Current synthetic button state (pressed/released)
     unsigned long cpsNextActionTime;  // When to toggle next click/release
     bool cpsThumbPressedInWindow;     // Track if MB5 was pressed during MMB exclusion window
+    int cpsClickCount;                // Clicks since last fatigue reset (for fatigue tracking)
 
     // Helper methods
     void outputMouseData(const uint8_t* data, uint32_t length);

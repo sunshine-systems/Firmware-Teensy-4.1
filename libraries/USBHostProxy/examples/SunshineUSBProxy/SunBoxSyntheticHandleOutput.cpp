@@ -17,7 +17,8 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
       lastRMBPressTime(0), lastLMBPressTime(0), lastMB4PressTime(0), lastMB5PressTime(0),
       sensReductionXAccumulator(0), sensReductionYAccumulator(0),
       spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0),
-      cpsEnabled(false), cpsClickState(false), cpsNextActionTime(0), cpsThumbPressedInWindow(false) {
+      cpsEnabled(false), cpsClickState(false), cpsNextActionTime(0), cpsThumbPressedInWindow(false),
+      cpsClickCount(0) {
     previousUsbState.clear();
     previousSerialState.clear();
 }
@@ -435,6 +436,7 @@ void SunBoxSyntheticHandleOutput::handleCPSToggle(uint8_t currentButtons, uint8_
         cpsEnabled = true;
         cpsClickState = false;
         cpsNextActionTime = millis();
+        cpsClickCount = 0;  // Reset fatigue counter
         logger.info("CPS: ENABLED (MB5 pressed in window)");
     }
 
@@ -450,22 +452,48 @@ void SunBoxSyntheticHandleOutput::handleCPSToggle(uint8_t currentButtons, uint8_
     }
 }
 
+// Pseudo-gaussian random: returns value between min and max with bell-curve distribution
+// Uses central limit theorem (sum of 3 uniforms approaches normal distribution)
+static int gaussianRandom(int minVal, int maxVal) {
+    long sum = random(minVal, maxVal + 1) +
+               random(minVal, maxVal + 1) +
+               random(minVal, maxVal + 1);
+    return sum / 3;
+}
+
 unsigned long SunBoxSyntheticHandleOutput::calculateNextActionDelay() {
-    // For 10 CPS, we need 10 complete cycles per second
-    // Each cycle = press + release = 2 actions
-    // So base interval per action = 1000ms / CPS_RATE / 2 = 50ms for 10 CPS
-    unsigned long baseInterval = 1000 / CPS_RATE / 2;
+    // cpsClickState: true = calculating HOLD time, false = calculating GAP time
+    long result;
 
-    // Random variance between 7-15%
-    int variancePercent = random(CPS_VARIANCE_MIN_PERCENT, CPS_VARIANCE_MAX_PERCENT + 1);
-    int varianceMs = (baseInterval * variancePercent) / 100;
-
-    // Apply variance (randomly add or subtract)
-    if (random(2) == 0) {
-        return baseInterval + varianceMs;
+    if (cpsClickState) {
+        // HOLD time calculation
+        // Check for hesitation first (occasional long holds ~3%)
+        if (random(100) < CPS_HESITATION_CHANCE_PERCENT) {
+            result = random(CPS_HESITATION_HOLD_MIN_MS, CPS_HESITATION_HOLD_MAX_MS + 1);
+        } else {
+            // Normal hold: pseudo-gaussian distribution for natural bell curve
+            result = gaussianRandom(CPS_HOLD_MIN_MS, CPS_HOLD_MAX_MS);
+        }
     } else {
-        return baseInterval - varianceMs;
+        // GAP time calculation
+        // Check for fatigue first (occasional long gaps ~2%)
+        if (cpsClickCount >= CPS_MIN_CLICKS_BEFORE_FATIGUE &&
+            random(100) < CPS_FATIGUE_CHANCE_PERCENT) {
+            result = random(CPS_FATIGUE_GAP_MIN_MS, CPS_FATIGUE_GAP_MAX_MS + 1);
+            cpsClickCount = 0;  // Reset click count after fatigue
+        } else {
+            // Normal gap: pseudo-gaussian distribution for natural bell curve
+            result = gaussianRandom(CPS_GAP_MIN_MS, CPS_GAP_MAX_MS);
+        }
     }
+
+    // Add micro-jitter to break up any remaining patterns
+    result += random(-CPS_JITTER_MS, CPS_JITTER_MS + 1);
+
+    // Ensure result is never negative
+    if (result < 1) result = 1;
+
+    return (unsigned long)result;
 }
 
 void SunBoxSyntheticHandleOutput::updateCPS(uint8_t& finalButtons, uint8_t realButtons) {
@@ -482,6 +510,11 @@ void SunBoxSyntheticHandleOutput::updateCPS(uint8_t& finalButtons, uint8_t realB
         if (millis() >= cpsNextActionTime) {
             // Toggle click state
             cpsClickState = !cpsClickState;
+
+            // Increment click count when starting a new press (for fatigue tracking)
+            if (cpsClickState) {
+                cpsClickCount++;
+            }
 
             // Schedule next action with randomized timing
             cpsNextActionTime = millis() + calculateNextActionDelay();
