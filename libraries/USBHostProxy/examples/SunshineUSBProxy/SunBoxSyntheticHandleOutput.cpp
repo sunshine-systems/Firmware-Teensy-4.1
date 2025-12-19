@@ -17,8 +17,8 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
       lastRMBPressTime(0), lastLMBPressTime(0), lastMB4PressTime(0), lastMB5PressTime(0),
       sensReductionXAccumulator(0), sensReductionYAccumulator(0),
       spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0),
-      cpsEnabled(false), cpsClickState(false), cpsNextActionTime(0), cpsThumbPressedInWindow(false),
-      cpsClickCount(0) {
+      cpsEnabled(false), cpsClickState(false), cpsNextActionTime(0), cpsCurrentStateStartTime(0),
+      cpsThumbPressedInWindow(false), cpsClickCount(0) {
     previousUsbState.clear();
     previousSerialState.clear();
 }
@@ -510,6 +510,7 @@ void SunBoxSyntheticHandleOutput::updateCPS(uint8_t& finalButtons, uint8_t realB
         if (millis() >= cpsNextActionTime) {
             // Toggle click state
             cpsClickState = !cpsClickState;
+            cpsCurrentStateStartTime = millis();  // Track when this state started
 
             // Increment click count when starting a new press (for fatigue tracking)
             if (cpsClickState) {
@@ -527,12 +528,25 @@ void SunBoxSyntheticHandleOutput::updateCPS(uint8_t& finalButtons, uint8_t realB
         // else: LMB stays cleared (release state)
 
     } else {
-        // Real LMB released - ensure clean exit
+        // Real LMB released
         if (cpsClickState) {
-            // We were mid-press - ensure LMB is NOT set (clean release)
-            finalButtons &= ~MOUSE_LEFT;
+            // We were mid-press - check if minimum hold duration has been met
+            unsigned long elapsed = millis() - cpsCurrentStateStartTime;
+            unsigned long minHold = CPS_HOLD_MIN_MS - CPS_JITTER_MS;
+
+            if (elapsed >= minHold) {
+                // Minimum met - OK to release now
+                finalButtons &= ~MOUSE_LEFT;
+                cpsClickState = false;
+            } else {
+                // Minimum NOT met - keep button pressed until minimum duration
+                finalButtons |= MOUSE_LEFT;
+                // Reschedule the release for when minimum is met
+                cpsNextActionTime = cpsCurrentStateStartTime + minHold;
+            }
+        } else {
+            // Already in release state, reset for next activation
+            cpsClickState = false;
         }
-        // Reset for next activation
-        cpsClickState = false;
     }
 }

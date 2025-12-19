@@ -78,6 +78,7 @@ private:
     bool cpsEnabled;                  // Feature enabled via MMB+MB5 toggle
     bool cpsClickState;               // Current synthetic button state (pressed/released)
     unsigned long cpsNextActionTime;  // When to toggle next click/release
+    unsigned long cpsCurrentStateStartTime;  // When current press/release started (for min duration enforcement)
     bool cpsThumbPressedInWindow;     // Track if MB5 was pressed during MMB exclusion window
     int cpsClickCount;                // Clicks since last fatigue reset (for fatigue tracking)
 
