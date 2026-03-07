@@ -501,8 +501,7 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
 }
 
 void USBHostDriver::control(const Transfer_t *transfer) {
-    // Small delay to ensure previous Serial4 operations complete
-    delayMicroseconds(100);
+    // delayMicroseconds(100) removed - was adding ~0.1ms per control transfer callback
     
     // logger.debug("control() callback called");
     
@@ -633,9 +632,9 @@ void USBHostDriver::pauseDataTransfers() {
         }
     }
     
-    // Minimal stabilization delay
-    logger.debug("Stabilization delay...");
-    delay(5);  // Reduced to 5ms for configuration changes only
+    // Stabilization delay removed - busy-wait above already ensures pending transfers complete
+    // Original: delay(5) after pauseDataTransfers() wait loop
+    logger.debug("Pause complete");
 }
 
 void USBHostDriver::resumeDataTransfers() { 
