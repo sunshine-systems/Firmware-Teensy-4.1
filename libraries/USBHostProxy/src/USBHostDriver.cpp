@@ -403,8 +403,9 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     // }
     // logger.debug(setupStr.c_str());
     
-    // Small delay to let device stabilize after stopping interrupt transfers
-    delay(5);
+    // Control transfer delay removed - was adding ~40-70ms to enumeration
+    // Original: delay(5) per control transfer, fired unconditionally
+    // pauseDataTransfers() already handles draining in-flight transfers when needed
     
     // Setup the control transfer
     control_setup.bmRequestType = bmRequestType;

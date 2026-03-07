@@ -24,10 +24,7 @@ static uint32_t proxy_endpointN_notify_mask=0;
 volatile uint8_t proxy_usb_configuration = 0;
 volatile uint8_t proxy_usb_high_speed = 0;
 
-// Buffers
-static uint8_t proxy_endpoint0_buffer[8];
-
-// Our additional buffers for larger transfers
+// Buffers for larger transfers
 static uint8_t proxy_descriptor_buffer[512] __attribute__((aligned(32)));
 
 // Buffer for data endpoint transfers
@@ -523,7 +520,6 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
         
         // Forward to device first
         logger.debug("Forwarding SET_CONFIGURATION to device...");
-        uint32_t xfer_start = millis();
         uint16_t dummy_len;
         bool success = hostDriver->controlTransfer(
             pending_setup.bmRequestType,
@@ -535,9 +531,7 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
             &dummy_len,
             500
         );
-        uint32_t xfer_duration = millis() - xfer_start;
-        // logger.debugf("Control transfer completed in %lu ms, success=%s", xfer_duration, success ? "true" : "false");
-        
+
         if (success) {
             logger.debug("SET_CONFIGURATION forwarded successfully");
             configuration_value = pending_setup.wValue;
@@ -709,13 +703,9 @@ void USBDeviceProxy::processControlTransfer() {
         //               (pending_setup.bmRequestType & 0x1F) == 0 ? "Device" : 
         //               (pending_setup.bmRequestType & 0x1F) == 1 ? "Interface" : "Other");
         
-        // Add small delay for string descriptors to help with timing
-        uint8_t desc_type = (pending_setup.wValue >> 8) & 0xFF;
-        if (pending_setup.bRequest == 0x06 && desc_type == 0x03) {
-            delay(10); // Small delay for string descriptors
-        }
-        
-        uint32_t xfer_start = millis();
+        // String descriptor delay removed - was adding ~30-40ms to enumeration
+        // Original: delay(10) per string descriptor request
+
         success = hostDriver->controlTransfer(
             pending_setup.bmRequestType,
             pending_setup.bRequest,
@@ -726,9 +716,7 @@ void USBDeviceProxy::processControlTransfer() {
             &actual_len,
             500  // 500ms timeout
         );
-        uint32_t xfer_duration = millis() - xfer_start;
-        // logger.debugf("Control transfer completed in %lu ms", xfer_duration);
-        
+
         if (success && actual_len > 0) {
             logger.debugf("Got %d bytes from mouse", actual_len);
             
@@ -743,6 +731,7 @@ void USBDeviceProxy::processControlTransfer() {
             logger.debug(dataStr.c_str());
             
             // CRITICAL FIX: For string descriptors, send ONLY the actual descriptor length
+            uint8_t desc_type = (pending_setup.wValue >> 8) & 0xFF;
             if (pending_setup.bRequest == 0x06 && desc_type == 0x03) {
                 // String descriptor - first byte contains the actual length
                 if (actual_len > 0 && proxy_descriptor_buffer[0] <= actual_len) {
