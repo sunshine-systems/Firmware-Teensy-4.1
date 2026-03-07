@@ -348,6 +348,7 @@ The `configureEndpoint` function correctly sets:
 - **USB Speed**: Dynamically matched (1.5, 12, or 480 Mbps)
 - **HID Report Rate**: Up to 8kHz achieved and verified
 - **Control Transfer Handling**: ~50-100ms typical for vendor commands
+- **Enumeration Time**: ~120ms (optimized from ~315ms; direct USB is ~92ms)
 
 ### Memory Layout
 ```
@@ -406,6 +407,8 @@ The `configureEndpoint` function correctly sets:
 8. **EEPROM Overrides**: Essential for devices where automatic interface detection isn't sufficient
 9. **Control Transfer Sequencing**: SET_REPORT/GET_REPORT requires correct sequencing of setup, data, and status phases
 10. **Avoid Delays in Transfer Handling**: Delays during control transfers can block ISRs and cause timeouts
+11. **Debug Logging Performance**: Serial4 logging at 115200 baud adds ~4.3ms per 50-char message. Logging in the enumeration hot path caused a 50ms regression. Use compile-time toggle (`SUNBOX_LOGGING`) to strip logging for production builds.
+12. **Descriptor Caching**: Windows requests descriptors multiple times during enumeration (short probe + full fetch). Caching eliminates redundant USB round-trips but cache must only store full-length responses to avoid returning truncated data.
 
 ### Debugging Indicators
 - **"One packet then stall"**: Missing ZLT bit in endpoint configuration
@@ -458,6 +461,13 @@ The `configureEndpoint` function correctly sets:
 - Implemented proper sequencing for multi-stage control transfers
 - Added state machine for control transfer handling
 - Successfully tested with Pwnage mouse configuration software
+
+### Phase 8: Enumeration Timing Optimization (Completed)
+- Identified ~315ms enumeration overhead via Kernel-PnP timing analysis
+- Removed unnecessary delays in control transfer path (-196ms)
+- Added USB descriptor caching (-7ms)
+- Implemented logging channel system with compile-time toggle
+- Final result: ~120ms enumeration (28ms irreducible overhead from synchronous control transfers)
 
 ---
 

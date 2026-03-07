@@ -7,11 +7,13 @@
 // EEPROM magic numbers for validation
 #define EEPROM_CLAIM_MAGIC 0xDEADBEEF
 #define EEPROM_DEBUG_MAGIC 0xCAFEBABE
+#define EEPROM_LOGCH_MAGIC 0x4C4F4743  // 'LOGC'
 
 // EEPROM addresses
 #define EEPROM_CLAIM_ADDR 0
 #define EEPROM_DEBUG_ADDR (EEPROM_CLAIM_ADDR + sizeof(ClaimConfig))
 #define EEPROM_AUTH_ADDR  0x20  // Fixed address to avoid overlap
+#define EEPROM_LOGCH_ADDR 0x40  // Log channel mask storage
 
 // Structures
 struct ClaimConfig {
@@ -33,6 +35,11 @@ struct AuthConfig {
     uint64_t deviceId;      // Processed hardware ID
     uint32_t authKey;       // Authorization key (first 4 bytes)
     uint32_t checksum;      // Validation checksum
+};
+
+struct LogChannelConfig {
+    uint32_t magic;         // 0x4C4F4743 ('LOGC')
+    uint8_t channelMask;    // Bitmask of enabled log channels
 };
 
 class SunBoxEEPROM {
@@ -59,7 +66,11 @@ public:
     bool loadAuthConfig(AuthConfig& config);
     void clearAuthConfig();
     bool hasValidAuthConfig();
-    
+
+    // Log channel configuration
+    bool writeLogChannels(uint8_t mask);
+    bool readLogChannels(uint8_t& mask);
+
     // Utility
     void clearAll();
     

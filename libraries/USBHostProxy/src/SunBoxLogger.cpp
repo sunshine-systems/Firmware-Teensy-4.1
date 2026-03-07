@@ -1,10 +1,13 @@
 #include "SunBoxLogger.h"
-#include "SunBoxStartup.h"
 
 // Global logger instance
 SunBoxLogger logger;
 
-SunBoxLogger::SunBoxLogger() : output_(nullptr), initialized_(false) {
+#if SUNBOX_LOGGING
+
+#include "SunBoxStartup.h"
+
+SunBoxLogger::SunBoxLogger() : output_(nullptr), initialized_(false), channelMask_(LOG_ERROR) {
 }
 
 void SunBoxLogger::begin(Stream* output) {
@@ -101,6 +104,33 @@ bool SunBoxLogger::isDebugEnabled() const {
     return SunBoxStartup::isDebugEnabled();
 }
 
+// --- Log channel methods ---
+
+void SunBoxLogger::setChannelMask(uint8_t mask) {
+    // LOG_ERROR is always on, ensure it cannot be removed
+    channelMask_ = mask | LOG_ERROR;
+}
+
+uint8_t SunBoxLogger::getChannelMask() {
+    return channelMask_;
+}
+
+void SunBoxLogger::enableChannel(LogChannel ch) {
+    channelMask_ |= ch;
+}
+
+void SunBoxLogger::disableChannel(LogChannel ch) {
+    // LOG_ERROR cannot be disabled
+    if (ch == LOG_ERROR) return;
+    channelMask_ &= ~ch;
+}
+
+bool SunBoxLogger::isChannelEnabled(LogChannel ch) {
+    // LOG_ERROR is always enabled regardless of mask
+    if (ch == LOG_ERROR) return true;
+    return (channelMask_ & ch) != 0;
+}
+
 // Printf-style formatting functions
 
 void SunBoxLogger::errorf(const char* format, ...) {
@@ -149,7 +179,7 @@ void SunBoxLogger::mousef(const char* format, ...) {
 
 void SunBoxLogger::printfWithPrefix(const char* prefix, const char* format, va_list args) {
     vsnprintf(formatBuffer_, FORMAT_BUFFER_SIZE, format, args);
-    
+
     // TODO: Remove this backward compatibility check in future version
     // For now, if not initialized, try to use Serial4 directly if it's available
     if (!initialized_ || !output_) {
@@ -162,3 +192,5 @@ void SunBoxLogger::printfWithPrefix(const char* prefix, const char* format, va_l
     output_->print(prefix);
     output_->println(formatBuffer_);
 }
+
+#endif // SUNBOX_LOGGING

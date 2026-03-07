@@ -13,40 +13,55 @@ void SunBoxEEPROM::begin() {
     // Initialize EEPROM if needed
     isInitialized = true;
     
-    logger.startup("Reading EEPROM...");
-    
+    LOG_STARTUP(LOG_BOOT, "Reading EEPROM...");
+
     // Verify EEPROM size is adequate
     if (EEPROM.length() < (EEPROM_DEBUG_ADDR + sizeof(DebugConfig))) {
-        logger.warning("EEPROM size may be insufficient");
+        LOG_WARNING(LOG_BOOT, "EEPROM size may be insufficient");
     }
-    
+
     // Read and display all EEPROM values if debug is enabled
     if (SunBoxStartup::isDebugEnabled()) {
         // Check debug configuration
         DebugConfig debugConfig;
         EEPROM.get(EEPROM_DEBUG_ADDR, debugConfig);
         if (debugConfig.magic == EEPROM_DEBUG_MAGIC) {
-            logger.debugf("Debug config: %s", debugConfig.debugEnabled ? "ENABLED" : "DISABLED");
+            LOG_DEBUGF(LOG_BOOT, "Debug config: %s", debugConfig.debugEnabled ? "ENABLED" : "DISABLED");
         } else {
-            logger.debug("No valid debug configuration found");
+            LOG_DEBUG(LOG_BOOT, "No valid debug configuration found");
         }
-        
+
         // Check claim configuration
         ClaimConfig claimConfig;
         EEPROM.get(EEPROM_CLAIM_ADDR, claimConfig);
         if (claimConfig.magic == EEPROM_CLAIM_MAGIC) {
-            logger.debug("Found claim configuration:");
-            logger.debugf("  VID: 0x%04X", claimConfig.vid);
-            logger.debugf("  PID: 0x%04X", claimConfig.pid);
-            logger.debugf("  Interface: %d", claimConfig.interface_num);
-            logger.debugf("  Endpoint: 0x%02X", claimConfig.endpoint_addr);
-            logger.debugf("  Endpoint Size: %d", claimConfig.endpoint_size);
+            LOG_DEBUG(LOG_BOOT, "Found claim configuration:");
+            LOG_DEBUGF(LOG_BOOT, "  VID: 0x%04X", claimConfig.vid);
+            LOG_DEBUGF(LOG_BOOT, "  PID: 0x%04X", claimConfig.pid);
+            LOG_DEBUGF(LOG_BOOT, "  Interface: %d", claimConfig.interface_num);
+            LOG_DEBUGF(LOG_BOOT, "  Endpoint: 0x%02X", claimConfig.endpoint_addr);
+            LOG_DEBUGF(LOG_BOOT, "  Endpoint Size: %d", claimConfig.endpoint_size);
         } else {
-            logger.debug("No claim configuration found");
+            LOG_DEBUG(LOG_BOOT, "No claim configuration found");
         }
     }
-    
-    logger.startup("Finished reading EEPROM");
+
+#if SUNBOX_LOGGING
+    // Load log channel mask and apply to logger
+    uint8_t channelMask;
+    if (readLogChannels(channelMask)) {
+        logger.setChannelMask(channelMask);
+        if (SunBoxStartup::isDebugEnabled()) {
+            LOG_DEBUGF(LOG_BOOT, "Log channel mask: 0x%02X", channelMask);
+        }
+    } else {
+        if (SunBoxStartup::isDebugEnabled()) {
+            LOG_DEBUG(LOG_BOOT, "No valid log channel configuration found, using default");
+        }
+    }
+#endif
+
+    LOG_STARTUP(LOG_BOOT, "Finished reading EEPROM");
 }
 
 bool SunBoxEEPROM::saveClaimConfig(uint16_t vid, uint16_t pid, uint8_t interface_num, 
@@ -135,6 +150,37 @@ bool SunBoxEEPROM::toggleDebugMode() {
     return newState;
 }
 
+bool SunBoxEEPROM::writeLogChannels(uint8_t mask) {
+    if (!isInitialized) {
+        begin();
+    }
+
+    LogChannelConfig config;
+    config.magic = EEPROM_LOGCH_MAGIC;
+    config.channelMask = mask;
+
+    EEPROM.put(EEPROM_LOGCH_ADDR, config);
+    return true;
+}
+
+bool SunBoxEEPROM::readLogChannels(uint8_t& mask) {
+    if (!isInitialized) {
+        begin();
+    }
+
+    LogChannelConfig config;
+    EEPROM.get(EEPROM_LOGCH_ADDR, config);
+
+    if (config.magic == EEPROM_LOGCH_MAGIC) {
+        mask = config.channelMask;
+        return true;
+    }
+
+    // Default to LOG_ERROR only if no valid config
+    mask = LOG_ERROR;
+    return false;
+}
+
 void SunBoxEEPROM::clearAll() {
     if (!isInitialized) {
         begin();
@@ -151,6 +197,11 @@ void SunBoxEEPROM::clearAll() {
     AuthConfig authConfig;
     authConfig.magic = 0;
     EEPROM.put(EEPROM_AUTH_ADDR, authConfig);
+
+    // Clear log channel config
+    LogChannelConfig logChConfig;
+    logChConfig.magic = 0;
+    EEPROM.put(EEPROM_LOGCH_ADDR, logChConfig);
 }
 
 bool SunBoxEEPROM::saveAuthConfig(const AuthConfig& config) {

@@ -24,7 +24,7 @@ void HIDMouseDescriptorHandler::begin(USBHostDriver* driver) {
     debug_enabled = SunBoxStartup::isDebugEnabled();
     
     if (debug_enabled) {
-        logger.startup("Starting HID Mouse Descriptor Parsing..");
+        LOG_STARTUP(LOG_ENUM, "Starting HID Mouse Descriptor Parsing..");
     }
 }
 
@@ -46,7 +46,7 @@ bool HIDMouseDescriptorHandler::setupMouseInterface() {
     }
     
     if (debug_enabled) {
-        logger.debugf("Found mouse interface %d at index %d", interface_number, interface_index);
+        LOG_DEBUGF(LOG_ENUM, "Found mouse interface %d at index %d", interface_number, interface_index);
     }
     
     return true;
@@ -65,7 +65,7 @@ bool HIDMouseDescriptorHandler::findMouseInterface() {
         endpoint_interval = host_driver->getEndpointInterval(idx);
         
         if (debug_enabled) {
-            logger.debug("Found HID mouse interface (protocol=2)");
+            LOG_DEBUG(LOG_ENUM, "Found HID mouse interface (protocol=2)");
         }
         return true;
     }
@@ -82,7 +82,7 @@ bool HIDMouseDescriptorHandler::findMouseInterface() {
         endpoint_interval = host_driver->getEndpointInterval(idx);
         
         if (debug_enabled) {
-            logger.debugf("Found HID interface with protocol=%d", interface_protocol);
+            LOG_DEBUGF(LOG_ENUM, "Found HID interface with protocol=%d", interface_protocol);
         }
         return true;
     }
@@ -101,7 +101,7 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     handler_state = HID_STATE_WAIT_DESCRIPTOR;
     
     if (debug_enabled) {
-        logger.debugf("Requesting HID descriptor for interface %d, expected length: %d", 
+        LOG_DEBUGF(LOG_ENUM, "Requesting HID descriptor for interface %d, expected length: %d",
                      interface_number, descriptor_length);
     }
     
@@ -129,7 +129,7 @@ bool HIDMouseDescriptorHandler::requestHIDDescriptor(uint32_t timeout_ms) {
     handler_state = HID_STATE_READY;
     
     if (debug_enabled) {
-        logger.debug("HID descriptor ready!");
+        LOG_DEBUG(LOG_ENUM, "HID descriptor ready!");
     }
     
     return true;
@@ -163,12 +163,14 @@ bool HIDMouseDescriptorHandler::retrieveHIDDescriptor(uint32_t timeout_ms) {
         hid_descriptor_size = actual_length;
         
         if (debug_enabled) {
-            logger.debugf("Retrieved %d bytes of HID descriptor", actual_length);
-            
+            LOG_DEBUGF(LOG_ENUM, "Retrieved %d bytes of HID descriptor", actual_length);
+
             // Print first few bytes for debugging
-            logger.debug("First bytes: ");
-            for (uint16_t i = 0; i < min(actual_length, (uint16_t)16); i++) {
-                logger.debugf("%02X ", hid_descriptor[i]);
+            if (logger.isChannelEnabled(LOG_ENUM)) {
+                logger.debug("First bytes: ");
+                for (uint16_t i = 0; i < min(actual_length, (uint16_t)16); i++) {
+                    logger.debugf("%02X ", hid_descriptor[i]);
+                }
             }
         }
         
@@ -191,7 +193,7 @@ bool HIDMouseDescriptorHandler::activateInterface() {
     }
     
     if (debug_enabled) {
-        logger.debug("Interface activation complete");
+        LOG_DEBUG(LOG_ENUM, "Interface activation complete");
     }
     
     // Note: SET_IDLE and SET_PROTOCOL are optional HID commands that many devices
@@ -213,7 +215,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
     bool debug_enabled = SunBoxStartup::isDebugEnabled();
     
     if (debug_enabled) {
-        logger.debug("\n=== Parsing HID Report Descriptor ===");
+        LOG_DEBUG(LOG_ENUM, "\n=== Parsing HID Report Descriptor ===");
     }
     
     ParseState state = {0};
@@ -259,27 +261,27 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
         if (debug_enabled && ((type == HID_GLOBAL_USAGE_PAGE) || 
             (type == HID_LOCAL_USAGE) || 
             (type == HID_MAIN_INPUT))) {
-            logger.debugf("  [%X] ", offset);
-            
+            LOG_DEBUGF(LOG_ENUM, "  [%X] ", offset);
+
             switch(type) {
                 case HID_GLOBAL_USAGE_PAGE:
-                    logger.debugf("Usage Page: 0x%X", value);
+                    LOG_DEBUGF(LOG_ENUM, "Usage Page: 0x%X", value);
                     break;
                 case HID_LOCAL_USAGE:
-                    logger.debugf("Usage: 0x%X", value);
+                    LOG_DEBUGF(LOG_ENUM, "Usage: 0x%X", value);
                     if (state.usage_page == HID_USAGE_PAGE_GENERIC_DESKTOP) {
                         switch(value) {
-                            case HID_USAGE_X: logger.debug(" (X)"); break;
-                            case HID_USAGE_Y: logger.debug(" (Y)"); break;
-                            case HID_USAGE_WHEEL: logger.debug(" (Wheel)"); break;
-                            case HID_USAGE_POINTER: logger.debug(" (Pointer)"); break;
-                            case HID_USAGE_MOUSE: logger.debug(" (Mouse)"); break;
-                            default: logger.debug(" (?)"); break;
+                            case HID_USAGE_X: LOG_DEBUG(LOG_ENUM, " (X)"); break;
+                            case HID_USAGE_Y: LOG_DEBUG(LOG_ENUM, " (Y)"); break;
+                            case HID_USAGE_WHEEL: LOG_DEBUG(LOG_ENUM, " (Wheel)"); break;
+                            case HID_USAGE_POINTER: LOG_DEBUG(LOG_ENUM, " (Pointer)"); break;
+                            case HID_USAGE_MOUSE: LOG_DEBUG(LOG_ENUM, " (Mouse)"); break;
+                            default: LOG_DEBUG(LOG_ENUM, " (?)"); break;
                         }
                     }
                     break;
                 case HID_MAIN_INPUT:
-                    logger.debugf("Input: Count=%d Size=%d Bits @ offset %d", 
+                    LOG_DEBUGF(LOG_ENUM, "Input: Count=%d Size=%d Bits @ offset %d",
                                  state.report_count, state.report_size, current_bit);
                     break;
             }
@@ -347,8 +349,8 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             x_field.is_signed = state.logical_min < 0;
                             has_x = true;
                             
-                            logger.debugf(">>> Found X: offset=%d bits=%d range=%d..%d", 
-                                        x_field.bit_offset, x_field.bit_count, 
+                            LOG_DEBUGF(LOG_ENUM, ">>> Found X: offset=%d bits=%d range=%d..%d",
+                                        x_field.bit_offset, x_field.bit_count,
                                         x_field.logical_min, x_field.logical_max);
                         }
                         else if (usage == HID_USAGE_Y && !has_y) {
@@ -362,8 +364,8 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             y_field.is_signed = state.logical_min < 0;
                             has_y = true;
                             
-                            logger.debugf(">>> Found Y: offset=%d bits=%d range=%d..%d", 
-                                        y_field.bit_offset, y_field.bit_count, 
+                            LOG_DEBUGF(LOG_ENUM, ">>> Found Y: offset=%d bits=%d range=%d..%d",
+                                        y_field.bit_offset, y_field.bit_count,
                                         y_field.logical_min, y_field.logical_max);
                         }
                         else if (usage == HID_USAGE_WHEEL && !has_wheel) {
@@ -377,7 +379,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                             wheel_field.is_signed = state.logical_min < 0;
                             has_wheel = true;
                             
-                            logger.debugf(">>> Found Wheel: offset=%d bits=%d", 
+                            LOG_DEBUGF(LOG_ENUM, ">>> Found Wheel: offset=%d bits=%d",
                                         wheel_field.bit_offset, wheel_field.bit_count);
                         }
                     }
@@ -391,7 +393,7 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
                         button_count = state.report_count;
                         has_buttons = true;
                         
-                        logger.debugf(">>> Found Buttons: offset=%d count=%d bits=%d", 
+                        LOG_DEBUGF(LOG_ENUM, ">>> Found Buttons: offset=%d count=%d bits=%d",
                                     buttons_field.bit_offset, button_count, buttons_field.bit_count);
                     }
                 }
@@ -412,13 +414,13 @@ bool HIDMouseDescriptorHandler::parseDescriptor(const uint8_t* descriptor, uint1
     report_size_bytes = (total_bits + 7) / 8;
     report_id = state.report_id;
     
-    logger.debugf("\nTotal bits: %d = %d bytes", total_bits, report_size_bytes);
-    
-    logger.debug("Found: ");
-    if (has_buttons) logger.debug("Buttons ");
-    if (has_x) logger.debug("X ");
-    if (has_y) logger.debug("Y ");
-    if (has_wheel) logger.debug("Wheel");
+    LOG_DEBUGF(LOG_ENUM, "\nTotal bits: %d = %d bytes", total_bits, report_size_bytes);
+
+    LOG_DEBUG(LOG_ENUM, "Found: ");
+    if (has_buttons) LOG_DEBUG(LOG_ENUM, "Buttons ");
+    if (has_x) LOG_DEBUG(LOG_ENUM, "X ");
+    if (has_y) LOG_DEBUG(LOG_ENUM, "Y ");
+    if (has_wheel) LOG_DEBUG(LOG_ENUM, "Wheel");
     
     // Check if we have minimum requirements
     if (has_x && has_y) {
@@ -475,7 +477,7 @@ void HIDMouseDescriptorHandler::setBootMouseFormat() {
     wheel_field.is_signed = true;
     wheel_field.is_relative = true;
     
-    logger.debug("Set boot mouse format");
+    LOG_DEBUG(LOG_ENUM, "Set boot mouse format");
 }
 
 int32_t HIDMouseDescriptorHandler::extractValue(const uint8_t* data, uint16_t bit_offset, uint8_t bit_count,
@@ -680,90 +682,90 @@ bool HIDMouseDescriptorHandler::formatMouseData(const MouseState& state, uint8_t
 }
 
 void HIDMouseDescriptorHandler::printInterfaceInfo() {
-    logger.debug("\n=== HID Mouse Interface Info ===");
-    
+    LOG_DEBUG(LOG_COMMAND, "\n=== HID Mouse Interface Info ===");
+
     if (interface_index == 0xFF) {
         logger.error("No mouse interface found");
         return;
     }
-    
-    logger.debugf("Interface Index: %d", interface_index);
-    logger.debugf("Interface Number: %d", interface_number);
-    logger.debugf("Protocol: %d", interface_protocol);
-    
+
+    LOG_DEBUGF(LOG_COMMAND, "Interface Index: %d", interface_index);
+    LOG_DEBUGF(LOG_COMMAND, "Interface Number: %d", interface_number);
+    LOG_DEBUGF(LOG_COMMAND, "Protocol: %d", interface_protocol);
+
     switch (interface_protocol) {
-        case 0: logger.debug(" (None)"); break;
-        case 1: logger.debug(" (Keyboard)"); break;
-        case 2: logger.debug(" (Mouse)"); break;
-        default: logger.debug(" (Unknown)"); break;
+        case 0: LOG_DEBUG(LOG_COMMAND, " (None)"); break;
+        case 1: LOG_DEBUG(LOG_COMMAND, " (Keyboard)"); break;
+        case 2: LOG_DEBUG(LOG_COMMAND, " (Mouse)"); break;
+        default: LOG_DEBUG(LOG_COMMAND, " (Unknown)"); break;
     }
-    
-    logger.debugf("HID Descriptor Length: %d", descriptor_length);
-    
-    logger.debugf("Endpoint: 0x%02X (%d bytes, interval %dms)", 
+
+    LOG_DEBUGF(LOG_COMMAND, "HID Descriptor Length: %d", descriptor_length);
+
+    LOG_DEBUGF(LOG_COMMAND, "Endpoint: 0x%02X (%d bytes, interval %dms)",
                  endpoint_address | 0x80, endpoint_size, endpoint_interval);
-    
-    logger.debug("State: ");
+
+    LOG_DEBUG(LOG_COMMAND, "State: ");
     switch (handler_state) {
-        case HID_STATE_IDLE: logger.debug("IDLE"); break;
-        case HID_STATE_WAIT_DESCRIPTOR: logger.debug("WAIT_DESCRIPTOR"); break;
-        case HID_STATE_PARSING: logger.debug("PARSING"); break;
-        case HID_STATE_READY: logger.debug("READY"); break;
+        case HID_STATE_IDLE: LOG_DEBUG(LOG_COMMAND, "IDLE"); break;
+        case HID_STATE_WAIT_DESCRIPTOR: LOG_DEBUG(LOG_COMMAND, "WAIT_DESCRIPTOR"); break;
+        case HID_STATE_PARSING: LOG_DEBUG(LOG_COMMAND, "PARSING"); break;
+        case HID_STATE_READY: LOG_DEBUG(LOG_COMMAND, "READY"); break;
         case HID_STATE_ERROR: logger.error("ERROR"); break;
     }
-    
-    logger.debugf("Descriptor Valid: %s", valid ? "Yes" : "No");
-    
+
+    LOG_DEBUGF(LOG_COMMAND, "Descriptor Valid: %s", valid ? "Yes" : "No");
+
     if (valid && hid_descriptor_size > 0) {
-        logger.debugf("Descriptor Size: %d bytes", hid_descriptor_size);
+        LOG_DEBUGF(LOG_COMMAND, "Descriptor Size: %d bytes", hid_descriptor_size);
     }
-    
-    logger.debug("===============================");
+
+    LOG_DEBUG(LOG_COMMAND, "===============================");
 }
 
 void HIDMouseDescriptorHandler::printDescriptorInfo() {
-    logger.debug("\n=== HID Report Structure ===");
-    logger.debugf("Valid: %s", valid ? "Yes" : "No");
-    
+    LOG_DEBUG(LOG_COMMAND, "\n=== HID Report Structure ===");
+    LOG_DEBUGF(LOG_COMMAND, "Valid: %s", valid ? "Yes" : "No");
+
     if (!valid) return;
-    
-    logger.debugf("Report ID: %d", report_id);
-    logger.debugf("Report Size: %d bytes (%d bits)", report_size_bytes, total_bits);
-    
+
+    LOG_DEBUGF(LOG_COMMAND, "Report ID: %d", report_id);
+    LOG_DEBUGF(LOG_COMMAND, "Report Size: %d bytes (%d bits)", report_size_bytes, total_bits);
+
     if (has_buttons) {
-        logger.debugf("\nButtons: %d buttons", button_count);
-        logger.debugf("  Bit offset: %d", buttons_field.bit_offset);
-        logger.debugf("  Total bits: %d", buttons_field.bit_count);
+        LOG_DEBUGF(LOG_COMMAND, "\nButtons: %d buttons", button_count);
+        LOG_DEBUGF(LOG_COMMAND, "  Bit offset: %d", buttons_field.bit_offset);
+        LOG_DEBUGF(LOG_COMMAND, "  Total bits: %d", buttons_field.bit_count);
     }
-    
+
     if (has_x) {
-        logger.debug("\nX Axis:");
-        logger.debugf("  Bit offset: %d (byte %d bit %d)", 
+        LOG_DEBUG(LOG_COMMAND, "\nX Axis:");
+        LOG_DEBUGF(LOG_COMMAND, "  Bit offset: %d (byte %d bit %d)",
                      x_field.bit_offset, x_field.bit_offset / 8, x_field.bit_offset % 8);
-        logger.debugf("  Size: %d bits", x_field.bit_count);
-        logger.debugf("  Range: %d to %d", x_field.logical_min, x_field.logical_max);
-        logger.debugf("  Type: %s, %s", 
+        LOG_DEBUGF(LOG_COMMAND, "  Size: %d bits", x_field.bit_count);
+        LOG_DEBUGF(LOG_COMMAND, "  Range: %d to %d", x_field.logical_min, x_field.logical_max);
+        LOG_DEBUGF(LOG_COMMAND, "  Type: %s, %s",
                      x_field.is_relative ? "Relative" : "Absolute",
                      x_field.is_signed ? "Signed" : "Unsigned");
     }
-    
+
     if (has_y) {
-        logger.debug("\nY Axis:");
-        logger.debugf("  Bit offset: %d (byte %d bit %d)", 
+        LOG_DEBUG(LOG_COMMAND, "\nY Axis:");
+        LOG_DEBUGF(LOG_COMMAND, "  Bit offset: %d (byte %d bit %d)",
                      y_field.bit_offset, y_field.bit_offset / 8, y_field.bit_offset % 8);
-        logger.debugf("  Size: %d bits", y_field.bit_count);
-        logger.debugf("  Range: %d to %d", y_field.logical_min, y_field.logical_max);
-        logger.debugf("  Type: %s, %s", 
+        LOG_DEBUGF(LOG_COMMAND, "  Size: %d bits", y_field.bit_count);
+        LOG_DEBUGF(LOG_COMMAND, "  Range: %d to %d", y_field.logical_min, y_field.logical_max);
+        LOG_DEBUGF(LOG_COMMAND, "  Type: %s, %s",
                      y_field.is_relative ? "Relative" : "Absolute",
                      y_field.is_signed ? "Signed" : "Unsigned");
     }
-    
+
     if (has_wheel) {
-        logger.debug("\nWheel:");
-        logger.debugf("  Bit offset: %d (byte %d bit %d)", 
+        LOG_DEBUG(LOG_COMMAND, "\nWheel:");
+        LOG_DEBUGF(LOG_COMMAND, "  Bit offset: %d (byte %d bit %d)",
                      wheel_field.bit_offset, wheel_field.bit_offset / 8, wheel_field.bit_offset % 8);
-        logger.debugf("  Size: %d bits", wheel_field.bit_count);
+        LOG_DEBUGF(LOG_COMMAND, "  Size: %d bits", wheel_field.bit_count);
     }
-    
-    logger.debug("==========================\n");
+
+    LOG_DEBUG(LOG_COMMAND, "==========================\n");
 }

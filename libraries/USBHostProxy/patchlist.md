@@ -102,3 +102,75 @@ Added dynamic button positioning based on HID descriptor:
 - `examples/SunshineUSBProxy/SunBoxSyntheticHandleOutput.cpp` - Dynamic button positioning with debug logging
 
 ---
+
+## 2026-03-06: Enumeration Timing Optimization — Delay Removal
+
+**Issue:** USB pass-through proxy had ~315ms enumeration time vs ~92ms for direct USB connection, making it detectable via Kernel-PnP event timing analysis.
+
+**Root Cause:** Multiple unnecessary `delay()` calls in the control transfer path:
+- `delay(10)` per string descriptor request in USBDeviceProxy.cpp (~30-40ms total)
+- `delay(5)` per control transfer in USBHostDriver::controlTransfer() (~40-70ms total, fired unconditionally on every transfer)
+- `delay(5)` in USBHostDriver::pauseDataTransfers() (~5ms)
+- `delayMicroseconds(100)` in USBHostDriver::control() callback (~1ms)
+
+**Fix Applied:**
+1. Removed all four delay sources
+2. Cleaned up unused variables (xfer_duration, xfer_start, proxy_endpoint0_buffer)
+
+**Impact:** Enumeration time reduced from ~315ms to ~120ms (62% reduction, 87% overhead reduction vs direct USB)
+
+**Files Modified:**
+- `src/USBDeviceProxy.cpp` — Removed delay(10) for string descriptors, removed unused variables
+- `src/USBHostDriver.cpp` — Removed delay(5) in controlTransfer(), delay(5) in pauseDataTransfers(), delayMicroseconds(100) in control callback
+
+---
+
+## 2026-03-06: USB Descriptor Caching
+
+**Issue:** During enumeration, Windows requests the same descriptors multiple times (short probe then full fetch). Each request required a synchronous USB round-trip through the proxy to the physical device.
+
+**Fix Applied:**
+- Added DescriptorCache struct to USBDeviceProxy with static allocation (~3.6KB)
+- Caches device (0x01), configuration (0x02), string (0x03 x10), and BOS (0x0F) descriptors
+- Config/BOS only cached after full fetch (not short probe) to handle two-phase Windows enumeration
+- Cache invalidated on device disconnect and VID/PID change
+- Bidirectional reference between USBDeviceProxy and USBHostDriver for cache invalidation
+
+**Impact:** Eliminates redundant USB round-trips during re-enumeration (~7ms saved)
+
+**Files Modified:**
+- `src/USBDeviceProxy.cpp` — Cache lookup before controlTransfer(), cache store after fetch
+- `src/USBDeviceProxy.h` — DescriptorCache struct, cache methods
+- `src/USBHostDriver.cpp` — Cache invalidation on disconnect
+- `src/USBHostDriver.h` — Forward declaration, setDeviceProxy() method
+- `examples/SunshineUSBProxy/SunshineUSBProxy.ino` — Wire up bidirectional reference
+
+---
+
+## 2026-03-07: Logging Channel System with Compile-Time Toggle
+
+**Issue:** Debug logging in the control transfer hot path caused a ~50ms enumeration regression (B6: 167ms vs B4: 119ms). Need a way to have logging available for development but completely stripped for production.
+
+**Fix Applied:**
+- Added LogChannel enum with bitmask channels: BOOT(0x01), CONNECT(0x02), ENUM(0x04), DATA(0x08), COMMAND(0x10), STATS(0x20), ERROR(0x40)
+- All ~313 non-error log calls in src/ files tagged with channel macros (LOG_BOOT, LOG_CONNECT, etc.)
+- Channel mask persisted to EEPROM at offset 0x40 with magic validation
+- Default mask: ERROR-only (minimal output)
+- Added `#define SUNBOX_LOGGING 1` compile-time toggle in SunBoxLogger.h
+- When SUNBOX_LOGGING=0: all logging stripped at compile time, zero overhead
+- Example files (runtime code) NOT modified per design
+
+**Impact:** Zero performance regression with logging disabled. Full diagnostic capability when enabled.
+
+**Files Modified:**
+- `src/SunBoxLogger.h` — Compile toggle, LogChannel enum, channel macros, stripped class for SUNBOX_LOGGING=0
+- `src/SunBoxLogger.cpp` — Channel methods wrapped in #if guard
+- `src/SunBoxEEPROM.h` — Log channel config struct and addresses
+- `src/SunBoxEEPROM.cpp` — Read/write log channel mask, wrapped in #if guard
+- `src/USBDeviceProxy.cpp` — ~55 calls tagged with channel macros
+- `src/USBHostDriver.cpp` — ~68 calls tagged with channel macros
+- `src/HIDMouseDescriptorHandler.cpp` — ~46 calls tagged
+- `src/SunBoxStartup.cpp` — 2 calls tagged
+- `src/SunBoxAuth.cpp` — 1 call tagged
+
+---

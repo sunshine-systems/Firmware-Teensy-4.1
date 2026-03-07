@@ -27,7 +27,7 @@ void SunBoxStartup::begin() {
         return;
     }
     
-    logger.startup("SunBox Initializing...");
+    LOG_STARTUP(LOG_BOOT, "SunBox Initializing...");
     
     // Load debug mode from EEPROM directly (can't use sunboxEEPROM object yet)
     DebugConfig config;
@@ -39,7 +39,7 @@ void SunBoxStartup::begin() {
         debugEnabled = false;
     }
     
-    logger.startup("SunBox Initialized...");
+    LOG_STARTUP(LOG_BOOT, "SunBox Initialized...");
     
     // Don't create any USB objects here - let the main sketch do it
     ready = true;

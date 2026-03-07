@@ -27,7 +27,10 @@ USBHostProxy/
 │   ├── USBHostDriver.cpp/h  # USB host driver implementation
 │   ├── HIDMouseDescriptorHandler.cpp/h  # HID descriptor parsing
 │   ├── SunBoxEEPROM.cpp/h   # EEPROM configuration storage
-│   └── SunBoxStartup.cpp/h  # Early initialization
+│   ├── SunBoxStartup.cpp/h  # Early initialization
+│   ├── USBDeviceProxy.cpp/h # USB device proxy (presents cloned device to host PC)
+│   ├── SunBoxLogger.cpp/h   # Logging system with channel filtering and compile-time toggle
+│   └── SunBoxAuth.cpp/h     # Authentication module
 └── examples/
     └── SunshineUSBProxy/    # Example implementation
         ├── SunshineUSBProxy.ino  # Main sketch
@@ -70,6 +73,26 @@ Provides early initialization:
 - Initializes Serial4 at 115200 baud
 - Loads debug mode from EEPROM
 
+### USBDeviceProxy
+
+Custom polling-based USB device stack that presents the proxy device to the host PC:
+- Handles descriptor forwarding from the downstream USB device
+- Proxies control transfers between host and device
+- Configures endpoints to mirror the downstream device
+- Caches USB descriptors for fast re-enumeration
+
+### SunBoxLogger
+
+Structured logging with channel-based filtering:
+- Channels: BOOT, CONNECT, ENUM, DATA, COMMAND, STATS, ERROR
+- Channel mask is persisted to EEPROM (default: ERROR-only)
+- Compile-time toggle: set `#define SUNBOX_LOGGING 0` in `SunBoxLogger.h` to strip ALL logging from the binary with zero overhead
+- When `SUNBOX_LOGGING` is 1, individual channels can be enabled/disabled at runtime
+
+### SunBoxAuth
+
+Authentication module for securing the proxy device interface.
+
 ## Example Implementation: SunshineUSBProxy
 
 The example sketch demonstrates a complete USB mouse proxy implementation with multiple input sources.
@@ -102,6 +125,8 @@ All serial output uses a prefix system:
 - `S:` - System/startup messages (always shown)
 - `I:` - Information/debug messages (shown when debug enabled)
 - `E:` - Error messages (always shown)
+
+These prefixes are now routed through SunBoxLogger with channel gating, so output for a given prefix only appears if the corresponding channel is enabled.
 
 ### Supported Protocols
 
@@ -180,16 +205,23 @@ The library stores configuration at these addresses:
 |--------|------|-------------|
 | 0x00 | 12 bytes | Forced interface configuration |
 | 0x0C | 5 bytes | Debug mode configuration |
+| 0x40 | 8 bytes | Log channel configuration (magic + channel mask) |
 
 Configuration is loaded automatically at startup.
 
 ## Debug Output
 
-Enable debug mode to see:
-- HID descriptor parsing details
-- Mouse data packets
-- USB enumeration process
-- Command routing decisions
+Logging is managed by SunBoxLogger with per-channel control:
+- Channels: BOOT, CONNECT, ENUM, DATA, COMMAND, STATS, ERROR
+- Channel mask is persisted to EEPROM; default is ERROR-only
+- Compile-time toggle: set `#define SUNBOX_LOGGING 0` in `SunBoxLogger.h` to strip ALL logging from the binary (zero overhead)
+- When `SUNBOX_LOGGING` is 1, individual channels can be enabled/disabled at runtime via DevTools commands
+
+Enabling relevant channels surfaces details such as:
+- HID descriptor parsing details (ENUM channel)
+- Mouse data packets (DATA channel)
+- USB enumeration process (CONNECT / ENUM channels)
+- Command routing decisions (COMMAND channel)
 
 Example debug output:
 ```
@@ -231,11 +263,12 @@ The built-in LED indicates:
 - Serial baud rate: 115200
 - Maximum buttons: 8
 - Movement range: -32768 to 32767
-- EEPROM usage: 17 bytes
+- EEPROM usage: 25 bytes (17 bytes existing + 8 bytes log channel config)
 
 ## Version Information
 
-Current version: 3.0
+Current version: 3.1
 - Clean architecture implementation
 - Multi-protocol support
 - Persistent configuration
+- Logging channel system with compile-time toggle

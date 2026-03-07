@@ -62,7 +62,7 @@ void SunBoxAuth::begin() {
     
     // Only show startup message if authorized
     if (authorized) {
-        logger.startup("SunBox Authorized");
+        LOG_STARTUP(LOG_BOOT, "SunBox Authorized");
     }
     // Silent if not authorized - no hints
 }

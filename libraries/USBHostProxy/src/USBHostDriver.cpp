@@ -56,20 +56,20 @@ USBHostDriver::~USBHostDriver() {
 //=============================================================================
 
 bool USBHostDriver::begin() {
-    logger.startup("SunBox USB Host Driver initializing...");
-    logger.startup("SunBox USB Host Driver ready for device...");
+    LOG_STARTUP(LOG_BOOT, "SunBox USB Host Driver initializing...");
+    LOG_STARTUP(LOG_BOOT, "SunBox USB Host Driver ready for device...");
     return true;
 }
 
 bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, uint32_t len) {
-    logger.debug("");
-    logger.debugf("USBHostDriver::claim() called - type: %d, len: %lu", type, len);
+    LOG_DEBUG(LOG_ENUM, "");
+    LOG_DEBUGF(LOG_ENUM, "USBHostDriver::claim() called - type: %d, len: %lu", type, len);
     
     // Type 0 = Device level (store reference but don't claim)
     if (type == CLAIM_REPORT) {
-        logger.debug("Device level claim (type 0) - storing device reference");
+        LOG_DEBUG(LOG_ENUM, "Device level claim (type 0) - storing device reference");
         device = dev;
-        logger.debugf("Device VID: 0x%04X, PID: 0x%04X", dev->idVendor, dev->idProduct);
+        LOG_DEBUGF(LOG_ENUM, "Device VID: 0x%04X, PID: 0x%04X", dev->idVendor, dev->idProduct);
         
         // Extract some configuration info from the device structure
         // Note: Full configuration descriptor comes in type 1 claim
@@ -96,19 +96,19 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
             return false;
         }
         
-        logger.debug("Interface level claim (type 1) - claiming device!");
-        logger.debug("SunBox Host Driver beginning claim process...");
-        
-        logger.debugf("Device VID: 0x%04X, PID: 0x%04X", dev->idVendor, dev->idProduct);
-        
-        logger.debugf("Descriptors length: %lu", len);
+        LOG_DEBUG(LOG_ENUM, "Interface level claim (type 1) - claiming device!");
+        LOG_DEBUG(LOG_ENUM, "SunBox Host Driver beginning claim process...");
+
+        LOG_DEBUGF(LOG_ENUM, "Device VID: 0x%04X, PID: 0x%04X", dev->idVendor, dev->idProduct);
+
+        LOG_DEBUGF(LOG_ENUM, "Descriptors length: %lu", len);
         
         // STORE THE RAW CONFIGURATION DESCRIPTOR DATA
         if (len > 0 && descriptors != nullptr && len <= MAX_CONFIG_DESCRIPTOR_SIZE) {
             memcpy(config_descriptor, descriptors, len);
             config_descriptor_len = len;
             config_descriptor_valid = true;
-            logger.debugf("Stored %d bytes of configuration descriptor data", len);
+            LOG_DEBUGF(LOG_ENUM, "Stored %d bytes of configuration descriptor data", len);
         } else {
             logger.error("Error Descriptor data too large or invalid, this will cause proxying to fail & is not safe to use until fixed by the developer. please report this error.");
             config_descriptor_valid = false;
@@ -140,8 +140,8 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
             config.vid == dev->idVendor && 
             config.pid == dev->idProduct) {
             
-            logger.startup("Found forced interface configuration");
-            logger.startupf("Using interface %d endpoint 0x%02X for device VID:0x%04X PID:0x%04X",
+            LOG_STARTUP(LOG_CONNECT, "Found forced interface configuration");
+            LOG_STARTUPF(LOG_CONNECT, "Using interface %d endpoint 0x%02X for device VID:0x%04X PID:0x%04X",
                           config.interface_num, config.endpoint_addr | 0x80, config.vid, config.pid);
             
             // Find the specified interface
@@ -164,7 +164,7 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
         // Claim the endpoints
         claimEndpoints();
         
-        logger.startup("SunBox Host Driver found physical device");
+        LOG_STARTUP(LOG_CONNECT, "SunBox Host Driver found physical device");
         
         device_claimed = true;
         device_ready = true;
@@ -172,7 +172,7 @@ bool USBHostDriver::claim(Device_t *dev, int type, const uint8_t *descriptors, u
         // Start reading data
         startReading();
         
-        logger.startup("SunBox Host Driver claimed device");
+        LOG_STARTUP(LOG_CONNECT, "SunBox Host Driver claimed device");
         
         return true;  // Claim this interface
     }
@@ -210,7 +210,7 @@ void USBHostDriver::disconnect() {
         deviceProxy->invalidateDescriptorCache();
     }
 
-    logger.warning("Device Disconnect detected, may cause instability..");
+    LOG_WARNING(LOG_CONNECT, "Device Disconnect detected, may cause instability..");
 }
 
 //=============================================================================
@@ -221,7 +221,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
     const uint8_t* p = descriptors;
     const uint8_t* end = descriptors + len;
     
-    logger.debug("Parsing descriptors...");
+    LOG_DEBUG(LOG_ENUM, "Parsing descriptors...");
     
     // Clear endpoint info before parsing
     in_endpoint_addr = 0;
@@ -253,7 +253,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
                 iface->is_hid = (iface->interface_class == 0x03);
                 iface->has_in_endpoint = false;
                 
-                logger.debugf("Found interface %d, class: 0x%02X%s", 
+                LOG_DEBUGF(LOG_ENUM, "Found interface %d, class: 0x%02X%s",
                             iface->interface_num, iface->interface_class,
                             iface->is_hid ? (iface->interface_protocol == 1 ? " (HID Keyboard)" : 
                                            iface->interface_protocol == 2 ? " (HID Mouse)" : " (HID)") : "");
@@ -267,7 +267,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
             uint16_t report_length = p[7] | (p[8] << 8);
             interfaces[current_interface_idx].hid_desc_length = report_length;
             
-            logger.debugf("HID descriptor found! Report length: %d for interface %d",
+            LOG_DEBUGF(LOG_ENUM, "HID descriptor found! Report length: %d for interface %d",
                         report_length, interfaces[current_interface_idx].interface_num);
         }
         
@@ -278,7 +278,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
             uint16_t ep_size = p[4] | (p[5] << 8);
             uint8_t ep_interval = p[6];
             
-            logger.debugf("Found endpoint: addr=0x%02X attr=0x%02X size=%d interval=%d",
+            LOG_DEBUGF(LOG_ENUM, "Found endpoint: addr=0x%02X attr=0x%02X size=%d interval=%d",
                         ep_addr, ep_attr, ep_size, ep_interval);
             
             // Check if it's interrupt endpoint
@@ -289,7 +289,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
                         in_endpoint_addr = ep_addr & 0x7F;
                         in_endpoint_size = ep_size;
                         in_endpoint_interval = ep_interval;
-                        logger.debug("Using as primary IN endpoint");
+                        LOG_DEBUG(LOG_ENUM, "Using as primary IN endpoint");
                     }
                     
                     // Also store for current interface
@@ -306,7 +306,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
                         out_endpoint_addr = ep_addr;
                         out_endpoint_size = ep_size;
                         out_endpoint_interval = ep_interval;
-                        logger.debug("Using as OUT endpoint");
+                        LOG_DEBUG(LOG_ENUM, "Using as OUT endpoint");
                     }
                 }
             }
@@ -315,7 +315,7 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
         p += desc_len;
     }
     
-    logger.debugf("Parsing complete - %d interfaces found, IN endpoint: %d, OUT endpoint: %d",
+    LOG_DEBUGF(LOG_ENUM, "Parsing complete - %d interfaces found, IN endpoint: %d, OUT endpoint: %d",
                 interface_count, in_endpoint_addr, out_endpoint_addr);
     
     // Store the number of interfaces for configuration descriptor reconstruction
@@ -329,13 +329,13 @@ void USBHostDriver::parseDescriptors(const uint8_t* descriptors, uint32_t len) {
 void USBHostDriver::claimEndpoints() {
     // Claim IN endpoint
     if (in_endpoint_addr) {
-        logger.debugf("Creating IN pipe for endpoint %d", in_endpoint_addr);
+        LOG_DEBUGF(LOG_ENUM, "Creating IN pipe for endpoint %d", in_endpoint_addr);
         
         // Create interrupt pipe (type 3) for IN endpoint
         in_pipe = new_Pipe(device, 3, in_endpoint_addr, 1, in_endpoint_size, in_endpoint_interval);
         if (in_pipe) {
             in_pipe->callback_function = in_callback;
-            logger.debug("IN pipe created successfully");
+            LOG_DEBUG(LOG_ENUM, "IN pipe created successfully");
         } else {
             logger.error("SunBox failed to create IN Pipe, this will cause proxying to fail and is not safe until fixed by the developer. report this error immediately.");
         }
@@ -343,12 +343,12 @@ void USBHostDriver::claimEndpoints() {
     
     // Claim OUT endpoint
     if (out_endpoint_addr) {
-        logger.debugf("Creating OUT pipe for endpoint %d", out_endpoint_addr);
+        LOG_DEBUGF(LOG_ENUM, "Creating OUT pipe for endpoint %d", out_endpoint_addr);
         
         // Create interrupt pipe (type 3) for OUT endpoint
         out_pipe = new_Pipe(device, 3, out_endpoint_addr, 0, out_endpoint_size, out_endpoint_interval);
         if (out_pipe) {
-            logger.debug("OUT pipe created successfully");
+            LOG_DEBUG(LOG_ENUM, "OUT pipe created successfully");
         } else {
             logger.error("SunBox failed to create OUT Pipe, this will cause proxying to fail and is not safe until fixed by the developer. report this error immediately.");
         }
@@ -357,16 +357,16 @@ void USBHostDriver::claimEndpoints() {
 
 void USBHostDriver::startReading() {
     if (in_pipe && !data_transfers_paused && !pending_in_transfer) {
-        logger.debug("Starting data reading...");
-        logger.debugf("IN pipe address: 0x%08X", (uint32_t)in_pipe);
-        logger.debugf("Buffer address: 0x%08X", (uint32_t)rx_buffer);
-        logger.debugf("Endpoint size: %d", in_endpoint_size);
-        
+        LOG_DEBUG(LOG_ENUM, "Starting data reading...");
+        LOG_DEBUGF(LOG_ENUM, "IN pipe address: 0x%08X", (uint32_t)in_pipe);
+        LOG_DEBUGF(LOG_ENUM, "Buffer address: 0x%08X", (uint32_t)rx_buffer);
+        LOG_DEBUGF(LOG_ENUM, "Endpoint size: %d", in_endpoint_size);
+
         pending_in_transfer = true;
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
-        logger.debug("Data transfer queued");
-        
-        logger.debugf("Pipe callback function: 0x%08X", (uint32_t)in_pipe->callback_function);
+        LOG_DEBUG(LOG_ENUM, "Data transfer queued");
+
+        LOG_DEBUGF(LOG_ENUM, "Pipe callback function: 0x%08X", (uint32_t)in_pipe->callback_function);
     }
 }
 
@@ -428,19 +428,21 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     
     // CRITICAL FIX: For OUT transfers, ensure data is in control_buffer
     if (!(bmRequestType & 0x80) && wLength > 0 && data != nullptr) {
-        logger.debugf("OUT transfer - copying %d bytes to control buffer", wLength);
+        LOG_DEBUGF(LOG_ENUM, "OUT transfer - copying %d bytes to control buffer", wLength);
         
         // Copy the provided data to control_buffer
         memcpy(control_buffer, data, min(wLength, sizeof(control_buffer)));
         
         // Debug: Print first few bytes of OUT data
-        String outDataStr = "OUT data: ";
-        for (int i = 0; i < min(wLength, (uint16_t)16); i++) {
-            if (control_buffer[i] < 0x10) outDataStr += "0";
-            outDataStr += String(control_buffer[i], HEX) + " ";
+        if (logger.isChannelEnabled(LOG_ENUM)) {
+            String outDataStr = "OUT data: ";
+            for (int i = 0; i < min(wLength, (uint16_t)16); i++) {
+                if (control_buffer[i] < 0x10) outDataStr += "0";
+                outDataStr += String(control_buffer[i], HEX) + " ";
+            }
+            if (wLength > 16) outDataStr += "...";
+            logger.debug(outDataStr.c_str());
         }
-        if (wLength > 16) outDataStr += "...";
-        logger.debug(outDataStr.c_str());
     }
     
     // Queue the transfer - always use control_buffer
@@ -479,7 +481,7 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     
     // For OUT transfers, we might get 0 bytes back (just ACK)
     if (!(bmRequestType & 0x80)) {
-        logger.debug("OUT transfer completed successfully");
+        LOG_DEBUG(LOG_ENUM, "OUT transfer completed successfully");
         if (actualLength) *actualLength = 0;
         return true;
     }
@@ -490,7 +492,7 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     }
     
     // Success - copy data for IN transfers
-    logger.debugf("Control transfer complete, received %d bytes", control_length_received);
+    LOG_DEBUGF(LOG_ENUM, "Control transfer complete, received %d bytes", control_length_received);
     
     if (data && control_length_received > 0) {
         uint16_t copy_len = min(control_length_received, wLength);
@@ -528,20 +530,20 @@ void USBHostDriver::control(const Transfer_t *transfer) {
             // IN transfer with data received
             if (control_length_received > 0) {
                 control_success = true;
-                logger.debug("WORKAROUND: IN transfer - Treating Ping-only error as success since data was received");
-                logger.debugf("Token=0x%08X, Status=0x01 (Ping only), Length=%d bytes", 
+                LOG_DEBUG(LOG_ENUM, "WORKAROUND: IN transfer - Treating Ping-only error as success since data was received");
+                LOG_DEBUGF(LOG_ENUM, "Token=0x%08X, Status=0x01 (Ping only), Length=%d bytes",
                              token, control_length_received);
             }
             // OUT transfer (PID=1) with ping error  
             else if (pid_code == 1) {
                 control_success = true;
-                logger.debug("WORKAROUND: OUT transfer - Treating Ping-only error as success for SET_CONFIGURATION");
-                logger.debugf("Token=0x%08X, Status=0x01 (Ping only), PID=%d (OUT)", token, pid_code);
+                LOG_DEBUG(LOG_ENUM, "WORKAROUND: OUT transfer - Treating Ping-only error as success for SET_CONFIGURATION");
+                LOG_DEBUGF(LOG_ENUM, "Token=0x%08X, Status=0x01 (Ping only), PID=%d (OUT)", token, pid_code);
             }
             else {
                 // Some other case with ping bit set
                 control_success = false;
-                logger.debugf("Ping error without data or OUT transfer, token=0x%08X", token);
+                LOG_DEBUGF(LOG_ENUM, "Ping error without data or OUT transfer, token=0x%08X", token);
             }
         } else {
             // Normal success check - status byte should be 0
@@ -595,7 +597,7 @@ void USBHostDriver::control(const Transfer_t *transfer) {
             // }
         }
     } else {
-        logger.debug("control() called but not for our transfer");
+        LOG_DEBUG(LOG_ENUM, "control() called but not for our transfer");
     }
 }
 
@@ -605,16 +607,16 @@ void USBHostDriver::control(const Transfer_t *transfer) {
 
 void USBHostDriver::pauseDataTransfers() { 
     if (data_transfers_paused) {
-        logger.debug("Already paused");
+        LOG_DEBUG(LOG_DATA, "Already paused");
         return;
     }
     
     data_transfers_paused = true;
-    logger.debug("Data transfers paused");
+    LOG_DEBUG(LOG_DATA, "Data transfers paused");
     
     // Wait for any pending transfer to complete without queuing a new one
     if (pending_in_transfer) {
-        logger.debug("Waiting for current transfer to complete...");
+        LOG_DEBUG(LOG_DATA, "Waiting for current transfer to complete...");
         uint32_t wait_start = millis();
         
         // Wait up to 20ms for the transfer to complete naturally
@@ -627,9 +629,9 @@ void USBHostDriver::pauseDataTransfers() {
         }
         
         if (!pending_in_transfer) {
-            logger.debug("Current transfer completed");
+            LOG_DEBUG(LOG_DATA, "Current transfer completed");
         } else {
-            logger.debug("Transfer still pending after wait");
+            LOG_DEBUG(LOG_DATA, "Transfer still pending after wait");
             // Force clear the flag since we've waited long enough
             pending_in_transfer = false;
         }
@@ -637,18 +639,18 @@ void USBHostDriver::pauseDataTransfers() {
     
     // Stabilization delay removed - busy-wait above already ensures pending transfers complete
     // Original: delay(5) after pauseDataTransfers() wait loop
-    logger.debug("Pause complete");
+    LOG_DEBUG(LOG_DATA, "Pause complete");
 }
 
 void USBHostDriver::resumeDataTransfers() { 
     data_transfers_paused = false; 
-    logger.debug("Data transfers resumed");
+    LOG_DEBUG(LOG_DATA, "Data transfers resumed");
     
     // Immediately queue a new transfer if we have a pipe and device is ready
     if (in_pipe && device_ready && !pending_in_transfer) {
         pending_in_transfer = true;
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
-        logger.debug("Queued new transfer after resume");
+        LOG_DEBUG(LOG_DATA, "Queued new transfer after resume");
     }
 }
 
@@ -688,15 +690,17 @@ void USBHostDriver::processInData(const Transfer_t *transfer) {
         // Debug first data packet
         static bool first_data = true;
         if (first_data) {
-            // Build hex string for data
-            String dataStr = "";
-            for (uint32_t i = 0; i < actual_len && i < 8; i++) {
-                if (i > 0) dataStr += " ";
-                if (((uint8_t*)transfer->buffer)[i] < 0x10) dataStr += "0";
-                dataStr += String(((uint8_t*)transfer->buffer)[i], HEX);
+            if (logger.isChannelEnabled(LOG_CONNECT)) {
+                // Build hex string for data
+                String dataStr = "";
+                for (uint32_t i = 0; i < actual_len && i < 8; i++) {
+                    if (i > 0) dataStr += " ";
+                    if (((uint8_t*)transfer->buffer)[i] < 0x10) dataStr += "0";
+                    dataStr += String(((uint8_t*)transfer->buffer)[i], HEX);
+                }
+                logger.startupf("Received first mouse data packet, length: %lu, data: %s, device should now be fully operational.",
+                              actual_len, dataStr.c_str());
             }
-            logger.startupf("Received first mouse data packet, length: %lu, data: %s, device should now be fully operational.", 
-                          actual_len, dataStr.c_str());
             first_data = false;
         }
         
@@ -717,14 +721,14 @@ void USBHostDriver::processInData(const Transfer_t *transfer) {
     
     // Only log every 100 packets to reduce spam
     if ((data_packet_count % 100) == 1) {
-        logger.debugf("Mouse packet #%lu len=%lu available=%s proxy_configured=true",
+        LOG_DEBUGF(LOG_DATA, "Mouse packet #%lu len=%lu available=%s proxy_configured=true",
                     data_packet_count, actual_len, new_data_available ? "true" : "false");
     }
     
     // Always log the detailed state for the first few packets
     if (data_packet_count <= 5) {
-        logger.debugf("processInData #%lu paused=%s ready=%s pipe=%s",
-                    data_packet_count, 
+        LOG_DEBUGF(LOG_DATA, "processInData #%lu paused=%s ready=%s pipe=%s",
+                    data_packet_count,
                     data_transfers_paused ? "true" : "false",
                     device_ready ? "true" : "false",
                     in_pipe ? "valid" : "null");
@@ -736,7 +740,7 @@ void USBHostDriver::processInData(const Transfer_t *transfer) {
         queue_Data_Transfer(in_pipe, rx_buffer, in_endpoint_size, this);
         
         if (data_packet_count <= 5) {
-            logger.debug("Queued next transfer");
+            LOG_DEBUG(LOG_DATA, "Queued next transfer");
         }
     } else if (data_transfers_paused) {
         logger.warning("Not queuing - transfers paused!");
@@ -888,7 +892,7 @@ uint8_t USBHostDriver::getDeviceEP0Size() const {
         return 64;
     }
     
-    logger.debugf("Device EP0 max packet size: %d bytes", size);
+    LOG_DEBUGF(LOG_ENUM, "Device EP0 max packet size: %d bytes", size);
     
     return size;
 }
@@ -922,21 +926,21 @@ uint8_t USBHostDriver::getDeviceSpeed() const {
         case 0:  // Library says Full Speed (12 Mbps)
             standard_speed = 1;
             if (!speed_logged) {
-                logger.startup("Found device with Speed Full Speed (12 Mbps)");
+                LOG_STARTUP(LOG_CONNECT, "Found device with Speed Full Speed (12 Mbps)");
                 speed_logged = true;
             }
             break;
         case 1:  // Library says Low Speed (1.5 Mbps)
             standard_speed = 0;
             if (!speed_logged) {
-                logger.startup("Found device with Speed Low Speed (1.5 Mbps)");
+                LOG_STARTUP(LOG_CONNECT, "Found device with Speed Low Speed (1.5 Mbps)");
                 speed_logged = true;
             }
             break;
         case 2:  // Library says High Speed (480 Mbps)
             standard_speed = 2;
             if (!speed_logged) {
-                logger.startup("Found device with Speed High Speed (480 Mbps)");
+                LOG_STARTUP(LOG_CONNECT, "Found device with Speed High Speed (480 Mbps)");
                 speed_logged = true;
             }
             break;
@@ -959,139 +963,139 @@ bool USBHostDriver::isDeviceHighSpeed() const {
 //=============================================================================
 
 void USBHostDriver::dumpDeviceInfo() {
-    logger.info("\n=== USB Device Descriptor Dump ===");
-    
+    LOG_INFO(LOG_COMMAND, "\n=== USB Device Descriptor Dump ===");
+
     if (!device) {
-        logger.info("No device connected!");
+        LOG_INFO(LOG_COMMAND, "No device connected!");
         return;
     }
-    
+
     // Device info
-    logger.infof("Device VID: 0x%04X PID: 0x%04X", device->idVendor, device->idProduct);
-    logger.infof("Device Class: 0x%02X", device->bDeviceClass);
-    
+    LOG_INFOF(LOG_COMMAND, "Device VID: 0x%04X PID: 0x%04X", device->idVendor, device->idProduct);
+    LOG_INFOF(LOG_COMMAND, "Device Class: 0x%02X", device->bDeviceClass);
+
     // Interface summary
-    logger.infof("\nTotal Interfaces: %d", interface_count);
-    
+    LOG_INFOF(LOG_COMMAND, "\nTotal Interfaces: %d", interface_count);
+
     // If we have stored configuration descriptor, parse it for display
     if (config_descriptor_valid && config_descriptor_len > 0) {
-        logger.info("\n[Using stored configuration descriptor]");
+        LOG_INFO(LOG_COMMAND, "\n[Using stored configuration descriptor]");
         displayStoredDescriptors();
     } else {
         // Fall back to basic interface info from our structures
-        logger.info("\n[No stored descriptors available - showing parsed data only]");
-        
+        LOG_INFO(LOG_COMMAND, "\n[No stored descriptors available - showing parsed data only]");
+
         // Dump each interface
         for (uint8_t i = 0; i < interface_count; i++) {
-            logger.infof("\n--- Interface %d ---", interfaces[i].interface_num);
-            
-            logger.infof("  Class: 0x%02X%s", interfaces[i].interface_class,
-                        interfaces[i].is_hid ? 
+            LOG_INFOF(LOG_COMMAND, "\n--- Interface %d ---", interfaces[i].interface_num);
+
+            LOG_INFOF(LOG_COMMAND, "  Class: 0x%02X%s", interfaces[i].interface_class,
+                        interfaces[i].is_hid ?
                         (interfaces[i].interface_protocol == 0 ? " (HID - None)" :
                          interfaces[i].interface_protocol == 1 ? " (HID - Keyboard)" :
                          interfaces[i].interface_protocol == 2 ? " (HID - Mouse)" : " (HID - Other)") : "");
-            
-            logger.infof("  Subclass: 0x%02X", interfaces[i].interface_subclass);
-            logger.infof("  Protocol: 0x%02X", interfaces[i].interface_protocol);
-            
+
+            LOG_INFOF(LOG_COMMAND, "  Subclass: 0x%02X", interfaces[i].interface_subclass);
+            LOG_INFOF(LOG_COMMAND, "  Protocol: 0x%02X", interfaces[i].interface_protocol);
+
             if (interfaces[i].is_hid && interfaces[i].hid_desc_length > 0) {
-                logger.infof("  HID Descriptor Length: %d bytes", interfaces[i].hid_desc_length);
+                LOG_INFOF(LOG_COMMAND, "  HID Descriptor Length: %d bytes", interfaces[i].hid_desc_length);
             }
-            
+
             if (interfaces[i].has_in_endpoint) {
-                logger.infof("  IN Endpoint: 0x%02X (%d bytes, interval %dms)",
+                LOG_INFOF(LOG_COMMAND, "  IN Endpoint: 0x%02X (%d bytes, interval %dms)",
                             interfaces[i].in_endpoint_addr | 0x80,
                             interfaces[i].in_endpoint_size,
                             interfaces[i].in_endpoint_interval);
             } else {
-                logger.info("  No IN endpoint");
+                LOG_INFO(LOG_COMMAND, "  No IN endpoint");
             }
         }
     }
-    
+
     // Current configuration
-    logger.info("\n--- Current Configuration ---");
+    LOG_INFO(LOG_COMMAND, "\n--- Current Configuration ---");
     if (in_endpoint_addr) {
-        logger.infof("Primary IN Endpoint: 0x%02X (%d bytes)",
+        LOG_INFOF(LOG_COMMAND, "Primary IN Endpoint: 0x%02X (%d bytes)",
                     in_endpoint_addr | 0x80, in_endpoint_size);
     } else {
-        logger.info("Primary IN Endpoint: None");
+        LOG_INFO(LOG_COMMAND, "Primary IN Endpoint: None");
     }
-    
+
     if (out_endpoint_addr) {
-        logger.infof("Primary OUT Endpoint: 0x%02X (%d bytes)",
+        LOG_INFOF(LOG_COMMAND, "Primary OUT Endpoint: 0x%02X (%d bytes)",
                     out_endpoint_addr, out_endpoint_size);
     } else {
-        logger.info("Primary OUT Endpoint: None");
+        LOG_INFO(LOG_COMMAND, "Primary OUT Endpoint: None");
     }
-    
-    logger.info("\n=================================");
+
+    LOG_INFO(LOG_COMMAND, "\n=================================");
 }
 
 void USBHostDriver::displayStoredDescriptors() {
     // First, display the reconstructed Configuration Descriptor header
-    logger.info("\n--- Configuration Descriptor (Reconstructed) ---");
-    logger.infof("  Total Length: %d bytes", config_descriptor_len + 9);
-    logger.infof("  Number of Interfaces: %d", config_num_interfaces);
-    logger.infof("  Configuration Value: %d", config_value);
-    logger.info("  Configuration String: 0");
-    logger.infof("  Attributes: 0x%02X (%s%s%s)",
+    LOG_INFO(LOG_COMMAND, "\n--- Configuration Descriptor (Reconstructed) ---");
+    LOG_INFOF(LOG_COMMAND, "  Total Length: %d bytes", config_descriptor_len + 9);
+    LOG_INFOF(LOG_COMMAND, "  Number of Interfaces: %d", config_num_interfaces);
+    LOG_INFOF(LOG_COMMAND, "  Configuration Value: %d", config_value);
+    LOG_INFO(LOG_COMMAND, "  Configuration String: 0");
+    LOG_INFOF(LOG_COMMAND, "  Attributes: 0x%02X (%s%s%s)",
                 config_attributes,
                 (config_attributes & 0x80) ? "Bus Powered " : "",
                 (config_attributes & 0x40) ? "Self Powered " : "",
                 (config_attributes & 0x20) ? "Remote Wakeup " : "");
-    logger.infof("  Max Power: %d mA", config_max_power * 2);
-    
+    LOG_INFOF(LOG_COMMAND, "  Max Power: %d mA", config_max_power * 2);
+
     // Now parse the stored interface and endpoint descriptors
     const uint8_t* p = config_descriptor;
     const uint8_t* end = config_descriptor + config_descriptor_len;
     uint8_t current_interface = 0xFF;
-    
+
     while (p < end) {
         uint8_t desc_len = p[0];
         uint8_t desc_type = p[1];
-        
+
         if (p + desc_len > end) break;
-        
+
         // Interface descriptor
         if (desc_type == 0x04 && desc_len >= 9) {
             current_interface = p[2];
-            logger.infof("\n--- Interface %d ---", current_interface);
-            logger.infof("  Alternate Setting: %d", p[3]);
-            logger.infof("  Number of Endpoints: %d", p[4]);
-            logger.infof("  Class: 0x%02X%s", p[5],
-                        p[5] == 0x03 ? 
+            LOG_INFOF(LOG_COMMAND, "\n--- Interface %d ---", current_interface);
+            LOG_INFOF(LOG_COMMAND, "  Alternate Setting: %d", p[3]);
+            LOG_INFOF(LOG_COMMAND, "  Number of Endpoints: %d", p[4]);
+            LOG_INFOF(LOG_COMMAND, "  Class: 0x%02X%s", p[5],
+                        p[5] == 0x03 ?
                         (p[7] == 0 ? " (HID - None)" :
                          p[7] == 1 ? " (HID - Keyboard)" :
                          p[7] == 2 ? " (HID - Mouse)" : " (HID - Other)") : "");
-            logger.infof("  Subclass: 0x%02X", p[6]);
-            logger.infof("  Protocol: 0x%02X", p[7]);
-            logger.infof("  Interface String: %d", p[8]);
+            LOG_INFOF(LOG_COMMAND, "  Subclass: 0x%02X", p[6]);
+            LOG_INFOF(LOG_COMMAND, "  Protocol: 0x%02X", p[7]);
+            LOG_INFOF(LOG_COMMAND, "  Interface String: %d", p[8]);
         }
-        
+
         // HID class descriptor
         else if (desc_type == 0x21 && desc_len >= 9) {
-            logger.info("  HID Class Descriptor:");
-            logger.infof("    HID Version: %d.%d", p[3], p[2]);
-            logger.infof("    Country Code: %d", p[4]);
-            logger.infof("    Number of Descriptors: %d", p[5]);
-            
+            LOG_INFO(LOG_COMMAND, "  HID Class Descriptor:");
+            LOG_INFOF(LOG_COMMAND, "    HID Version: %d.%d", p[3], p[2]);
+            LOG_INFOF(LOG_COMMAND, "    Country Code: %d", p[4]);
+            LOG_INFOF(LOG_COMMAND, "    Number of Descriptors: %d", p[5]);
+
             // Parse descriptor info
             for (uint8_t i = 0; i < p[5] && (6 + i*3 + 2) < desc_len; i++) {
                 uint8_t dtype = p[6 + i*3];
                 uint16_t dlen = p[7 + i*3] | (p[8 + i*3] << 8);
-                logger.infof("    Descriptor %d: Type=0x%02X%s, Length=%d bytes",
+                LOG_INFOF(LOG_COMMAND, "    Descriptor %d: Type=0x%02X%s, Length=%d bytes",
                             i, dtype,
                             dtype == 0x22 ? " (Report)" : dtype == 0x23 ? " (Physical)" : "",
                             dlen);
             }
         }
-        
+
         // Endpoint descriptor
         else if (desc_type == 0x05 && desc_len >= 7) {
-            logger.infof("  Endpoint 0x%02X (%s):",
+            LOG_INFOF(LOG_COMMAND, "  Endpoint 0x%02X (%s):",
                         p[2], (p[2] & 0x80) ? "IN" : "OUT");
-            
+
             const char* ep_type = "";
             switch (p[3] & 0x03) {
                 case 0: ep_type = "Control"; break;
@@ -1099,74 +1103,76 @@ void USBHostDriver::displayStoredDescriptors() {
                 case 2: ep_type = "Bulk"; break;
                 case 3: ep_type = "Interrupt"; break;
             }
-            logger.infof("    Attributes: 0x%02X (%s)", p[3], ep_type);
-            logger.infof("    Max Packet Size: %d bytes", p[4] | (p[5] << 8));
-            logger.infof("    Interval: %d ms", p[6]);
+            LOG_INFOF(LOG_COMMAND, "    Attributes: 0x%02X (%s)", p[3], ep_type);
+            LOG_INFOF(LOG_COMMAND, "    Max Packet Size: %d bytes", p[4] | (p[5] << 8));
+            LOG_INFOF(LOG_COMMAND, "    Interval: %d ms", p[6]);
         }
-        
+
         // Unknown descriptor
         else {
-            logger.infof("\n  Unknown Descriptor Type 0x%02X, Length=%d", desc_type, desc_len);
+            LOG_INFOF(LOG_COMMAND, "\n  Unknown Descriptor Type 0x%02X, Length=%d", desc_type, desc_len);
         }
-        
+
         p += desc_len;
     }
-    
+
     // Display raw hex dump at the end
-    logger.info("\n--- Raw Configuration Descriptor Hex Dump ---");
-    logger.info("  [Reconstructed header + stored descriptors]");
-    
-    // First show the reconstructed configuration descriptor header
-    String headerStr = "  000: 09 02 ";
-    uint16_t total_len = config_descriptor_len + 9;
-    if ((total_len & 0xFF) < 0x10) headerStr += "0";
-    headerStr += String(total_len & 0xFF, HEX) + " ";
-    if (((total_len >> 8) & 0xFF) < 0x10) headerStr += "0";
-    headerStr += String((total_len >> 8) & 0xFF, HEX) + " ";
-    if (config_num_interfaces < 0x10) headerStr += "0";
-    headerStr += String(config_num_interfaces, HEX) + " ";
-    if (config_value < 0x10) headerStr += "0";
-    headerStr += String(config_value, HEX) + " 00 ";  // Config string index
-    headerStr += String(config_attributes, HEX) + " ";
-    headerStr += String(config_max_power, HEX);
-    headerStr += "                  [Config Header]";
-    logger.info(headerStr.c_str());
-    
-    // Then show the stored descriptors
-    for (uint16_t i = 0; i < config_descriptor_len; i += 16) {
-        String lineStr = "  ";
-        uint16_t addr = i + 9;  // Account for header
-        if (addr < 0x10) lineStr += "0";
-        if (addr < 0x100) lineStr += "0";
-        lineStr += String(addr, HEX) + ": ";
-        
-        // Hex bytes
-        for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
-            if (config_descriptor[i + j] < 0x10) lineStr += "0";
-            lineStr += String(config_descriptor[i + j], HEX) + " ";
-        }
-        
-        // Padding if last line
-        if (config_descriptor_len - i < 16) {
-            for (uint16_t j = config_descriptor_len - i; j < 16; j++) {
-                lineStr += "   ";
+    LOG_INFO(LOG_COMMAND, "\n--- Raw Configuration Descriptor Hex Dump ---");
+    LOG_INFO(LOG_COMMAND, "  [Reconstructed header + stored descriptors]");
+
+    if (logger.isChannelEnabled(LOG_COMMAND)) {
+        // First show the reconstructed configuration descriptor header
+        String headerStr = "  000: 09 02 ";
+        uint16_t total_len = config_descriptor_len + 9;
+        if ((total_len & 0xFF) < 0x10) headerStr += "0";
+        headerStr += String(total_len & 0xFF, HEX) + " ";
+        if (((total_len >> 8) & 0xFF) < 0x10) headerStr += "0";
+        headerStr += String((total_len >> 8) & 0xFF, HEX) + " ";
+        if (config_num_interfaces < 0x10) headerStr += "0";
+        headerStr += String(config_num_interfaces, HEX) + " ";
+        if (config_value < 0x10) headerStr += "0";
+        headerStr += String(config_value, HEX) + " 00 ";  // Config string index
+        headerStr += String(config_attributes, HEX) + " ";
+        headerStr += String(config_max_power, HEX);
+        headerStr += "                  [Config Header]";
+        logger.info(headerStr.c_str());
+
+        // Then show the stored descriptors
+        for (uint16_t i = 0; i < config_descriptor_len; i += 16) {
+            String lineStr = "  ";
+            uint16_t addr = i + 9;  // Account for header
+            if (addr < 0x10) lineStr += "0";
+            if (addr < 0x100) lineStr += "0";
+            lineStr += String(addr, HEX) + ": ";
+
+            // Hex bytes
+            for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
+                if (config_descriptor[i + j] < 0x10) lineStr += "0";
+                lineStr += String(config_descriptor[i + j], HEX) + " ";
             }
-        }
-        
-        lineStr += " ";
-        
-        // ASCII representation
-        for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
-            char c = config_descriptor[i + j];
-            if (c >= ' ' && c <= '~') {
-                lineStr += c;
-            } else {
-                lineStr += ".";
+
+            // Padding if last line
+            if (config_descriptor_len - i < 16) {
+                for (uint16_t j = config_descriptor_len - i; j < 16; j++) {
+                    lineStr += "   ";
+                }
             }
+
+            lineStr += " ";
+
+            // ASCII representation
+            for (uint16_t j = 0; j < 16 && (i + j) < config_descriptor_len; j++) {
+                char c = config_descriptor[i + j];
+                if (c >= ' ' && c <= '~') {
+                    lineStr += c;
+                } else {
+                    lineStr += ".";
+                }
+            }
+
+            logger.info(lineStr.c_str());
         }
-        
-        logger.info(lineStr.c_str());
+
+        logger.infof("Total bytes: %d (9 header + %d descriptors)", total_len, config_descriptor_len);
     }
-    
-    logger.infof("Total bytes: %d (9 header + %d descriptors)", total_len, config_descriptor_len);
 }
