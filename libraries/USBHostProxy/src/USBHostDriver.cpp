@@ -1,5 +1,6 @@
 // USBHostDriver.cpp
 #include "USBHostDriver.h"
+#include "USBDeviceProxy.h"
 #include "SunBoxEEPROM.h"
 #include "SunBoxStartup.h"
 #include "SunBoxLogger.h"
@@ -18,8 +19,9 @@ USBHostDriver::USBHostDriver(USBHost& host)
       in_endpoint_addr(0), out_endpoint_addr(0), in_endpoint_size(0),
       out_endpoint_size(0), in_endpoint_interval(1), out_endpoint_interval(1),
       last_rx_length(0), new_data_available(false),
-      data_callback(nullptr), data_transfers_paused(false), 
-      pending_in_transfer(false) {  // Added new member
+      data_callback(nullptr), data_transfers_paused(false),
+      pending_in_transfer(false),
+      deviceProxy(nullptr) {
     
     // Initialize buffers
     memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -194,7 +196,7 @@ void USBHostDriver::disconnect() {
     config_value = 1;
     config_attributes = 0xA0;
     config_max_power = 0x31;
-    
+
     // Clear endpoint info
     in_endpoint_addr = 0;
     out_endpoint_addr = 0;
@@ -202,7 +204,12 @@ void USBHostDriver::disconnect() {
     out_endpoint_size = 0;
     in_endpoint_interval = 1;
     out_endpoint_interval = 1;
-    
+
+    // Invalidate descriptor cache on device disconnect
+    if (deviceProxy) {
+        deviceProxy->invalidateDescriptorCache();
+    }
+
     logger.warning("Device Disconnect detected, may cause instability..");
 }
 
@@ -381,8 +388,6 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     //             bmRequestType, bRequest, wValue, wIndex, wLength);
     
     // Log timestamp for timing analysis
-    uint32_t start_time = millis();
-    // logger.debugf("Control transfer starting at %lu ms", start_time);
     
     // // Log raw setup packet bytes - commented out for production
     // uint8_t setup_bytes[8];
@@ -459,8 +464,6 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
         yield();
     }
     
-    uint32_t duration = millis() - start_time;
-    // logger.debugf("Control transfer wait completed after %lu ms", duration);
     
     // Check completion status
     if (!control_complete) {

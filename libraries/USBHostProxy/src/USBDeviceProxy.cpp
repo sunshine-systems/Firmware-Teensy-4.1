@@ -59,6 +59,10 @@ USBDeviceProxy::USBDeviceProxy() :
     memset(setup_data_buffer, 0, sizeof(setup_data_buffer));
     memset(endpoints, 0, sizeof(endpoints));
     memset(endpoint_ready, 0, sizeof(endpoint_ready));
+
+    // Initialize descriptor cache
+    memset(&desc_cache, 0, sizeof(desc_cache));
+    desc_cache.invalidate();
 }
 
 // Get the actual device speed from host driver
@@ -429,6 +433,19 @@ void USBDeviceProxy::handleUSBReset() {
     if (control_stage != CONTROL_IDLE) {
         control_stage = CONTROL_IDLE;
     }
+
+    // Invalidate descriptor cache on bus reset ONLY if device identity changed
+    if (hostDriver) {
+        uint16_t vid = hostDriver->getVendorID();
+        uint16_t pid = hostDriver->getProductID();
+        if (!desc_cache.identity_valid ||
+            desc_cache.cached_vid != vid ||
+            desc_cache.cached_pid != pid) {
+            desc_cache.invalidate();
+        } else {
+            // Cache retained — same device on bus reset
+        }
+    }
 }
 
 // Handle port change
@@ -619,6 +636,108 @@ void USBDeviceProxy::handleSetAddress() {
     device_state = STATE_ADDRESS;
 }
 
+// =============================================================================
+// Descriptor Cache Implementation
+// =============================================================================
+
+void USBDeviceProxy::invalidateDescriptorCache() {
+    desc_cache.invalidate();
+}
+
+// Check if this is a cacheable GET_DESCRIPTOR and try to serve from cache.
+// Returns true if the response was served from cache (caller should return).
+bool USBDeviceProxy::tryServeCachedDescriptor() {
+    // Only cache standard GET_DESCRIPTOR: bmRequestType == 0x80, bRequest == 0x06
+    if (pending_setup.bmRequestType != 0x80 || pending_setup.bRequest != 0x06) {
+        return false;
+    }
+
+    uint8_t desc_type  = (pending_setup.wValue >> 8) & 0xFF;
+    uint8_t desc_index = pending_setup.wValue & 0xFF;
+
+    // Only cache device(0x01), config(0x02), string(0x03), BOS(0x0F)
+    if (desc_type != 0x01 && desc_type != 0x02 &&
+        desc_type != 0x03 && desc_type != 0x0F) {
+        return false;
+    }
+
+    // Validate device identity before serving cached data
+    if (desc_cache.identity_valid && hostDriver) {
+        uint16_t vid = hostDriver->getVendorID();
+        uint16_t pid = hostDriver->getProductID();
+        if (vid != desc_cache.cached_vid || pid != desc_cache.cached_pid) {
+            desc_cache.invalidate();
+            return false;
+        }
+    }
+
+    uint16_t cached_len = 0;
+    const uint8_t* cached_data = desc_cache.lookup(desc_type, desc_index,
+                                                    pending_setup.wIndex, &cached_len);
+    if (!cached_data || cached_len == 0) {
+        return false;
+    }
+
+    // Cache HIT — serve min(cached_length, wLength)
+    uint16_t serve_len = (cached_len < pending_setup.wLength) ? cached_len : pending_setup.wLength;
+
+    // Copy cached data into proxy_descriptor_buffer so sendData() can DMA it
+    memcpy(proxy_descriptor_buffer, cached_data, serve_len);
+
+    setup_data_len = serve_len;
+    sendData(proxy_descriptor_buffer, serve_len);
+    control_stage = CONTROL_DATA_IN;
+    return true;
+}
+
+// Store a descriptor response in cache after successful fetch.
+// Applies the config/BOS two-phase rule: only cache full fetches.
+void USBDeviceProxy::storeDescriptorInCache(uint8_t desc_type, uint8_t desc_index,
+                                             uint16_t wIndex, const uint8_t* data,
+                                             uint16_t len) {
+    if (len == 0) return;
+
+    // Update device identity if we have a host driver
+    if (hostDriver && !desc_cache.identity_valid) {
+        desc_cache.cached_vid = hostDriver->getVendorID();
+        desc_cache.cached_pid = hostDriver->getProductID();
+        desc_cache.identity_valid = true;
+    }
+
+    switch (desc_type) {
+        case 0x01: // Device descriptor — always cache
+            desc_cache.store(desc_type, desc_index, wIndex, data, len);
+            break;
+
+        case 0x02: { // Configuration descriptor — only cache full fetch
+            if (len >= 4) {
+                uint16_t wTotalLength = data[2] | (data[3] << 8);
+                if (len >= wTotalLength) {
+                    desc_cache.store(desc_type, desc_index, wIndex, data, len);
+                }
+            }
+            break;
+        }
+
+        case 0x03: // String descriptor — always cache
+            desc_cache.store(desc_type, desc_index, wIndex, data, len);
+            break;
+
+        case 0x0F: { // BOS descriptor — only cache full fetch
+            if (len >= 4) {
+                uint16_t wTotalLength = data[2] | (data[3] << 8);
+                if (len >= wTotalLength) {
+                    desc_cache.store(desc_type, desc_index, wIndex, data, len);
+                }
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+}
+
 // Process control transfer state machine
 void USBDeviceProxy::processControlTransfer() {
     if (control_stage == CONTROL_IDLE) {
@@ -696,15 +815,11 @@ void USBDeviceProxy::processControlTransfer() {
     
     if (pending_setup.bmRequestType & 0x80) {
         // Device-to-host (IN) transfer
-        // logger.debug("Forwarding IN request to mouse...");
-        // logger.debugf("Request type: 0x%02X (Class: %s, Recipient: %s)",
-        //               pending_setup.bmRequestType,
-        //               ((pending_setup.bmRequestType & 0x60) == 0x20) ? "Class" : "Standard",
-        //               (pending_setup.bmRequestType & 0x1F) == 0 ? "Device" : 
-        //               (pending_setup.bmRequestType & 0x1F) == 1 ? "Interface" : "Other");
-        
-        // String descriptor delay removed - was adding ~30-40ms to enumeration
-        // Original: delay(10) per string descriptor request
+
+        // --- Descriptor cache lookup (before hitting the real device) ---
+        if (tryServeCachedDescriptor()) {
+            return;  // Served from cache, no round-trip needed
+        }
 
         success = hostDriver->controlTransfer(
             pending_setup.bmRequestType,
@@ -719,7 +834,7 @@ void USBDeviceProxy::processControlTransfer() {
 
         if (success && actual_len > 0) {
             logger.debugf("Got %d bytes from mouse", actual_len);
-            
+
             // Debug: print first few bytes
             String dataStr = "Data: ";
             for (int i = 0; i < 8 && i < actual_len; i++) {
@@ -729,8 +844,9 @@ void USBDeviceProxy::processControlTransfer() {
             }
             dataStr += "...";
             logger.debug(dataStr.c_str());
-            
+
             // CRITICAL FIX: For string descriptors, send ONLY the actual descriptor length
+            // This trimming MUST happen BEFORE caching so the cached value is correct.
             uint8_t desc_type = (pending_setup.wValue >> 8) & 0xFF;
             if (pending_setup.bRequest == 0x06 && desc_type == 0x03) {
                 // String descriptor - first byte contains the actual length
@@ -739,14 +855,23 @@ void USBDeviceProxy::processControlTransfer() {
                     logger.debugf("String descriptor actual length: %d", actual_len);
                 }
             }
-            
+
+            // --- Store in descriptor cache (after trimming, before sending) ---
+            if (pending_setup.bRequest == 0x06 && pending_setup.bmRequestType == 0x80) {
+                uint8_t cache_desc_type  = (pending_setup.wValue >> 8) & 0xFF;
+                uint8_t cache_desc_index = pending_setup.wValue & 0xFF;
+                storeDescriptorInCache(cache_desc_type, cache_desc_index,
+                                       pending_setup.wIndex,
+                                       proxy_descriptor_buffer, actual_len);
+            }
+
             // Special handling for HID GET_REPORT responses
             if (pending_setup.bmRequestType == 0xA1 && pending_setup.bRequest == 0x01) {
                 logger.debug("Processing HID GET_REPORT response");
                 // First byte in proxy_descriptor_buffer might need to be preserved
                 // This is device-specific handling if needed
             }
-            
+
             // Send data to host
             setup_data_len = actual_len;
             sendData(proxy_descriptor_buffer, actual_len);
@@ -761,7 +886,7 @@ void USBDeviceProxy::processControlTransfer() {
             logger.debugf("Sending STALL to host (ENDPTCTRL0 = 0x00010001)");
             USB1_ENDPTCTRL0 = 0x00010001;
             control_stage = CONTROL_IDLE;
-            
+
             // Log more details about the failed request
             logger.debugf("Failed request was: Type=0x%02X Req=0x%02X Val=0x%04X Idx=0x%04X Len=%d",
                          pending_setup.bmRequestType, pending_setup.bRequest,

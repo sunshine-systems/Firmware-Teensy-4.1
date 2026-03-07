@@ -172,8 +172,9 @@ void loop() {
         // Configure the proxy to match (Low Speed devices run at Full Speed)
         usbDeviceProxy.setDeviceSpeed(proxy_high_speed);
         
-        // Set the USB Host Driver reference
+        // Set the USB Host Driver reference (bidirectional for descriptor cache invalidation)
         usbDeviceProxy.setUSBHostDriver(&usbHostDriver);
+        usbHostDriver.setDeviceProxy(&usbDeviceProxy);
         
         // Start the device proxy
         usbDeviceProxy.begin();

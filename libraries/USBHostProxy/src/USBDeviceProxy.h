@@ -47,30 +47,194 @@ typedef struct {
     uint16_t wLength;
 } setup_packet_t;
 
+// =========================================================================
+// Descriptor Cache — eliminates redundant control transfers during enum
+// =========================================================================
+#define DESC_CACHE_MAX_STRING_ENTRIES  10
+#define DESC_CACHE_MAX_STRING_LEN     256
+#define DESC_CACHE_MAX_CONFIG_LEN     512
+#define DESC_CACHE_MAX_BOS_LEN        512
+#define DESC_CACHE_DEVICE_DESC_LEN    18
+
+struct DescriptorCacheEntry {
+    uint8_t  data[DESC_CACHE_MAX_CONFIG_LEN]; // reused for config/BOS (512 max)
+    uint16_t length;
+    bool     valid;
+};
+
+struct StringCacheEntry {
+    uint8_t  data[DESC_CACHE_MAX_STRING_LEN];
+    uint16_t length;
+    uint8_t  index;    // string descriptor index
+    uint16_t langID;   // wIndex (language ID)
+    bool     valid;
+};
+
+struct DescriptorCache {
+    // Device descriptor (type 0x01) — exactly 18 bytes
+    uint8_t  device_desc[DESC_CACHE_DEVICE_DESC_LEN];
+    uint16_t device_desc_len;
+    bool     device_desc_valid;
+
+    // Configuration descriptor (type 0x02) — full blob up to 512 bytes
+    DescriptorCacheEntry config_desc;
+
+    // BOS descriptor (type 0x0F) — up to 512 bytes
+    DescriptorCacheEntry bos_desc;
+
+    // String descriptors (type 0x03) — keyed by (index, langID)
+    StringCacheEntry string_descs[DESC_CACHE_MAX_STRING_ENTRIES];
+
+    // Identity of the cached device (for invalidation on device change)
+    uint16_t cached_vid;
+    uint16_t cached_pid;
+    bool     identity_valid;
+
+    // Invalidate the entire cache
+    void invalidate() {
+        device_desc_valid = false;
+        device_desc_len = 0;
+        config_desc.valid = false;
+        config_desc.length = 0;
+        bos_desc.valid = false;
+        bos_desc.length = 0;
+        for (uint8_t i = 0; i < DESC_CACHE_MAX_STRING_ENTRIES; i++) {
+            string_descs[i].valid = false;
+        }
+        identity_valid = false;
+        cached_vid = 0;
+        cached_pid = 0;
+    }
+
+    // Look up a cached descriptor.
+    // Returns pointer to cached data and sets out_len, or nullptr on miss.
+    const uint8_t* lookup(uint8_t desc_type, uint8_t desc_index,
+                          uint16_t wIndex, uint16_t* out_len) const {
+        switch (desc_type) {
+            case 0x01: // Device descriptor
+                if (device_desc_valid) {
+                    *out_len = device_desc_len;
+                    return device_desc;
+                }
+                return nullptr;
+
+            case 0x02: // Configuration descriptor
+                if (config_desc.valid) {
+                    *out_len = config_desc.length;
+                    return config_desc.data;
+                }
+                return nullptr;
+
+            case 0x03: // String descriptor — keyed by (index, langID)
+                for (uint8_t i = 0; i < DESC_CACHE_MAX_STRING_ENTRIES; i++) {
+                    if (string_descs[i].valid &&
+                        string_descs[i].index == desc_index &&
+                        string_descs[i].langID == wIndex) {
+                        *out_len = string_descs[i].length;
+                        return string_descs[i].data;
+                    }
+                }
+                return nullptr;
+
+            case 0x0F: // BOS descriptor
+                if (bos_desc.valid) {
+                    *out_len = bos_desc.length;
+                    return bos_desc.data;
+                }
+                return nullptr;
+
+            default:
+                return nullptr;
+        }
+    }
+
+    // Store a descriptor in the cache after a successful fetch.
+    // For config/BOS: caller must verify full fetch before calling.
+    void store(uint8_t desc_type, uint8_t desc_index,
+               uint16_t wIndex, const uint8_t* data, uint16_t len) {
+        switch (desc_type) {
+            case 0x01: // Device descriptor
+                if (len > 0 && len <= DESC_CACHE_DEVICE_DESC_LEN) {
+                    memcpy(device_desc, data, len);
+                    device_desc_len = len;
+                    device_desc_valid = true;
+                }
+                break;
+
+            case 0x02: // Configuration descriptor
+                if (len > 0 && len <= DESC_CACHE_MAX_CONFIG_LEN) {
+                    memcpy(config_desc.data, data, len);
+                    config_desc.length = len;
+                    config_desc.valid = true;
+                }
+                break;
+
+            case 0x03: // String descriptor
+                if (len > 0 && len <= DESC_CACHE_MAX_STRING_LEN) {
+                    // Find an existing slot or a free slot
+                    int8_t free_slot = -1;
+                    for (uint8_t i = 0; i < DESC_CACHE_MAX_STRING_ENTRIES; i++) {
+                        if (string_descs[i].valid &&
+                            string_descs[i].index == desc_index &&
+                            string_descs[i].langID == wIndex) {
+                            // Update existing entry
+                            memcpy(string_descs[i].data, data, len);
+                            string_descs[i].length = len;
+                            return;
+                        }
+                        if (!string_descs[i].valid && free_slot < 0) {
+                            free_slot = i;
+                        }
+                    }
+                    if (free_slot >= 0) {
+                        memcpy(string_descs[free_slot].data, data, len);
+                        string_descs[free_slot].length = len;
+                        string_descs[free_slot].index = desc_index;
+                        string_descs[free_slot].langID = wIndex;
+                        string_descs[free_slot].valid = true;
+                    }
+                    // If no free slot, silently drop (cache is full)
+                }
+                break;
+
+            case 0x0F: // BOS descriptor
+                if (len > 0 && len <= DESC_CACHE_MAX_BOS_LEN) {
+                    memcpy(bos_desc.data, data, len);
+                    bos_desc.length = len;
+                    bos_desc.valid = true;
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+};
+
 class USBDeviceProxy {
 public:
     USBDeviceProxy();
-    
+
     // Initialize USB hardware (no interrupts!)
     void begin();
-    
+
     // Set the USB Host Driver reference
     void setUSBHostDriver(USBHostDriver* driver) { hostDriver = driver; }
-    
+
     // Set device speed configuration (must be called before begin())
     void setDeviceSpeed(bool high_speed) { device_high_speed = high_speed; }
-    
+
     // Get the actual device speed from host driver
     uint8_t getActualDeviceSpeed() const;
-    
+
     // Main polling function - MUST be called frequently from loop()
     // Target: >16kHz for 8kHz devices
     void poll();
-    
+
     // Check connection status
     bool isConnected() const { return device_state >= STATE_DEFAULT; }
     bool isConfigured() const { return device_state == STATE_CONFIGURED; }
-    
+
     // Get current state (for debugging)
     const char* getStateString() const {
         switch (device_state) {
@@ -83,14 +247,17 @@ public:
             default: return "UNKNOWN";
         }
     }
-    
+
     // Get polling statistics
     uint32_t getPollCount() const { return poll_count; }
-    
+
     // Data endpoint methods
     void sendDataOnEndpoint(uint8_t ep_num, const uint8_t* data, uint32_t length);
     bool isEndpointReady(uint8_t ep_num);
-    
+
+    // Descriptor cache invalidation (called by USBHostDriver on disconnect)
+    void invalidateDescriptorCache();
+
 private:
     // USB Device states (USB 2.0 spec chapter 9)
     enum DeviceState {
@@ -165,7 +332,16 @@ private:
     
     // Device speed configuration
     bool device_high_speed;  // true = 480 Mbps, false = 12 Mbps
-    
+
+    // Descriptor cache — eliminates redundant control transfers during enum
+    DescriptorCache desc_cache;
+
+    // Descriptor cache helpers
+    bool tryServeCachedDescriptor();  // Returns true if served from cache
+    void storeDescriptorInCache(uint8_t desc_type, uint8_t desc_index,
+                                uint16_t wIndex, const uint8_t* data,
+                                uint16_t len);
+
     // Initialization functions
     bool initializePHY();
     bool initializeController();

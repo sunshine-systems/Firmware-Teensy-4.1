@@ -17,6 +17,9 @@
 // Data callback function type
 typedef void (*data_callback_t)(const uint8_t* data, uint32_t length);
 
+// Forward declaration for descriptor cache invalidation
+class USBDeviceProxy;
+
 class USBHostDriver : public USBDriver {
 public:
     USBHostDriver(USBHost& host);
@@ -25,6 +28,9 @@ public:
     // Startup and status
     bool begin();
     bool isReady() const { return device_ready; }
+
+    // Set the USBDeviceProxy reference (for descriptor cache invalidation on disconnect)
+    void setDeviceProxy(USBDeviceProxy* proxy) { deviceProxy = proxy; }
     
     // Device information
     uint16_t getVendorID() const { return device ? device->idVendor : 0; }
@@ -164,6 +170,9 @@ private:
     // Transfer control
     volatile bool data_transfers_paused;
     volatile bool pending_in_transfer;  // Track if an interrupt transfer is pending
+
+    // USBDeviceProxy reference (for descriptor cache invalidation)
+    USBDeviceProxy* deviceProxy;
 };
 
 #endif // _USBHOSTDRIVER_H_
