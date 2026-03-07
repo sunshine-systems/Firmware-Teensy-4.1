@@ -7,7 +7,7 @@
 // Set to 0 to completely strip all logging from the binary
 // Set to 1 to enable logging with runtime channel control
 #ifndef SUNBOX_LOGGING
-#define SUNBOX_LOGGING 1
+#define SUNBOX_LOGGING 0
 #endif
 
 // Log channel bitmask values - always available so code can reference
