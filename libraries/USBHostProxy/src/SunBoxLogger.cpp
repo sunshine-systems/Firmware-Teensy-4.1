@@ -1,11 +1,8 @@
 #include "SunBoxLogger.h"
+#include "SunBoxStartup.h"
 
 // Global logger instance
 SunBoxLogger logger;
-
-#if SUNBOX_LOGGING
-
-#include "SunBoxStartup.h"
 
 SunBoxLogger::SunBoxLogger() : output_(nullptr), initialized_(false), channelMask_(LOG_ERROR) {
 }
@@ -104,7 +101,8 @@ bool SunBoxLogger::isDebugEnabled() const {
     return SunBoxStartup::isDebugEnabled();
 }
 
-// --- Log channel methods ---
+// --- Log channel methods (only when SUNBOX_LOGGING is enabled) ---
+#if SUNBOX_LOGGING
 
 void SunBoxLogger::setChannelMask(uint8_t mask) {
     // LOG_ERROR is always on, ensure it cannot be removed
@@ -130,6 +128,8 @@ bool SunBoxLogger::isChannelEnabled(LogChannel ch) {
     if (ch == LOG_ERROR) return true;
     return (channelMask_ & ch) != 0;
 }
+
+#endif // SUNBOX_LOGGING
 
 // Printf-style formatting functions
 
@@ -192,5 +192,3 @@ void SunBoxLogger::printfWithPrefix(const char* prefix, const char* format, va_l
     output_->print(prefix);
     output_->println(formatBuffer_);
 }
-
-#endif // SUNBOX_LOGGING

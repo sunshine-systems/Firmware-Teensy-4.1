@@ -577,12 +577,13 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
     // Handle HID Class SET_REPORT request specially
     if (pending_setup.bmRequestType == 0x21 && pending_setup.bRequest == 0x09) {
         // This is a SET_REPORT request (Host->Device, Class, Interface)
+#if SUNBOX_LOGGING
         uint16_t report_type = (pending_setup.wValue >> 8);
         uint16_t report_id = (pending_setup.wValue & 0xFF);
         uint16_t interface = pending_setup.wIndex;
-        
         LOG_DEBUGF(LOG_ENUM, "SET_REPORT for interface %d, type=%d, ID=%d, length=%d",
                       interface, report_type, report_id, pending_setup.wLength);
+#endif
         
         // Store setup packet for later forwarding
         memcpy(&pending_setup_saved, &pending_setup, sizeof(setup_packet_t));
@@ -604,8 +605,10 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
     // Handle GET_DESCRIPTOR for strings specially to ensure proper forwarding
     if (pending_setup.bmRequestType == 0x80 && pending_setup.bRequest == 0x06) {
         uint8_t desc_type = (pending_setup.wValue >> 8) & 0xFF;
+#if SUNBOX_LOGGING
         uint8_t desc_index = pending_setup.wValue & 0xFF;
-        
+#endif
+
         if (desc_type == 0x03) { // String descriptor
             LOG_DEBUGF(LOG_ENUM, "GET_STRING_DESCRIPTOR index=%d langID=0x%04X", desc_index, pending_setup.wIndex);
             

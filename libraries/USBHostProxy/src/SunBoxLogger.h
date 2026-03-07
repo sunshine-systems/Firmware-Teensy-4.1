@@ -4,8 +4,10 @@
 #include <Arduino.h>
 #include <stdarg.h>
 
-// Set to 0 to completely strip all logging from the binary
-// Set to 1 to enable logging with runtime channel control
+// Set to 0 to strip library (src/) logging via LOG_* macros at compile time
+// Set to 1 to enable library logging with runtime channel control
+// NOTE: This only affects LOG_* macros used in src/ files. Direct logger.*()
+// calls (used by example/runtime code) always work regardless of this setting.
 #ifndef SUNBOX_LOGGING
 #define SUNBOX_LOGGING 0
 #endif
@@ -22,8 +24,8 @@ enum LogChannel : uint8_t {
     LOG_ERROR   = 0x40,  // Always on, cannot be disabled
 };
 
-#if SUNBOX_LOGGING
-
+// --- Core SunBoxLogger class ---
+// Always compiled so example/runtime code can use logger.info(), logger.mousef(), etc.
 class SunBoxLogger {
 public:
     SunBoxLogger();
@@ -58,7 +60,8 @@ public:
     void debugf(const char* format, ...);
     void mousef(const char* format, ...);
 
-    // --- Log channel system ---
+#if SUNBOX_LOGGING
+    // --- Log channel system (only when library logging is enabled) ---
 
     // Channel mask management
     void setChannelMask(uint8_t mask);
@@ -72,6 +75,19 @@ public:
     inline void infoCh(LogChannel ch, const char* msg) { if (isChannelEnabled(ch)) info(msg); }
     inline void warningCh(LogChannel ch, const char* msg) { if (isChannelEnabled(ch)) warning(msg); }
     inline void startupCh(LogChannel ch, const char* msg) { if (isChannelEnabled(ch)) startup(msg); }
+#else
+    // Stripped channel methods - no-ops
+    void setChannelMask(uint8_t mask) { (void)mask; }
+    uint8_t getChannelMask() { return 0; }
+    void enableChannel(LogChannel ch) { (void)ch; }
+    void disableChannel(LogChannel ch) { (void)ch; }
+    bool isChannelEnabled(LogChannel ch) { (void)ch; return false; }
+
+    inline void debugCh(LogChannel ch, const char* msg) { (void)ch; (void)msg; }
+    inline void infoCh(LogChannel ch, const char* msg) { (void)ch; (void)msg; }
+    inline void warningCh(LogChannel ch, const char* msg) { (void)ch; (void)msg; }
+    inline void startupCh(LogChannel ch, const char* msg) { (void)ch; (void)msg; }
+#endif
 
 private:
     Stream* output_;
@@ -91,7 +107,8 @@ private:
 // Global logger instance
 extern SunBoxLogger logger;
 
-// --- Channel-gated logging macros ---
+#if SUNBOX_LOGGING
+// --- Channel-gated logging macros (used by src/ library files) ---
 // These check the channel BEFORE any string formatting occurs,
 // avoiding va_list forwarding issues with the *f() variants.
 #define LOG_DEBUG(ch, msg)         do { if (logger.isChannelEnabled(ch)) logger.debug(msg); } while(0)
@@ -104,49 +121,8 @@ extern SunBoxLogger logger;
 #define LOG_STARTUPF(ch, fmt, ...) do { if (logger.isChannelEnabled(ch)) logger.startupf(fmt, ##__VA_ARGS__); } while(0)
 #define LOG_MOUSE(ch, msg)         do { if (logger.isChannelEnabled(ch)) logger.mouse(msg); } while(0)
 #define LOG_MOUSEF(ch, fmt, ...)   do { if (logger.isChannelEnabled(ch)) logger.mousef(fmt, ##__VA_ARGS__); } while(0)
-
-#else // SUNBOX_LOGGING == 0: Stripped logger - all methods are empty inlines
-
-class SunBoxLogger {
-public:
-    void begin(Stream* output = nullptr) { (void)output; }
-
-    void error(const char* message) { (void)message; }
-    void error(const String& message) { (void)message; }
-    void warning(const char* message) { (void)message; }
-    void warning(const String& message) { (void)message; }
-    void startup(const char* message) { (void)message; }
-    void startup(const String& message) { (void)message; }
-    void info(const char* message) { (void)message; }
-    void info(const String& message) { (void)message; }
-    void debug(const char* message) { (void)message; }
-    void debug(const String& message) { (void)message; }
-    void mouse(const char* message) { (void)message; }
-    void mouse(const String& message) { (void)message; }
-
-    void errorf(const char* format, ...) { (void)format; }
-    void warningf(const char* format, ...) { (void)format; }
-    void startupf(const char* format, ...) { (void)format; }
-    void infof(const char* format, ...) { (void)format; }
-    void debugf(const char* format, ...) { (void)format; }
-    void mousef(const char* format, ...) { (void)format; }
-
-    void setChannelMask(uint8_t mask) { (void)mask; }
-    uint8_t getChannelMask() { return 0; }
-    void enableChannel(LogChannel ch) { (void)ch; }
-    void disableChannel(LogChannel ch) { (void)ch; }
-    bool isChannelEnabled(LogChannel ch) { (void)ch; return false; }
-
-    inline void debugCh(LogChannel ch, const char* msg) { (void)ch; (void)msg; }
-    inline void infoCh(LogChannel ch, const char* msg) { (void)ch; (void)msg; }
-    inline void warningCh(LogChannel ch, const char* msg) { (void)ch; (void)msg; }
-    inline void startupCh(LogChannel ch, const char* msg) { (void)ch; (void)msg; }
-};
-
-// Global logger instance (still declared so references compile)
-extern SunBoxLogger logger;
-
-// All macros as no-ops
+#else
+// All LOG_* macros stripped - zero overhead for library logging
 #define LOG_DEBUG(ch, msg)         ((void)0)
 #define LOG_DEBUGF(ch, fmt, ...)   ((void)0)
 #define LOG_INFO(ch, msg)          ((void)0)
@@ -157,7 +133,6 @@ extern SunBoxLogger logger;
 #define LOG_STARTUPF(ch, fmt, ...) ((void)0)
 #define LOG_MOUSE(ch, msg)         ((void)0)
 #define LOG_MOUSEF(ch, fmt, ...)   ((void)0)
-
 #endif // SUNBOX_LOGGING
 
 #endif // _SUNBOX_LOGGER_H_

@@ -1049,7 +1049,9 @@ void USBHostDriver::displayStoredDescriptors() {
     // Now parse the stored interface and endpoint descriptors
     const uint8_t* p = config_descriptor;
     const uint8_t* end = config_descriptor + config_descriptor_len;
+#if SUNBOX_LOGGING
     uint8_t current_interface = 0xFF;
+#endif
 
     while (p < end) {
         uint8_t desc_len = p[0];
@@ -1059,7 +1061,9 @@ void USBHostDriver::displayStoredDescriptors() {
 
         // Interface descriptor
         if (desc_type == 0x04 && desc_len >= 9) {
+#if SUNBOX_LOGGING
             current_interface = p[2];
+#endif
             LOG_INFOF(LOG_COMMAND, "\n--- Interface %d ---", current_interface);
             LOG_INFOF(LOG_COMMAND, "  Alternate Setting: %d", p[3]);
             LOG_INFOF(LOG_COMMAND, "  Number of Endpoints: %d", p[4]);
@@ -1081,6 +1085,7 @@ void USBHostDriver::displayStoredDescriptors() {
             LOG_INFOF(LOG_COMMAND, "    Number of Descriptors: %d", p[5]);
 
             // Parse descriptor info
+#if SUNBOX_LOGGING
             for (uint8_t i = 0; i < p[5] && (6 + i*3 + 2) < desc_len; i++) {
                 uint8_t dtype = p[6 + i*3];
                 uint16_t dlen = p[7 + i*3] | (p[8 + i*3] << 8);
@@ -1089,6 +1094,7 @@ void USBHostDriver::displayStoredDescriptors() {
                             dtype == 0x22 ? " (Report)" : dtype == 0x23 ? " (Physical)" : "",
                             dlen);
             }
+#endif
         }
 
         // Endpoint descriptor
@@ -1096,6 +1102,7 @@ void USBHostDriver::displayStoredDescriptors() {
             LOG_INFOF(LOG_COMMAND, "  Endpoint 0x%02X (%s):",
                         p[2], (p[2] & 0x80) ? "IN" : "OUT");
 
+#if SUNBOX_LOGGING
             const char* ep_type = "";
             switch (p[3] & 0x03) {
                 case 0: ep_type = "Control"; break;
@@ -1104,6 +1111,7 @@ void USBHostDriver::displayStoredDescriptors() {
                 case 3: ep_type = "Interrupt"; break;
             }
             LOG_INFOF(LOG_COMMAND, "    Attributes: 0x%02X (%s)", p[3], ep_type);
+#endif
             LOG_INFOF(LOG_COMMAND, "    Max Packet Size: %d bytes", p[4] | (p[5] << 8));
             LOG_INFOF(LOG_COMMAND, "    Interval: %d ms", p[6]);
         }
