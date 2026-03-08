@@ -9,16 +9,32 @@
 uint32_t SunBoxSyntheticHandleOutput::serialDevicePacketCount = 0;
 uint32_t SunBoxSyntheticHandleOutput::combinedOutputPacketCount = 0;
 
-SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& commands, 
+SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& commands,
                                                        SunBoxUSBMouseDataHandler& usbHandler)
     : commands(commands), usbHandler(usbHandler), usbDeviceProxy(nullptr),
       mouseEndpoint(0), previousUsbButtons(0), previousSerialButtons(0),
       activationTimestamp4MouseButtonExclusion(0), activationTimestamp4MouseMovementLockout(0),
       lastRMBPressTime(0), lastLMBPressTime(0), lastMB4PressTime(0), lastMB5PressTime(0),
       sensReductionXAccumulator(0), sensReductionYAccumulator(0),
-      spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0) {
+      spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0),
+      accumulatedSerialX(0), accumulatedSerialY(0), accumulatedSerialTimestampMs(0),
+      outputPacketsThisSecond(0), outputWindowStartMs(0) {
     previousUsbState.clear();
     previousSerialState.clear();
+
+    // Zero-initialize movement profile tracker
+    memset(&moveProfile, 0, sizeof(moveProfile));
+    moveProfile.estimatedUsbRateHz = 1000;  // Safe default until measured
+
+    // Zero-initialize sign flip trackers
+    memset(&signFlipX, 0, sizeof(signFlipX));
+    memset(&signFlipY, 0, sizeof(signFlipY));
+
+    // Zero-initialize sensitivity reduction smoother
+    sensSmooth.transitionStartMs = 0;
+    sensSmooth.isTransitioning = false;
+    sensSmooth.lastEffectiveReductionX = 100;  // Start at full movement (no reduction)
+    sensSmooth.lastEffectiveReductionY = 100;
 }
 
 void SunBoxSyntheticHandleOutput::begin() {
@@ -70,10 +86,10 @@ void SunBoxSyntheticHandleOutput::process() {
     MouseState usbState;
     MouseState serialState;
     MouseState finalState;
-    
+
     // Track unmodified USB buttons for filtering logic
     uint8_t unmodifiedUsbButtons = 0;
-    
+
     // Get USB data if available
     if (hasUSBData) {
         const uint8_t* rawData = usbHandler.getRawData();
@@ -122,6 +138,64 @@ void SunBoxSyntheticHandleOutput::process() {
         previousSerialButtons = previousSerialState.buttons;
     }
     
+    // Update movement profile from real USB data (before blending)
+    updateMovementProfile(usbState.x, usbState.y, hasUSBData);
+
+    // Output rate regulation: if serial-only frame, check if we should throttle
+    if (hasSerialData && !hasUSBData) {
+        if (shouldThrottleSerialOnly()) {
+            // Accumulate serial deltas instead of outputting
+            if (accumulatedSerialX == 0 && accumulatedSerialY == 0) {
+                accumulatedSerialTimestampMs = millis();  // Record when accumulation started
+            }
+            accumulatedSerialX += serialState.x;
+            accumulatedSerialY += serialState.y;
+            // Still update previous state so button tracking isn't lost
+            return;
+        }
+    }
+
+    // Handle accumulated serial deltas: decay or apply smoothly
+    if (accumulatedSerialX != 0 || accumulatedSerialY != 0) {
+        uint32_t accAge = millis() - accumulatedSerialTimestampMs;
+
+        if (accAge > ACCUMULATED_DECAY_MS) {
+            // Too old — discard entirely (stale data would cause a jump)
+            accumulatedSerialX = 0;
+            accumulatedSerialY = 0;
+        } else if (hasUSBData) {
+            // Apply smoothly: only release up to the adaptive threshold per frame
+            // so we don't dump a big accumulated value all at once
+            int16_t maxStepX = moveProfile.avgSpeedX + moveProfile.avgAccelX * 2;
+            if (maxStepX < MIN_SPIKE_THRESHOLD) maxStepX = MIN_SPIKE_THRESHOLD;
+            int16_t maxStepY = moveProfile.avgSpeedY + moveProfile.avgAccelY * 2;
+            if (maxStepY < MIN_SPIKE_THRESHOLD) maxStepY = MIN_SPIKE_THRESHOLD;
+
+            // Release a portion of accumulated deltas, capped by threshold
+            int16_t releaseX, releaseY;
+            if (accumulatedSerialX > maxStepX) {
+                releaseX = maxStepX;
+            } else if (accumulatedSerialX < -maxStepX) {
+                releaseX = -maxStepX;
+            } else {
+                releaseX = accumulatedSerialX;
+            }
+            if (accumulatedSerialY > maxStepY) {
+                releaseY = maxStepY;
+            } else if (accumulatedSerialY < -maxStepY) {
+                releaseY = -maxStepY;
+            } else {
+                releaseY = accumulatedSerialY;
+            }
+
+            serialState.x += releaseX;
+            serialState.y += releaseY;
+            accumulatedSerialX -= releaseX;
+            accumulatedSerialY -= releaseY;
+        }
+        // If no USB data and not throttled, accumulated deltas wait for next USB frame
+    }
+
     // Handle MMB press for exclusion window
     if (usbState.buttons & MOUSE_MIDDLE) {
         // Update exclusion timestamp
@@ -152,7 +226,13 @@ void SunBoxSyntheticHandleOutput::process() {
     int16_t finalX = usbState.x;
     int16_t finalY = usbState.y;
     modifyMovementWithSerialData(finalX, finalY, serialState.x, serialState.y);
-    
+
+    // Sanitize sign flips (Safeguard 1)
+    sanitizeSignFlips(finalX, finalY, usbState.x, usbState.y);
+
+    // Clamp value spikes (Safeguard 2)
+    clampValueSpikes(finalX, finalY);
+
     // Update spin bot movement
     updateSpinBot(finalX, finalY);
     
@@ -221,9 +301,15 @@ void SunBoxSyntheticHandleOutput::process() {
         }
     }
     
+    // Record output for spike detection history
+    recordOutput(finalX, finalY);
+
+    // Track output rate for throttling
+    outputPacketsThisSecond++;
+
     // Send the formatted data
     outputMouseData(outputBuffer, outputLength);
-    
+
     // Update previous state
     if (hasUSBData) {
         previousUsbState = usbState;
@@ -251,40 +337,292 @@ void SunBoxSyntheticHandleOutput::modifyMovementWithSerialData(int16_t& usbX, in
     // Convert to long for higher precision calculations
     long usbXLong = static_cast<long>(usbX);
     long usbYLong = static_cast<long>(usbY);
-    
+
     if (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout) {
-        // Apply sensitivity reduction
-        if (sensReductionAmmountX >= 0 && sensReductionAmmountX <= 100) {
-            usbXLong = (usbXLong * sensReductionAmmountX);
+        // Determine target reduction values
+        int16_t targetX = sensReductionAmmountX;
+        int16_t targetY = sensReductionAmmountY;
+
+        // Sensitivity reduction ramp (Safeguard 3)
+        int16_t effectiveX = targetX;
+        int16_t effectiveY = targetY;
+
+        if (targetX != sensSmooth.lastEffectiveReductionX || targetY != sensSmooth.lastEffectiveReductionY) {
+            uint32_t now = millis();
+            if (!sensSmooth.isTransitioning) {
+                // Start a new ramp
+                sensSmooth.isTransitioning = true;
+                sensSmooth.transitionStartMs = now;
+            }
+
+            uint32_t elapsed = now - sensSmooth.transitionStartMs;
+            if (elapsed >= SENS_RAMP_MS) {
+                // Ramp complete
+                effectiveX = targetX;
+                effectiveY = targetY;
+                sensSmooth.isTransitioning = false;
+            } else {
+                // Linear ramp: lerp from lastEffective to target over SENS_RAMP_MS
+                // Using integer math: result = last + (target - last) * elapsed / SENS_RAMP_MS
+                effectiveX = sensSmooth.lastEffectiveReductionX +
+                    (int16_t)(((int32_t)(targetX - sensSmooth.lastEffectiveReductionX) * (int32_t)elapsed) / SENS_RAMP_MS);
+                effectiveY = sensSmooth.lastEffectiveReductionY +
+                    (int16_t)(((int32_t)(targetY - sensSmooth.lastEffectiveReductionY) * (int32_t)elapsed) / SENS_RAMP_MS);
+            }
+        } else {
+            sensSmooth.isTransitioning = false;
+        }
+
+        sensSmooth.lastEffectiveReductionX = effectiveX;
+        sensSmooth.lastEffectiveReductionY = effectiveY;
+
+        // Apply ramped sensitivity reduction using existing accumulator logic
+        if (effectiveX >= 0 && effectiveX <= 100) {
+            usbXLong = (usbXLong * effectiveX);
             sensReductionXAccumulator += usbXLong % 100;
             usbXLong = usbXLong / 100;
-            
+
             // Apply accumulated movement
             if (abs(sensReductionXAccumulator) >= 100) {
                 usbX += sensReductionXAccumulator / 100;
                 sensReductionXAccumulator %= 100;
             }
         }
-        
-        if (sensReductionAmmountY >= 0 && sensReductionAmmountY <= 100) {
-            usbYLong = (usbYLong * sensReductionAmmountY);
+
+        if (effectiveY >= 0 && effectiveY <= 100) {
+            usbYLong = (usbYLong * effectiveY);
             sensReductionYAccumulator += usbYLong % 100;
             usbYLong = usbYLong / 100;
-            
+
             // Apply accumulated movement
             if (abs(sensReductionYAccumulator) >= 100) {
                 usbY += sensReductionYAccumulator / 100;
                 sensReductionYAccumulator %= 100;
             }
         }
-        
+
         // Convert back and add serial movement
         usbX = static_cast<int16_t>(usbXLong + serialX);
         usbY = static_cast<int16_t>(usbYLong + serialY);
     } else {
+        // No sensitivity reduction active - ramp back to 100 (full movement)
+        int16_t targetX = 100;
+        int16_t targetY = 100;
+
+        if (targetX != sensSmooth.lastEffectiveReductionX || targetY != sensSmooth.lastEffectiveReductionY) {
+            uint32_t now = millis();
+            if (!sensSmooth.isTransitioning) {
+                sensSmooth.isTransitioning = true;
+                sensSmooth.transitionStartMs = now;
+            }
+
+            uint32_t elapsed = now - sensSmooth.transitionStartMs;
+            if (elapsed >= SENS_RAMP_MS) {
+                sensSmooth.lastEffectiveReductionX = 100;
+                sensSmooth.lastEffectiveReductionY = 100;
+                sensSmooth.isTransitioning = false;
+            } else {
+                int16_t effectiveX = sensSmooth.lastEffectiveReductionX +
+                    (int16_t)(((int32_t)(targetX - sensSmooth.lastEffectiveReductionX) * (int32_t)elapsed) / SENS_RAMP_MS);
+                int16_t effectiveY = sensSmooth.lastEffectiveReductionY +
+                    (int16_t)(((int32_t)(targetY - sensSmooth.lastEffectiveReductionY) * (int32_t)elapsed) / SENS_RAMP_MS);
+
+                sensSmooth.lastEffectiveReductionX = effectiveX;
+                sensSmooth.lastEffectiveReductionY = effectiveY;
+
+                // Apply the ramped (not yet full) reduction
+                usbXLong = (usbXLong * effectiveX) / 100;
+                usbYLong = (usbYLong * effectiveY) / 100;
+
+                usbX = static_cast<int16_t>(usbXLong + serialX);
+                usbY = static_cast<int16_t>(usbYLong + serialY);
+                return;
+            }
+        } else {
+            sensSmooth.isTransitioning = false;
+        }
+
         // No sensitivity reduction, just add serial movement
         usbX += serialX;
         usbY += serialY;
+    }
+}
+
+void SunBoxSyntheticHandleOutput::updateMovementProfile(int16_t usbX, int16_t usbY, bool hasUSBData) {
+    if (!hasUSBData) return;
+
+    // Record USB deltas in ring buffer
+    moveProfile.usbDeltaX[moveProfile.histIndex] = usbX;
+    moveProfile.usbDeltaY[moveProfile.histIndex] = usbY;
+    moveProfile.histIndex = (moveProfile.histIndex + 1) % MOVEMENT_HISTORY_SIZE;
+    if (moveProfile.histCount < MOVEMENT_HISTORY_SIZE) {
+        moveProfile.histCount++;
+    }
+
+    // Recompute avgSpeedX/Y = mean of abs values over history
+    int32_t sumAbsX = 0;
+    int32_t sumAbsY = 0;
+    int16_t maxAbsX = 0;
+    int16_t maxAbsY = 0;
+    for (uint8_t i = 0; i < moveProfile.histCount; i++) {
+        int16_t ax = moveProfile.usbDeltaX[i] < 0 ? -moveProfile.usbDeltaX[i] : moveProfile.usbDeltaX[i];
+        int16_t ay = moveProfile.usbDeltaY[i] < 0 ? -moveProfile.usbDeltaY[i] : moveProfile.usbDeltaY[i];
+        sumAbsX += ax;
+        sumAbsY += ay;
+        if (ax > maxAbsX) maxAbsX = ax;
+        if (ay > maxAbsY) maxAbsY = ay;
+    }
+    moveProfile.avgSpeedX = (int16_t)(sumAbsX / moveProfile.histCount);
+    moveProfile.avgSpeedY = (int16_t)(sumAbsY / moveProfile.histCount);
+    moveProfile.maxDeltaX = maxAbsX;
+    moveProfile.maxDeltaY = maxAbsY;
+
+    // Recompute avgAccelX/Y = mean of abs(consecutive differences)
+    if (moveProfile.histCount >= 2) {
+        int32_t sumAccelX = 0;
+        int32_t sumAccelY = 0;
+        uint8_t pairs = moveProfile.histCount - 1;
+        for (uint8_t i = 0; i < pairs; i++) {
+            // For a ring buffer, we iterate over valid sequential entries
+            // Since histIndex points to next write position, valid entries are
+            // arranged with oldest at (histIndex - histCount) and newest at (histIndex - 1)
+            uint8_t ci = (moveProfile.histIndex - moveProfile.histCount + i) % MOVEMENT_HISTORY_SIZE;
+            uint8_t ni = (ci + 1) % MOVEMENT_HISTORY_SIZE;
+            int16_t diffX = moveProfile.usbDeltaX[ni] - moveProfile.usbDeltaX[ci];
+            int16_t diffY = moveProfile.usbDeltaY[ni] - moveProfile.usbDeltaY[ci];
+            sumAccelX += (diffX < 0 ? -diffX : diffX);
+            sumAccelY += (diffY < 0 ? -diffY : diffY);
+        }
+        moveProfile.avgAccelX = (int16_t)(sumAccelX / pairs);
+        moveProfile.avgAccelY = (int16_t)(sumAccelY / pairs);
+    } else {
+        moveProfile.avgAccelX = 0;
+        moveProfile.avgAccelY = 0;
+    }
+
+    // Track USB packet rate
+    uint32_t now = millis();
+    moveProfile.usbPacketCount++;
+    if (now - moveProfile.windowStartMs >= 1000) {
+        moveProfile.estimatedUsbRateHz = (uint16_t)moveProfile.usbPacketCount;
+        moveProfile.usbPacketCount = 0;
+        moveProfile.windowStartMs = now;
+    }
+}
+
+bool SunBoxSyntheticHandleOutput::shouldThrottleSerialOnly() {
+    uint32_t now = millis();
+
+    // Reset output rate window every second
+    if (now - outputWindowStartMs >= 1000) {
+        outputPacketsThisSecond = 0;
+        outputWindowStartMs = now;
+    }
+
+    // Check if outputting would exceed estimatedUsbRateHz * 1.1
+    // Using integer math: rate * (100 + margin) / 100
+    uint32_t maxRate = (uint32_t)moveProfile.estimatedUsbRateHz * (100 + OUTPUT_RATE_MARGIN_PCT) / 100;
+    return outputPacketsThisSecond >= maxRate;
+}
+
+void SunBoxSyntheticHandleOutput::sanitizeSignFlips(int16_t& finalX, int16_t& finalY, int16_t usbX, int16_t usbY) {
+    uint32_t now = millis();
+
+    // --- X axis ---
+    {
+        // Reset window if >1000ms elapsed
+        if (now - signFlipX.windowStartMs >= 1000) {
+            signFlipX.flipCount = 0;
+            signFlipX.windowStartMs = now;
+        }
+
+        int8_t curSign = (finalX > 0) ? 1 : ((finalX < 0) ? -1 : 0);
+
+        if (curSign != 0 && signFlipX.lastSign != 0 && curSign != signFlipX.lastSign) {
+            signFlipX.flipCount++;
+
+            if (signFlipX.flipCount > MAX_SIGN_FLIPS_PER_SECOND) {
+                // Check if USB alone would NOT have flipped (serial caused it)
+                int8_t usbSign = (usbX > 0) ? 1 : ((usbX < 0) ? -1 : 0);
+                if (usbSign == 0 || usbSign == signFlipX.lastSign) {
+                    // Serial caused the flip, revert to USB-only
+                    finalX = usbX;
+                    curSign = usbSign;
+                }
+            }
+        }
+
+        if (curSign != 0) {
+            signFlipX.lastSign = curSign;
+        }
+    }
+
+    // --- Y axis ---
+    {
+        if (now - signFlipY.windowStartMs >= 1000) {
+            signFlipY.flipCount = 0;
+            signFlipY.windowStartMs = now;
+        }
+
+        int8_t curSign = (finalY > 0) ? 1 : ((finalY < 0) ? -1 : 0);
+
+        if (curSign != 0 && signFlipY.lastSign != 0 && curSign != signFlipY.lastSign) {
+            signFlipY.flipCount++;
+
+            if (signFlipY.flipCount > MAX_SIGN_FLIPS_PER_SECOND) {
+                int8_t usbSign = (usbY > 0) ? 1 : ((usbY < 0) ? -1 : 0);
+                if (usbSign == 0 || usbSign == signFlipY.lastSign) {
+                    finalY = usbY;
+                    curSign = usbSign;
+                }
+            }
+        }
+
+        if (curSign != 0) {
+            signFlipY.lastSign = curSign;
+        }
+    }
+}
+
+void SunBoxSyntheticHandleOutput::clampValueSpikes(int16_t& finalX, int16_t& finalY) {
+    // Need at least 2 output history entries
+    if (moveProfile.outCount < 2) return;
+
+    // Get previous output value (most recent entry)
+    uint8_t prevIdx = (moveProfile.outIndex == 0) ? (MOVEMENT_HISTORY_SIZE - 1) : (moveProfile.outIndex - 1);
+    int16_t prevOutX = moveProfile.outputX[prevIdx];
+    int16_t prevOutY = moveProfile.outputY[prevIdx];
+
+    // Adaptive threshold per axis: max(MIN_SPIKE_THRESHOLD, avgSpeed + avgAccel * 2)
+    int16_t threshX = moveProfile.avgSpeedX + moveProfile.avgAccelX * 2;
+    if (threshX < MIN_SPIKE_THRESHOLD) threshX = MIN_SPIKE_THRESHOLD;
+
+    int16_t threshY = moveProfile.avgSpeedY + moveProfile.avgAccelY * 2;
+    if (threshY < MIN_SPIKE_THRESHOLD) threshY = MIN_SPIKE_THRESHOLD;
+
+    // Clamp X
+    int16_t diffX = finalX - prevOutX;
+    if (diffX > threshX) {
+        finalX = prevOutX + threshX;
+    } else if (diffX < -threshX) {
+        finalX = prevOutX - threshX;
+    }
+
+    // Clamp Y
+    int16_t diffY = finalY - prevOutY;
+    if (diffY > threshY) {
+        finalY = prevOutY + threshY;
+    } else if (diffY < -threshY) {
+        finalY = prevOutY - threshY;
+    }
+}
+
+void SunBoxSyntheticHandleOutput::recordOutput(int16_t finalX, int16_t finalY) {
+    moveProfile.outputX[moveProfile.outIndex] = finalX;
+    moveProfile.outputY[moveProfile.outIndex] = finalY;
+    moveProfile.outIndex = (moveProfile.outIndex + 1) % MOVEMENT_HISTORY_SIZE;
+    if (moveProfile.outCount < MOVEMENT_HISTORY_SIZE) {
+        moveProfile.outCount++;
     }
 }
 

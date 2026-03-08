@@ -174,3 +174,24 @@ Added dynamic button positioning based on HID descriptor:
 - `src/SunBoxAuth.cpp` — 1 call tagged
 
 ---
+
+## 2026-03-08: Movement Sanitization System
+
+**Issue:** Combined USB + serial mouse output created detectable signatures: polling rate inflation from extra serial-only frames, rapid direction reversals (sign flips) when serial fought USB direction, single-frame value spikes from async serial deltas, and instant velocity step-functions from sensitivity reduction toggling.
+
+**Fix Applied:**
+- Added `MovementProfileTracker` with 32-entry ring buffer tracking real USB movement to derive adaptive thresholds (avgSpeed, avgAccel, maxDelta, USB polling rate)
+- **Output Rate Regulation**: Serial-only frames throttled when output rate exceeds real USB rate + 10%. Excess deltas accumulated and smoothly released (capped per frame at adaptive threshold, decayed after 50ms)
+- **Sign Flip Limiter**: Direction reversals capped at 8/sec per axis. When exceeded and serial caused the flip, reverts to USB-only value
+- **Adaptive Spike Clamper**: Frame-to-frame output jumps capped at `max(3, avgSpeed + avgAccel * 2)`. Adapts to user's real movement — fast movement = permissive, slow = tight
+- **Sensitivity Reduction Ramp**: 32ms linear interpolation replaces instant step-function for lockout activation/deactivation
+- All thresholds hardcoded, no serial configuration needed
+
+**Impact:** Output movement follows natural acceleration curves matching the user's real input. No detectable polling rate inflation, sign flip anomalies, value spikes, or velocity discontinuities.
+
+**Files Modified:**
+- `examples/SunshineUSBProxy/SunBoxSyntheticHandleOutput.h` — Added structs, constants, members, method declarations
+- `examples/SunshineUSBProxy/SunBoxSyntheticHandleOutput.cpp` — Implemented all 4 safeguards
+- `examples/SunshineUSBProxy/MOVEMENT_SANITIZATION.md` — Technical documentation
+
+---
