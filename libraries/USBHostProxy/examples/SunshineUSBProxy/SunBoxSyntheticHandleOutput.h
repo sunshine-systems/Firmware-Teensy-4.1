@@ -112,11 +112,12 @@ private:
 
         // --- Direction-blend state ---
 
-        // Burst drain state for idle path
-        uint8_t idleBurstCounter;
-        bool idleBurstActive;
-        uint8_t idleBurstLength;   // frames to drain (2-3)
-        uint8_t idlePauseLength;   // frames to pause (5-8)
+        // OU-process drain intensity for idle path (replaces burst/pause)
+        float ouIntensity;         // current OU process value [0, 1]
+
+        // sensEff ramp continuity (snapshot on gap reset)
+        float sensFloorX;          // sensEff value at time of last gap reset
+        float sensFloorY;
 
         // Stochastic steering state for moving path
         bool prevSteerApplied;     // anti-correlation tracking

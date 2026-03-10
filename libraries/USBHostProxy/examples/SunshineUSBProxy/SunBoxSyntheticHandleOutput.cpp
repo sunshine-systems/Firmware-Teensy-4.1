@@ -34,10 +34,9 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
     blender.rngState = 1;      // Will be re-seeded in begin()
 
     // Direction-blend state
-    blender.idleBurstCounter = 0;
-    blender.idleBurstActive = false;
-    blender.idleBurstLength = 3;
-    blender.idlePauseLength = 6;
+    blender.ouIntensity = 0.40f;   // OU process starts at mu (stationary)
+    blender.sensFloorX = 0.0f;
+    blender.sensFloorY = 0.0f;
     blender.prevSteerApplied = false;
 }
 
@@ -214,10 +213,9 @@ void SunBoxSyntheticHandleOutput::process() {
             blender.wasIdle = true;
             blender.rampFrame = 0;
             // Reset direction-blend state
-            blender.idleBurstCounter = 0;
-            blender.idleBurstActive = false;
-            blender.idleBurstLength = 3;
-            blender.idlePauseLength = 6;
+            blender.ouIntensity = 0.40f;  // OU back to mu
+            blender.sensFloorX = 0.0f;    // Next engagement ramps from 0
+            blender.sensFloorY = 0.0f;
             blender.prevSteerApplied = false;
         }
     }
@@ -433,11 +431,16 @@ void SunBoxSyntheticHandleOutput::updateSensitivity(bool hasSerial, bool sensAct
     uint32_t now = millis();
 
     if (blender.sensFirstMovement) {
+        // First activation — ramp from 0 (sensFloor already 0)
         blender.sensTransitionStartMs = now;
         blender.sensFirstMovement = false;
     } else if (blender.sensLastSerialMs > 0 &&
                (now - blender.sensLastSerialMs) > SENS_RESET_MS) {
-        // Gap exceeded reset threshold — restart ramp
+        // Gap exceeded reset threshold — snapshot current sensEff as floor
+        // before restarting ramp, so it continues from current value
+        // instead of dropping to 0 and causing a 200-500ms stall
+        blender.sensFloorX = calcSensEffective(true);
+        blender.sensFloorY = calcSensEffective(false);
         blender.sensTransitionStartMs = now;
     }
 
@@ -457,7 +460,7 @@ float SunBoxSyntheticHandleOutput::calcSensEffective(bool isX) {
     float target = isX ? (100.0f - (float)sensReductionAmmountX)
                        : (100.0f - (float)sensReductionAmmountY);
 
-    // Transition ramp: 0 -> target over SENS_TRANSITION_MS
+    // Transition ramp over SENS_TRANSITION_MS
     uint32_t elapsed = millis() - blender.sensTransitionStartMs;
     float progress = (float)elapsed / (float)SENS_TRANSITION_MS;
     if (progress > 1.0f) progress = 1.0f;
@@ -466,7 +469,12 @@ float SunBoxSyntheticHandleOutput::calcSensEffective(bool isX) {
     // Natural sensitivity changes are fastest mid-transition, tapered at edges.
     progress = progress * progress * (3.0f - 2.0f * progress);
 
-    return target * progress;
+    // Ramp from sensFloor to target instead of 0 to target.
+    // On first activation sensFloor is 0 (normal ramp from 0).
+    // On mid-engagement gap reset, sensFloor holds the previous sensEff
+    // so the ramp continues smoothly instead of dropping to 0.
+    float floor = isX ? blender.sensFloorX : blender.sensFloorY;
+    return floor + (target - floor) * progress;
 }
 
 float SunBoxSyntheticHandleOutput::calcBudget(bool isX) {
@@ -618,54 +626,54 @@ void SunBoxSyntheticHandleOutput::blendMovement(int16_t& outX, int16_t& outY,
 
 void SunBoxSyntheticHandleOutput::blendIdleBurst(int16_t& outX, int16_t& outY,
                                                    int16_t usbX, int16_t usbY) {
-    // Idle path with burst drain.
-    // Advances a frame counter through burst/pause cycles. Only drains
-    // the accumulator during burst windows (~30% of frames). During pause
-    // windows, returns the raw USB values (typically zero when idle).
+    // Idle path with Ornstein-Uhlenbeck process drain intensity.
+    // Replaces the binary burst/pause state machine. The OU process produces
+    // temporally correlated drain intensities that match natural micro-movement:
+    //   - Positive autocorrelation (clustered bursts, not rhythmic on/off)
+    //   - Variable magnitudes (natural speed CV)
+    //   - ~30% zero frames (when OU intensity clamps to 0)
+    //   - Mean-reverting (prevents drift to extremes)
 
-    // Adapt burst ratio to accumulator size — larger accumulator = more frequent bursts
+    // OU parameters (tuned from natural micro-movement recordings)
+    const float OU_THETA = 0.10f;   // mean-reversion speed
+    const float OU_MU = 0.40f;      // long-term mean intensity
+    const float OU_SIGMA = 0.30f;   // volatility
+
+    float mu = OU_MU;
+
+    // Soft accumulator management: boost OU mean when accumulator grows large
     float accumMag = sqrtf(blender.accumX * blender.accumX + blender.accumY * blender.accumY);
-    uint8_t effectivePause = blender.idlePauseLength;
-    if (accumMag > 10.0f) {
-        effectivePause = blender.idlePauseLength > 2 ? blender.idlePauseLength - 2 : 2;
+    float budgetX = calcBudget(true);
+    float budgetY = calcBudget(false);
+    blender.lastBudgetX = budgetX;
+    blender.lastBudgetY = budgetY;
+    float avgBudget = (fabsf(budgetX) + fabsf(budgetY)) / 2.0f;
+
+    if (avgBudget > 0.0f && accumMag > avgBudget * 4.0f) {
+        mu += 0.1f;  // gently increase drain rate
     }
 
-    // Advance burst state machine
-    blender.idleBurstCounter++;
+    // Step the OU process: dx = theta * (mu - x) * dt + sigma * dW
+    float dw = gaussianNoise(1.0f);
+    blender.ouIntensity += OU_THETA * (mu - blender.ouIntensity) + OU_SIGMA * dw;
 
-    if (blender.idleBurstActive) {
-        // Currently in a drain burst
-        if (blender.idleBurstCounter >= blender.idleBurstLength) {
-            blender.idleBurstActive = false;
-            blender.idleBurstCounter = 0;
-            // Vary next pause length slightly (5-8)
-            blender.idlePauseLength = 5 + (uint8_t)(fabsf(gaussianNoise(1.5f))) % 4;
-        }
-    } else {
-        // Currently in a pause
-        if (blender.idleBurstCounter >= effectivePause) {
-            blender.idleBurstActive = true;
-            blender.idleBurstCounter = 0;
-            // Vary next burst length slightly (2-3)
-            blender.idleBurstLength = 2 + (uint8_t)(fabsf(gaussianNoise(0.8f))) % 2;
-        }
-    }
+    // Clamp to [0, 1]
+    if (blender.ouIntensity < 0.0f) blender.ouIntensity = 0.0f;
+    if (blender.ouIntensity > 1.0f) blender.ouIntensity = 1.0f;
 
-    // If in pause window, return USB passthrough (no drain)
-    if (!blender.idleBurstActive) {
-        // Still store budget for diagnostics
-        for (int axis = 0; axis < 2; axis++) {
-            bool isX = (axis == 0);
-            float budget = calcBudget(isX);
-            if (isX) blender.lastBudgetX = budget;
-            else     blender.lastBudgetY = budget;
-        }
+    // If OU intensity is near zero, this is a natural pause frame
+    if (blender.ouIntensity < 0.01f) {
         outX = usbX;
         outY = usbY;
         return;
     }
 
-    // In burst window — do standard per-axis budget drain (same as baseline idle)
+    // Square the intensity to widen speed distribution (increases speed CV)
+    // while preserving temporal correlation from the OU process.
+    // OU=0.8 -> 0.64, OU=0.5 -> 0.25, OU=0.3 -> 0.09
+    float effectiveIntensity = blender.ouIntensity * blender.ouIntensity;
+
+    // Apply drain with OU-modulated budget
     outX = usbX;
     outY = usbY;
 
@@ -673,18 +681,15 @@ void SunBoxSyntheticHandleOutput::blendIdleBurst(int16_t& outX, int16_t& outY,
         bool isX = (axis == 0);
         float usbVal = isX ? (float)usbX : (float)usbY;
 
-        // Calculate budget
-        float budget = calcBudget(isX);
-        if (isX) blender.lastBudgetX = budget;
-        else     blender.lastBudgetY = budget;
+        float budget = isX ? budgetX : budgetY;
         if (budget <= 0.0f) continue;
 
         float userContrib = usbVal;
 
-        // Idle: aimbot gets full budget
-        float aimbotBudget = budget;
+        // Scale budget by squared OU intensity
+        float aimbotBudget = budget * effectiveIntensity;
 
-        // Ensure minimum drain rate
+        // Ensure minimum drain rate when accumulator has content
         float accumVal = isX ? blender.accumX : blender.accumY;
         if (fabsf(accumVal) >= 1.0f && aimbotBudget < 1.0f) {
             aimbotBudget = 1.0f;
