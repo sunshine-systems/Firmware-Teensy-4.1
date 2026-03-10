@@ -454,14 +454,15 @@ float SunBoxSyntheticHandleOutput::calcSensEffective(bool isX) {
     // If no serial has arrived yet, aimbot gets nothing
     if (blender.sensFirstMovement) return 0.0f;
 
-    // Check if sens reduction is even active.
-    // With sensReductionDuration=0, sensActive expires within 1ms of each trigger.
-    // Allow sensEff to persist between serial packets using the serial gap check,
-    // otherwise the ramp resets to 0 on every USB-only frame.
-    bool sensActiveNow = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
-    bool recentSerial = blender.sensLastSerialMs > 0 &&
-                        (millis() - blender.sensLastSerialMs) <= SENS_RESET_MS;
-    if (!sensActiveNow && !recentSerial) return 0.0f;
+    // sensEff must use sensActive (not recentSerial) as its gate.
+    // With sensReductionDuration=0, sensActive is only true on the exact frame
+    // a wheel==1 trigger arrives. This means sensEff is only non-zero on serial
+    // frames, which naturally limits the blend factor on USB-only frames to 0.
+    // The other three recentSerial guards (accumulator flush, cleanup, output gate)
+    // keep state alive between packets — but sensEff must decay to prevent the
+    // moving path from over-blending aimbot direction into user movement.
+    bool sensActive = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
+    if (!sensActive) return 0.0f;
 
     // Target aimbot fraction from config
     // Config: sensReductionAmmountX=60 means user keeps 60%, aimbot gets 40%
