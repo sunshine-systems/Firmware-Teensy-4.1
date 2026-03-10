@@ -4,6 +4,7 @@
 #include "SunBoxLogger.h"
 #include "Config.h"
 #include "SunBoxStartup.h"
+#include <math.h>
 
 // Static counter initialization
 uint32_t SunBoxSyntheticHandleOutput::serialDevicePacketCount = 0;
@@ -15,10 +16,8 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
       mouseEndpoint(0), previousUsbButtons(0), previousSerialButtons(0),
       activationTimestamp4MouseButtonExclusion(0), activationTimestamp4MouseMovementLockout(0),
       lastRMBPressTime(0), lastLMBPressTime(0), lastMB4PressTime(0), lastMB5PressTime(0),
-      sensReductionXAccumulator(0), sensReductionYAccumulator(0),
       spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0),
-      accumulatedSerialX(0), accumulatedSerialY(0), accumulatedSerialTimestampMs(0),
-      outputPacketsThisSecond(0), outputWindowStartMs(0) {
+      lastOutputMs(0) {
     previousUsbState.clear();
     previousSerialState.clear();
 
@@ -26,39 +25,42 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
     memset(&moveProfile, 0, sizeof(moveProfile));
     moveProfile.estimatedUsbRateHz = 1000;  // Safe default until measured
 
-    // Zero-initialize sign flip trackers
-    memset(&signFlipX, 0, sizeof(signFlipX));
-    memset(&signFlipY, 0, sizeof(signFlipY));
+    // Zero-initialize blender
+    memset(&blender, 0, sizeof(blender));
+    blender.wasIdle = true;
+    blender.sensFirstMovement = true;
+    blender.sensEffX = 0.0f;   // Aimbot starts at 0% until ramp
+    blender.sensEffY = 0.0f;
+    blender.rngState = 1;      // Will be re-seeded in begin()
 
-    // Zero-initialize sensitivity reduction smoother
-    sensSmooth.transitionStartMs = 0;
-    sensSmooth.isTransitioning = false;
-    sensSmooth.lastEffectiveReductionX = 100;  // Start at full movement (no reduction)
-    sensSmooth.lastEffectiveReductionY = 100;
+    // Direction-blend state
+    blender.idleBurstCounter = 0;
+    blender.idleBurstActive = false;
+    blender.idleBurstLength = 3;
+    blender.idlePauseLength = 6;
+    blender.prevSteerApplied = false;
 }
 
 void SunBoxSyntheticHandleOutput::begin() {
-    // Initialize if needed
+    blender.rngState = micros();  // Non-reproducible seed
+    if (blender.rngState == 0) blender.rngState = 42;  // LCG can't have 0 state
 }
 
 void SunBoxSyntheticHandleOutput::process() {
-    // Check if we have any data to process
     bool hasUSBData = usbHandler.hasData();
     bool hasSerialData = commands.hasData();
-    
-    // Early exit if no data
+
+    // Early exit if no data (spin bot exception)
     if (!hasUSBData && !hasSerialData) {
-        // Still need to process spin bot if active
         if (spinActive) {
+            // Spin bot can still output (cosmetic, not aimbot)
             MouseState emptyState;
             emptyState.clear();
             int16_t xMove = 0, yMove = 0;
             updateSpinBot(xMove, yMove);
-            
             if (xMove != 0 || yMove != 0) {
                 emptyState.x = xMove;
                 emptyState.y = yMove;
-                
                 uint8_t outputBuffer[64];
                 uint32_t outputLength = sizeof(outputBuffer);
                 usbHandler.getHIDHandler().formatMouseData(emptyState, outputBuffer, outputLength);
@@ -67,41 +69,33 @@ void SunBoxSyntheticHandleOutput::process() {
         }
         return;
     }
-    
-    // Check if USB device proxy is ready
+
+    // Proxy readiness check
     if (!usbDeviceProxy || !usbDeviceProxy->isConfigured() || mouseEndpoint == 0) {
-        // Reset flags to prevent data buildup
         if (hasUSBData) usbHandler.reset();
         if (hasSerialData) commands.resetData();
         return;
     }
-    
-    // Check if endpoint is ready
+
+    // Endpoint readiness check
     if (!usbDeviceProxy->isEndpointReady(mouseEndpoint)) {
-        // Don't reset - let data accumulate for next cycle
         return;
     }
-    
-    // Get mouse states
+
     MouseState usbState;
     MouseState serialState;
     MouseState finalState;
-
-    // Track unmodified USB buttons for filtering logic
     uint8_t unmodifiedUsbButtons = 0;
 
-    // Get USB data if available
+    // Parse USB data
     if (hasUSBData) {
         const uint8_t* rawData = usbHandler.getRawData();
         uint32_t rawLength = usbHandler.getRawDataLength();
-        
-        // Parse USB data
         usbHandler.getHIDHandler().parseMouseData(rawData, rawLength, usbState);
         previousUsbButtons = previousUsbState.buttons;
         unmodifiedUsbButtons = usbState.buttons;
         usbHandler.reset();
     } else {
-        // Use previous state for buttons (movement doesn't persist)
         usbState.buttons = previousUsbState.buttons;
         previousUsbButtons = previousUsbState.buttons;
         unmodifiedUsbButtons = previousUsbState.buttons;
@@ -109,211 +103,224 @@ void SunBoxSyntheticHandleOutput::process() {
         usbState.y = 0;
         usbState.wheel = 0;
     }
-    
-    // Get serial data if available
+
+    // Parse serial data
     if (hasSerialData) {
-        // Increment serial device packet counter (S)
         serialDevicePacketCount++;
-
-        // Save previous state BEFORE getting new state
         previousSerialButtons = previousSerialState.buttons;
-
         serialState = commands.getMouseState();
-        
-        // Check for sensitivity reduction trigger (scroll wheel = 1)
+
+        // Sensitivity reduction trigger (scroll wheel = 1)
         if (serialState.wheel == 1) {
             activationTimestamp4MouseMovementLockout = millis() + sensReductionDurationMilliseconds;
-            // Clear the scroll wheel so it doesn't get sent to host
             serialState.wheel = 0;
         }
-        
-        // Update previous state for next cycle
+
         previousSerialState = serialState;
         commands.resetData();
     } else {
-        // No serial data this frame - preserve button state
         serialState.clear();
-        serialState.buttons = previousSerialState.buttons;  // Preserve last known button state
-        // Use saved previous serial buttons
+        serialState.buttons = previousSerialState.buttons;
         previousSerialButtons = previousSerialState.buttons;
     }
-    
-    // Update movement profile from real USB data (before blending)
+
+    // Capture raw values for logging
+    int16_t csvRawUsbX = usbState.x;
+    int16_t csvRawUsbY = usbState.y;
+    int16_t csvRawSerialX = hasSerialData ? serialState.x : 0;
+    int16_t csvRawSerialY = hasSerialData ? serialState.y : 0;
+
+    // === STEP 1: Always accumulate serial deltas into blender ===
+    if (hasSerialData) {
+        blender.accumX += (float)serialState.x;
+        blender.accumY += (float)serialState.y;
+    }
+
+    // === STEP 2: Handle missing USB frames ===
+    // During active mouse movement, we piggyback on USB frames (prevents C > R anomaly).
+    // When mouse is idle but aimbot is active (sensActive + accumulator), we output
+    // paced at the mouse's polling rate — looks like the mouse "woke up."
+    // CRITICAL: Only generate serial-only output when sensActive is true.
+    // Without this gate, serial arriving between USB frames inserts (0,0) output frames
+    // (sensEff=0 → aimbot drains nothing, USB=0 → no user movement) which creates
+    // a stutter pattern: real movement, zero, real movement, zero.
+    if (!hasUSBData) {
+        bool sensActive = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
+        bool hasAccumulator = fabsf(blender.accumX) >= 1.0f || fabsf(blender.accumY) >= 1.0f;
+        if (!sensActive || (!hasAccumulator && !hasSerialData)) {
+            return;  // Nothing useful to output — don't insert zero frames
+        }
+        // Pace serial-only output at the mouse's polling rate
+        uint32_t now = millis();
+        uint16_t rate = moveProfile.estimatedUsbRateHz;
+        if (rate < 125) rate = 125;  // Floor at 125Hz (safe minimum)
+        uint32_t intervalMs = 1000 / rate;
+        if (intervalMs < 1) intervalMs = 1;
+        if ((now - lastOutputMs) < intervalMs) {
+            return;  // Too soon — wait for next poll interval
+        }
+        // Proceed with serial-only output (usbState already zeroed above)
+    }
+
+    // === STEP 3: Update movement profile from real USB data ===
+    // Only update profile when we have actual USB data (don't pollute with zeros)
     updateMovementProfile(usbState.x, usbState.y, hasUSBData);
 
-    // Output rate regulation: if serial-only frame, check if we should throttle
-    if (hasSerialData && !hasUSBData) {
-        if (shouldThrottleSerialOnly()) {
-            // Accumulate serial deltas instead of outputting
-            if (accumulatedSerialX == 0 && accumulatedSerialY == 0) {
-                accumulatedSerialTimestampMs = millis();  // Record when accumulation started
+    // === STEP 4: Update sensitivity ramp ===
+    bool sensActive = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
+    updateSensitivity(hasSerialData, sensActive);
+
+    // === STEP 5: Flush sub-pixel residuals and detect aimbot state ===
+    // Snap accumulator to zero when residual is < 1.0 (can never drain via integer truncation)
+    if (fabsf(blender.accumX) < 1.0f) blender.accumX = 0.0f;
+    if (fabsf(blender.accumY) < 1.0f) blender.accumY = 0.0f;
+
+    // Force-flush accumulator when it can never meaningfully drain.
+    // Cases that cause drain deadlock (accumulator stuck forever):
+    //   1. sensActive is false (aim key released)
+    //   2. sensActive is true but sensEff < 5.0 on both axes (ramp barely started,
+    //      or sensReductionAmmount=100 → target=0%). Without this threshold, the MIN
+    //      floor of 1.0 fires at sensEff=0.5 and drains full serial into output even
+    //      though the system should be in "user only" mode.
+    float sensEffCheckX = calcSensEffective(true);
+    float sensEffCheckY = calcSensEffective(false);
+    bool canDrain = sensActive && (sensEffCheckX >= 5.0f || sensEffCheckY >= 5.0f);
+    if (!canDrain) {
+        blender.accumX = 0.0f;
+        blender.accumY = 0.0f;
+    }
+
+    bool hasAimbot = hasSerialData || fabsf(blender.accumX) >= 1.0f || fabsf(blender.accumY) >= 1.0f;
+
+    // Clean up when aimbot finishes: reset all blender state for clean transition
+    if (!hasAimbot && !hasSerialData) {
+        if (!blender.sensFirstMovement) {
+            // Only reset the sensitivity ramp if sensActive has expired.
+            // If sensActive is still true (lockout window open), keep the ramp
+            // state so the next serial packet continues from where it left off
+            // instead of restarting the sawtooth from 0.
+            if (!sensActive) {
+                blender.sensFirstMovement = true;
+                blender.sensLastSerialMs = 0;
+                blender.sensTransitionStartMs = 0;
             }
-            accumulatedSerialX += serialState.x;
-            accumulatedSerialY += serialState.y;
-            // Still update previous state so button tracking isn't lost
-            return;
+            // Always clean up sub-pixel and blending state
+            blender.spreadAccumX = 0.0f;
+            blender.spreadAccumY = 0.0f;
+            blender.outputAccumX = 0.0f;
+            blender.outputAccumY = 0.0f;
+            blender.opposingFramesX = 0;
+            blender.opposingFramesY = 0;
+            blender.wasIdle = true;
+            blender.rampFrame = 0;
+            // Reset direction-blend state
+            blender.idleBurstCounter = 0;
+            blender.idleBurstActive = false;
+            blender.idleBurstLength = 3;
+            blender.idlePauseLength = 6;
+            blender.prevSteerApplied = false;
         }
     }
 
-    // Handle accumulated serial deltas: decay or apply smoothly
-    if (accumulatedSerialX != 0 || accumulatedSerialY != 0) {
-        uint32_t accAge = millis() - accumulatedSerialTimestampMs;
+    // === STEP 6: Blend movement ===
+    int16_t finalX = usbState.x;
+    int16_t finalY = usbState.y;
 
-        if (accAge > ACCUMULATED_DECAY_MS) {
-            // Too old — discard entirely (stale data would cause a jump)
-            accumulatedSerialX = 0;
-            accumulatedSerialY = 0;
-        } else if (hasUSBData) {
-            // Apply smoothly: only release up to the adaptive threshold per frame
-            // so we don't dump a big accumulated value all at once
-            int16_t maxStepX = moveProfile.avgSpeedX + moveProfile.avgAccelX * 2;
-            if (maxStepX < MIN_SPIKE_THRESHOLD) maxStepX = MIN_SPIKE_THRESHOLD;
-            int16_t maxStepY = moveProfile.avgSpeedY + moveProfile.avgAccelY * 2;
-            if (maxStepY < MIN_SPIKE_THRESHOLD) maxStepY = MIN_SPIKE_THRESHOLD;
-
-            // Release a portion of accumulated deltas, capped by threshold
-            int16_t releaseX, releaseY;
-            if (accumulatedSerialX > maxStepX) {
-                releaseX = maxStepX;
-            } else if (accumulatedSerialX < -maxStepX) {
-                releaseX = -maxStepX;
-            } else {
-                releaseX = accumulatedSerialX;
+    // Increment idle ramp frame ONCE per frame (outside per-axis loop)
+    if (hasAimbot) {
+        bool isIdle = moveProfile.avgSpeedX < 1 && moveProfile.avgSpeedY < 1 && moveProfile.histCount >= 2;
+        if (isIdle && (blender.accumX != 0.0f || blender.accumY != 0.0f)) {
+            if (!blender.wasIdle) {
+                blender.wasIdle = true;
+                blender.rampFrame = 0;
             }
-            if (accumulatedSerialY > maxStepY) {
-                releaseY = maxStepY;
-            } else if (accumulatedSerialY < -maxStepY) {
-                releaseY = -maxStepY;
-            } else {
-                releaseY = accumulatedSerialY;
+            if (blender.rampFrame < IDLE_RAMP_FRAMES) {
+                blender.rampFrame++;
             }
-
-            serialState.x += releaseX;
-            serialState.y += releaseY;
-            accumulatedSerialX -= releaseX;
-            accumulatedSerialY -= releaseY;
+        } else if (!isIdle && blender.wasIdle) {
+            blender.wasIdle = false;
+            blender.rampFrame = 0;
         }
-        // If no USB data and not throttled, accumulated deltas wait for next USB frame
+        blendMovement(finalX, finalY, usbState.x, usbState.y, hasAimbot);
     }
 
-    // Handle MMB press for exclusion window
+    // === STEP 7: Spin bot (cosmetic) ===
+    updateSpinBot(finalX, finalY);
+
+    // === STEP 8: Handle MMB and button filtering (UNCHANGED from original) ===
     if (usbState.buttons & MOUSE_MIDDLE) {
-        // Update exclusion timestamp
         activationTimestamp4MouseButtonExclusion = millis();
-        
-        // Check passthrough condition based on disablePassthroughForMMB
         if (disablePassthroughForMMB == 1) {
-            // Passthrough disabled, clear the byte
             usbState.buttons &= ~MOUSE_MIDDLE;
         }
     }
-    
-    // Apply button filtering
     performButtonFiltering(usbState.buttons, previousUsbButtons, unmodifiedUsbButtons);
-    
-    // Apply button filtering to serial buttons too
     uint8_t unmodifiedSerialButtons = serialState.buttons;
     performButtonFiltering(serialState.buttons, previousSerialButtons, unmodifiedSerialButtons);
-    
-    // Handle spin bot activation
+
+    // Spin bot activation check
     bool lmbPressed = !(previousUsbButtons & MOUSE_LEFT) && (usbState.buttons & MOUSE_LEFT);
     bool lmbPressedSerial = !(previousSerialButtons & MOUSE_LEFT) && (serialState.buttons & MOUSE_LEFT);
     if (lmbPressed || lmbPressedSerial) {
         handleSpinBot(usbState.buttons, previousUsbButtons, lmbPressedSerial);
     }
-    
-    // Combine movement with sensitivity reduction
-    int16_t finalX = usbState.x;
-    int16_t finalY = usbState.y;
-    modifyMovementWithSerialData(finalX, finalY, serialState.x, serialState.y);
 
-    // Sanitize sign flips (Safeguard 1)
-    sanitizeSignFlips(finalX, finalY, usbState.x, usbState.y);
-
-    // Clamp value spikes (Safeguard 2)
-    clampValueSpikes(finalX, finalY);
-
-    // Update spin bot movement
-    updateSpinBot(finalX, finalY);
-    
-    // Combine buttons using special logic for LMB/RMB
+    // === STEP 9: Combine buttons (UNCHANGED logic) ===
     uint8_t finalButtons = 0;
-    
-    // Handle each button
     for (uint8_t buttonMask = 1; buttonMask <= 0x10; buttonMask <<= 1) {
         if (buttonMask == MOUSE_LEFT || buttonMask == MOUSE_RIGHT) {
-            // Special handling for LMB/RMB - Simple OR logic
-            // If both indicate release, release
-            if (!(usbState.buttons & buttonMask) && !(serialState.buttons & buttonMask)) {
-                // Button is released - don't set the bit
-                continue;
-            }
-            // If either indicate press, press
             if ((usbState.buttons & buttonMask) || (serialState.buttons & buttonMask)) {
                 finalButtons |= buttonMask;
             }
         } else {
-            // Normal handling for other buttons (MMB, MB4, MB5)
-            // Just take the USB state for these buttons (after filtering)
             if (usbState.buttons & buttonMask) {
                 finalButtons |= buttonMask;
             }
         }
     }
-    
+
     // Build final state
     finalState.buttons = finalButtons;
     finalState.x = finalX;
     finalState.y = finalY;
     finalState.wheel = usbState.wheel + serialState.wheel;
-    
-    // Convert to raw format and send
+
+    // Format output
     uint8_t outputBuffer[64];
     uint32_t outputLength = sizeof(outputBuffer);
-    
-    // Convert from standard format to device format
     usbHandler.getHIDHandler().formatMouseData(finalState, outputBuffer, outputLength);
-    
-    // Debug logging to understand the issue
-    bool debug_enabled = SunBoxStartup::isDebugEnabled();
-    if (debug_enabled && finalState.buttons != 0) {
-        logger.debugf("Button state: 0x%02X, Button byte offset: %d", 
-                     finalState.buttons, 
-                     usbHandler.getHIDHandler().getButtonByteOffset());
-        logger.debugf("Output data: %02X %02X %02X %02X %02X %02X %02X %02X",
-                     outputLength > 0 ? outputBuffer[0] : 0,
-                     outputLength > 1 ? outputBuffer[1] : 0,
-                     outputLength > 2 ? outputBuffer[2] : 0,
-                     outputLength > 3 ? outputBuffer[3] : 0,
-                     outputLength > 4 ? outputBuffer[4] : 0,
-                     outputLength > 5 ? outputBuffer[5] : 0,
-                     outputLength > 6 ? outputBuffer[6] : 0,
-                     outputLength > 7 ? outputBuffer[7] : 0);
-    }
-    
-    // Proper fix: Place buttons at the correct byte position based on HID descriptor
+
+    // Button byte correction
     uint8_t buttonByteOffset = usbHandler.getHIDHandler().getButtonByteOffset();
     if (outputLength > buttonByteOffset) {
-        // Only override if the current byte doesn't match expected button state
-        // This preserves the work of formatMouseData if it's correct
         if (outputBuffer[buttonByteOffset] != finalState.buttons) {
             outputBuffer[buttonByteOffset] = finalState.buttons;
         }
     }
-    
-    // Record output for spike detection history
-    recordOutput(finalX, finalY);
 
-    // Track output rate for throttling
-    outputPacketsThisSecond++;
+    // === STEP 10: Log when aimbot active (including drain frames) ===
+    if (hasSerialData || blender.accumX != 0.0f || blender.accumY != 0.0f) {
+        float sensEffX = calcSensEffective(true);
+        float sensEffY = calcSensEffective(false);
+        logger.infof("SYN:%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+                     millis(),
+                     csvRawUsbX, csvRawUsbY,
+                     csvRawSerialX, csvRawSerialY,
+                     sensActive ? 1 : 0,
+                     (int)sensEffX, (int)sensEffY,
+                     finalX, finalY,
+                     (int)blender.lastBudgetX, (int)blender.lastBudgetY,
+                     (int)blender.accumX, (int)blender.accumY);
+    }
 
-    // Send the formatted data
+    // Send output and track timing for serial-only pacing
     outputMouseData(outputBuffer, outputLength);
+    lastOutputMs = millis();
 
     // Update previous state
     if (hasUSBData) {
         previousUsbState = usbState;
-        previousUsbState.buttons = unmodifiedUsbButtons; // Store unmodified buttons
+        previousUsbState.buttons = unmodifiedUsbButtons;
     }
 }
 
@@ -333,121 +340,6 @@ void SunBoxSyntheticHandleOutput::performButtonFiltering(uint8_t& buttons, uint8
     handleMouseButtonConfigCheck(buttons, unmodifiedButtons, previousButtons, MOUSE_BUTTON5, disablePassthroughForMB5, lastMB5PressTime);
 }
 
-void SunBoxSyntheticHandleOutput::modifyMovementWithSerialData(int16_t& usbX, int16_t& usbY, int16_t serialX, int16_t serialY) {
-    // Convert to long for higher precision calculations
-    long usbXLong = static_cast<long>(usbX);
-    long usbYLong = static_cast<long>(usbY);
-
-    if (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout) {
-        // Determine target reduction values
-        int16_t targetX = sensReductionAmmountX;
-        int16_t targetY = sensReductionAmmountY;
-
-        // Sensitivity reduction ramp (Safeguard 3)
-        int16_t effectiveX = targetX;
-        int16_t effectiveY = targetY;
-
-        if (targetX != sensSmooth.lastEffectiveReductionX || targetY != sensSmooth.lastEffectiveReductionY) {
-            uint32_t now = millis();
-            if (!sensSmooth.isTransitioning) {
-                // Start a new ramp
-                sensSmooth.isTransitioning = true;
-                sensSmooth.transitionStartMs = now;
-            }
-
-            uint32_t elapsed = now - sensSmooth.transitionStartMs;
-            if (elapsed >= SENS_RAMP_MS) {
-                // Ramp complete
-                effectiveX = targetX;
-                effectiveY = targetY;
-                sensSmooth.isTransitioning = false;
-            } else {
-                // Linear ramp: lerp from lastEffective to target over SENS_RAMP_MS
-                // Using integer math: result = last + (target - last) * elapsed / SENS_RAMP_MS
-                effectiveX = sensSmooth.lastEffectiveReductionX +
-                    (int16_t)(((int32_t)(targetX - sensSmooth.lastEffectiveReductionX) * (int32_t)elapsed) / SENS_RAMP_MS);
-                effectiveY = sensSmooth.lastEffectiveReductionY +
-                    (int16_t)(((int32_t)(targetY - sensSmooth.lastEffectiveReductionY) * (int32_t)elapsed) / SENS_RAMP_MS);
-            }
-        } else {
-            sensSmooth.isTransitioning = false;
-        }
-
-        sensSmooth.lastEffectiveReductionX = effectiveX;
-        sensSmooth.lastEffectiveReductionY = effectiveY;
-
-        // Apply ramped sensitivity reduction using existing accumulator logic
-        if (effectiveX >= 0 && effectiveX <= 100) {
-            usbXLong = (usbXLong * effectiveX);
-            sensReductionXAccumulator += usbXLong % 100;
-            usbXLong = usbXLong / 100;
-
-            // Apply accumulated movement
-            if (abs(sensReductionXAccumulator) >= 100) {
-                usbX += sensReductionXAccumulator / 100;
-                sensReductionXAccumulator %= 100;
-            }
-        }
-
-        if (effectiveY >= 0 && effectiveY <= 100) {
-            usbYLong = (usbYLong * effectiveY);
-            sensReductionYAccumulator += usbYLong % 100;
-            usbYLong = usbYLong / 100;
-
-            // Apply accumulated movement
-            if (abs(sensReductionYAccumulator) >= 100) {
-                usbY += sensReductionYAccumulator / 100;
-                sensReductionYAccumulator %= 100;
-            }
-        }
-
-        // Convert back and add serial movement
-        usbX = static_cast<int16_t>(usbXLong + serialX);
-        usbY = static_cast<int16_t>(usbYLong + serialY);
-    } else {
-        // No sensitivity reduction active - ramp back to 100 (full movement)
-        int16_t targetX = 100;
-        int16_t targetY = 100;
-
-        if (targetX != sensSmooth.lastEffectiveReductionX || targetY != sensSmooth.lastEffectiveReductionY) {
-            uint32_t now = millis();
-            if (!sensSmooth.isTransitioning) {
-                sensSmooth.isTransitioning = true;
-                sensSmooth.transitionStartMs = now;
-            }
-
-            uint32_t elapsed = now - sensSmooth.transitionStartMs;
-            if (elapsed >= SENS_RAMP_MS) {
-                sensSmooth.lastEffectiveReductionX = 100;
-                sensSmooth.lastEffectiveReductionY = 100;
-                sensSmooth.isTransitioning = false;
-            } else {
-                int16_t effectiveX = sensSmooth.lastEffectiveReductionX +
-                    (int16_t)(((int32_t)(targetX - sensSmooth.lastEffectiveReductionX) * (int32_t)elapsed) / SENS_RAMP_MS);
-                int16_t effectiveY = sensSmooth.lastEffectiveReductionY +
-                    (int16_t)(((int32_t)(targetY - sensSmooth.lastEffectiveReductionY) * (int32_t)elapsed) / SENS_RAMP_MS);
-
-                sensSmooth.lastEffectiveReductionX = effectiveX;
-                sensSmooth.lastEffectiveReductionY = effectiveY;
-
-                // Apply the ramped (not yet full) reduction
-                usbXLong = (usbXLong * effectiveX) / 100;
-                usbYLong = (usbYLong * effectiveY) / 100;
-
-                usbX = static_cast<int16_t>(usbXLong + serialX);
-                usbY = static_cast<int16_t>(usbYLong + serialY);
-                return;
-            }
-        } else {
-            sensSmooth.isTransitioning = false;
-        }
-
-        // No sensitivity reduction, just add serial movement
-        usbX += serialX;
-        usbY += serialY;
-    }
-}
-
 void SunBoxSyntheticHandleOutput::updateMovementProfile(int16_t usbX, int16_t usbY, bool hasUSBData) {
     if (!hasUSBData) return;
 
@@ -464,11 +356,15 @@ void SunBoxSyntheticHandleOutput::updateMovementProfile(int16_t usbX, int16_t us
     int32_t sumAbsY = 0;
     int16_t maxAbsX = 0;
     int16_t maxAbsY = 0;
+    int32_t sumSqAbsX = 0;
+    int32_t sumSqAbsY = 0;
     for (uint8_t i = 0; i < moveProfile.histCount; i++) {
         int16_t ax = moveProfile.usbDeltaX[i] < 0 ? -moveProfile.usbDeltaX[i] : moveProfile.usbDeltaX[i];
         int16_t ay = moveProfile.usbDeltaY[i] < 0 ? -moveProfile.usbDeltaY[i] : moveProfile.usbDeltaY[i];
         sumAbsX += ax;
         sumAbsY += ay;
+        sumSqAbsX += (int32_t)ax * ax;
+        sumSqAbsY += (int32_t)ay * ay;
         if (ax > maxAbsX) maxAbsX = ax;
         if (ay > maxAbsY) maxAbsY = ay;
     }
@@ -477,15 +373,20 @@ void SunBoxSyntheticHandleOutput::updateMovementProfile(int16_t usbX, int16_t us
     moveProfile.maxDeltaX = maxAbsX;
     moveProfile.maxDeltaY = maxAbsY;
 
+    // stddev = sqrt(E[X^2] - E[X]^2)
+    int32_t varianceX = (sumSqAbsX / moveProfile.histCount) - (int32_t)moveProfile.avgSpeedX * moveProfile.avgSpeedX;
+    int32_t varianceY = (sumSqAbsY / moveProfile.histCount) - (int32_t)moveProfile.avgSpeedY * moveProfile.avgSpeedY;
+    if (varianceX < 0) varianceX = 0;  // Rounding protection
+    if (varianceY < 0) varianceY = 0;
+    moveProfile.speedStddevX = (int16_t)sqrtf((float)varianceX);
+    moveProfile.speedStddevY = (int16_t)sqrtf((float)varianceY);
+
     // Recompute avgAccelX/Y = mean of abs(consecutive differences)
     if (moveProfile.histCount >= 2) {
         int32_t sumAccelX = 0;
         int32_t sumAccelY = 0;
         uint8_t pairs = moveProfile.histCount - 1;
         for (uint8_t i = 0; i < pairs; i++) {
-            // For a ring buffer, we iterate over valid sequential entries
-            // Since histIndex points to next write position, valid entries are
-            // arranged with oldest at (histIndex - histCount) and newest at (histIndex - 1)
             uint8_t ci = (moveProfile.histIndex - moveProfile.histCount + i) % MOVEMENT_HISTORY_SIZE;
             uint8_t ni = (ci + 1) % MOVEMENT_HISTORY_SIZE;
             int16_t diffX = moveProfile.usbDeltaX[ni] - moveProfile.usbDeltaX[ci];
@@ -510,120 +411,421 @@ void SunBoxSyntheticHandleOutput::updateMovementProfile(int16_t usbX, int16_t us
     }
 }
 
-bool SunBoxSyntheticHandleOutput::shouldThrottleSerialOnly() {
+float SunBoxSyntheticHandleOutput::gaussianNoise(float sigma) {
+    if (sigma <= 0.0f) return 0.0f;
+
+    // LCG: generate two uniform random numbers in (0, 1)
+    blender.rngState = blender.rngState * 1664525u + 1013904223u;
+    float u1 = (float)(blender.rngState >> 1) / 2147483648.0f;  // (0, 1)
+    if (u1 < 1e-10f) u1 = 1e-10f;  // Protect log(0)
+
+    blender.rngState = blender.rngState * 1664525u + 1013904223u;
+    float u2 = (float)(blender.rngState >> 1) / 2147483648.0f;
+
+    // Box-Muller transform
+    float z = sqrtf(-2.0f * logf(u1)) * cosf(6.2831853f * u2);
+    return z * sigma;
+}
+
+void SunBoxSyntheticHandleOutput::updateSensitivity(bool hasSerial, bool sensActive) {
+    if (!(sensActive && hasSerial)) return;
+
     uint32_t now = millis();
 
-    // Reset output rate window every second
-    if (now - outputWindowStartMs >= 1000) {
-        outputPacketsThisSecond = 0;
-        outputWindowStartMs = now;
+    if (blender.sensFirstMovement) {
+        blender.sensTransitionStartMs = now;
+        blender.sensFirstMovement = false;
+    } else if (blender.sensLastSerialMs > 0 &&
+               (now - blender.sensLastSerialMs) > SENS_RESET_MS) {
+        // Gap exceeded reset threshold — restart ramp
+        blender.sensTransitionStartMs = now;
     }
 
-    // Check if outputting would exceed estimatedUsbRateHz * 1.1
-    // Using integer math: rate * (100 + margin) / 100
-    uint32_t maxRate = (uint32_t)moveProfile.estimatedUsbRateHz * (100 + OUTPUT_RATE_MARGIN_PCT) / 100;
-    return outputPacketsThisSecond >= maxRate;
+    blender.sensLastSerialMs = now;
 }
 
-void SunBoxSyntheticHandleOutput::sanitizeSignFlips(int16_t& finalX, int16_t& finalY, int16_t usbX, int16_t usbY) {
-    uint32_t now = millis();
+float SunBoxSyntheticHandleOutput::calcSensEffective(bool isX) {
+    // If no serial has arrived yet, aimbot gets nothing
+    if (blender.sensFirstMovement) return 0.0f;
 
-    // --- X axis ---
-    {
-        // Reset window if >1000ms elapsed
-        if (now - signFlipX.windowStartMs >= 1000) {
-            signFlipX.flipCount = 0;
-            signFlipX.windowStartMs = now;
-        }
+    // Check if sens reduction is even active
+    bool sensActive = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
+    if (!sensActive) return 0.0f;
 
-        int8_t curSign = (finalX > 0) ? 1 : ((finalX < 0) ? -1 : 0);
+    // Target aimbot fraction from config
+    // Config: sensReductionAmmountX=60 means user keeps 60%, aimbot gets 40%
+    float target = isX ? (100.0f - (float)sensReductionAmmountX)
+                       : (100.0f - (float)sensReductionAmmountY);
 
-        if (curSign != 0 && signFlipX.lastSign != 0 && curSign != signFlipX.lastSign) {
-            signFlipX.flipCount++;
+    // Transition ramp: 0 -> target over SENS_TRANSITION_MS
+    uint32_t elapsed = millis() - blender.sensTransitionStartMs;
+    float progress = (float)elapsed / (float)SENS_TRANSITION_MS;
+    if (progress > 1.0f) progress = 1.0f;
 
-            if (signFlipX.flipCount > MAX_SIGN_FLIPS_PER_SECOND) {
-                // Check if USB alone would NOT have flipped (serial caused it)
-                int8_t usbSign = (usbX > 0) ? 1 : ((usbX < 0) ? -1 : 0);
-                if (usbSign == 0 || usbSign == signFlipX.lastSign) {
-                    // Serial caused the flip, revert to USB-only
-                    finalX = usbX;
-                    curSign = usbSign;
-                }
-            }
-        }
+    // Smoothstep: eliminates constant-slope spectral signature of linear ramp.
+    // Natural sensitivity changes are fastest mid-transition, tapered at edges.
+    progress = progress * progress * (3.0f - 2.0f * progress);
 
-        if (curSign != 0) {
-            signFlipX.lastSign = curSign;
-        }
+    return target * progress;
+}
+
+float SunBoxSyntheticHandleOutput::calcBudget(bool isX) {
+    float avgSpeed = isX ? (float)moveProfile.avgSpeedX : (float)moveProfile.avgSpeedY;
+    float avgAccel = isX ? (float)moveProfile.avgAccelX : (float)moveProfile.avgAccelY;
+    float stddev = isX ? (float)moveProfile.speedStddevX : (float)moveProfile.speedStddevY;
+
+    bool isIdle = moveProfile.avgSpeedX < 1 && moveProfile.avgSpeedY < 1 && moveProfile.histCount >= 2;
+
+    if (isIdle) {
+        float accum = isX ? blender.accumX : blender.accumY;
+        if (accum == 0.0f) return 0.0f;
+
+        // Idle ramp: sqrt acceleration curve
+        // rampFrame is incremented once per frame in process(), not here
+        uint8_t frame = blender.rampFrame;
+        if (frame < 1) frame = 1;
+
+        float base = 2.5f * sqrtf((float)frame);
+        float sigma = base * 0.25f;
+        if (sigma < 0.4f) sigma = 0.4f;
+        float budget = base + gaussianNoise(sigma);
+        if (budget < 1.0f) budget = 1.0f;
+
+        // Cap at reasonable human onset speed
+        float cap = 15.0f + gaussianNoise(1.5f);
+        if (cap < 3.0f) cap = 3.0f;
+        if (budget > cap) budget = cap;
+
+        return budget;
     }
 
-    // --- Y axis ---
-    {
-        if (now - signFlipY.windowStartMs >= 1000) {
-            signFlipY.flipCount = 0;
-            signFlipY.windowStartMs = now;
+    // Moving state is managed in process(), not here
+
+    // Adaptive budget from profile + gaussian noise proportional to speed_stddev
+    float base = avgSpeed + avgAccel * 2.0f;
+    float sigma = stddev * 0.3f;
+    // Ensure minimum budget variance even during low-velocity movement.
+    // Without this, budget locks at a constant value (e.g., 3) for many consecutive
+    // frames, which is detectable — natural movement has gaussian-distributed speeds.
+    float minVariance = base * 0.15f;  // At least 15% of base as noise
+    if (sigma < minVariance) sigma = minVariance;
+    float budget = base + gaussianNoise(sigma);
+    if (budget < (float)MIN_SPIKE_THRESHOLD) budget = (float)MIN_SPIKE_THRESHOLD;
+
+    return budget;
+}
+
+int SunBoxSyntheticHandleOutput::calcSpreadFrames(bool isX) {
+    float remaining = fabsf(isX ? blender.accumX : blender.accumY);
+    float avgSpeed = isX ? (float)moveProfile.avgSpeedX : (float)moveProfile.avgSpeedY;
+
+    if (remaining <= 0.0f || avgSpeed < 0.5f) return 1;
+
+    int spread = (int)ceilf(remaining / avgSpeed);
+    if (spread < 1) spread = 1;
+    if (spread > 16) spread = 16;
+    return spread;
+}
+
+float SunBoxSyntheticHandleOutput::drainAccumulator(float available, int spread, bool isX) {
+    float remaining = isX ? blender.accumX : blender.accumY;
+    if (remaining == 0.0f || available <= 0.0f) return 0.0f;
+
+    float sign = (remaining > 0.0f) ? 1.0f : -1.0f;
+    float absRemaining = fabsf(remaining);
+
+    // Target per-frame slice
+    float targetSlice = absRemaining / (float)spread;
+    float actualSlice = (targetSlice < available) ? targetSlice : available;
+
+    // Sub-pixel accumulator for spread
+    float* spreadAccum = isX ? &blender.spreadAccumX : &blender.spreadAccumY;
+    float buffered = actualSlice + fabsf(*spreadAccum);
+    int drainI = (int)buffered;
+    *spreadAccum = (buffered - (float)drainI) * sign;
+
+    if (drainI == 0) return 0.0f;
+
+    // Don't drain more than what's in the accumulator
+    if (drainI > (int)absRemaining) drainI = (int)absRemaining;
+    if (drainI == 0) return 0.0f;
+
+    if (isX) blender.accumX -= sign * (float)drainI;
+    else     blender.accumY -= sign * (float)drainI;
+
+    return sign * (float)drainI;
+}
+
+float SunBoxSyntheticHandleOutput::resolveDirection(float userVal, float aimbotVal, bool isX) {
+    uint8_t* opposingFrames = isX ? &blender.opposingFramesX : &blender.opposingFramesY;
+
+    // Zero or same direction: just add
+    if (userVal == 0.0f || aimbotVal == 0.0f) {
+        *opposingFrames = 0;
+        return userVal + aimbotVal;
+    }
+
+    bool sameSign = (userVal > 0.0f) == (aimbotVal > 0.0f);
+    if (sameSign) {
+        *opposingFrames = 0;
+        return userVal + aimbotVal;
+    }
+
+    // Opposing directions
+    (*opposingFrames)++;
+    float absUser = fabsf(userVal);
+    float absAimbot = fabsf(aimbotVal);
+
+    if (absAimbot <= absUser) {
+        // Aimbot dampens user but doesn't overcome. Keep user direction.
+        float userSign = (userVal > 0.0f) ? 1.0f : -1.0f;
+        float dampened = absUser - absAimbot;
+        // When aimbot exactly cancels user (result=0), preserve minimum user movement
+        // to prevent "sticky cursor" feel at low sensEff where aimbot drains exactly 1
+        if (dampened < 0.5f && absUser >= 1.0f) {
+            dampened = 0.5f;  // Sub-pixel accumulator will round to 1 over 2 frames
         }
+        return userSign * dampened;
+    }
 
-        int8_t curSign = (finalY > 0) ? 1 : ((finalY < 0) ? -1 : 0);
-
-        if (curSign != 0 && signFlipY.lastSign != 0 && curSign != signFlipY.lastSign) {
-            signFlipY.flipCount++;
-
-            if (signFlipY.flipCount > MAX_SIGN_FLIPS_PER_SECOND) {
-                int8_t usbSign = (usbY > 0) ? 1 : ((usbY < 0) ? -1 : 0);
-                if (usbSign == 0 || usbSign == signFlipY.lastSign) {
-                    finalY = usbY;
-                    curSign = usbSign;
-                }
-            }
-        }
-
-        if (curSign != 0) {
-            signFlipY.lastSign = curSign;
-        }
+    // Aimbot exceeds user. Only flip after 2+ consecutive opposing frames.
+    if (*opposingFrames >= 2) {
+        float aimbotSign = (aimbotVal > 0.0f) ? 1.0f : -1.0f;
+        return aimbotSign * (absAimbot - absUser);
+    } else {
+        // First opposing frame: cancel to zero, don't flip yet
+        return 0.0f;
     }
 }
 
-void SunBoxSyntheticHandleOutput::clampValueSpikes(int16_t& finalX, int16_t& finalY) {
-    // Need at least 2 output history entries
-    if (moveProfile.outCount < 2) return;
-
-    // Get previous output value (most recent entry)
-    uint8_t prevIdx = (moveProfile.outIndex == 0) ? (MOVEMENT_HISTORY_SIZE - 1) : (moveProfile.outIndex - 1);
-    int16_t prevOutX = moveProfile.outputX[prevIdx];
-    int16_t prevOutY = moveProfile.outputY[prevIdx];
-
-    // Adaptive threshold per axis: max(MIN_SPIKE_THRESHOLD, avgSpeed + avgAccel * 2)
-    int16_t threshX = moveProfile.avgSpeedX + moveProfile.avgAccelX * 2;
-    if (threshX < MIN_SPIKE_THRESHOLD) threshX = MIN_SPIKE_THRESHOLD;
-
-    int16_t threshY = moveProfile.avgSpeedY + moveProfile.avgAccelY * 2;
-    if (threshY < MIN_SPIKE_THRESHOLD) threshY = MIN_SPIKE_THRESHOLD;
-
-    // Clamp X
-    int16_t diffX = finalX - prevOutX;
-    if (diffX > threshX) {
-        finalX = prevOutX + threshX;
-    } else if (diffX < -threshX) {
-        finalX = prevOutX - threshX;
+void SunBoxSyntheticHandleOutput::blendMovement(int16_t& outX, int16_t& outY,
+                                                  int16_t usbX, int16_t usbY, bool hasAimbot) {
+    if (!hasAimbot) {
+        return;
     }
 
-    // Clamp Y
-    int16_t diffY = finalY - prevOutY;
-    if (diffY > threshY) {
-        finalY = prevOutY + threshY;
-    } else if (diffY < -threshY) {
-        finalY = prevOutY - threshY;
+    float userSpeed = sqrtf((float)(usbX * usbX + usbY * usbY));
+    bool isIdle = moveProfile.avgSpeedX < 1 && moveProfile.avgSpeedY < 1;
+
+    if (userSpeed < 0.5f || isIdle) {
+        // === IDLE PATH: burst drain ===
+        blendIdleBurst(outX, outY, usbX, usbY);
+    } else {
+        // === MOVING PATH: direction blend ===
+        blendMovingDirection(outX, outY, usbX, usbY, userSpeed);
     }
 }
 
-void SunBoxSyntheticHandleOutput::recordOutput(int16_t finalX, int16_t finalY) {
-    moveProfile.outputX[moveProfile.outIndex] = finalX;
-    moveProfile.outputY[moveProfile.outIndex] = finalY;
-    moveProfile.outIndex = (moveProfile.outIndex + 1) % MOVEMENT_HISTORY_SIZE;
-    if (moveProfile.outCount < MOVEMENT_HISTORY_SIZE) {
-        moveProfile.outCount++;
+void SunBoxSyntheticHandleOutput::blendIdleBurst(int16_t& outX, int16_t& outY,
+                                                   int16_t usbX, int16_t usbY) {
+    // Idle path with burst drain.
+    // Advances a frame counter through burst/pause cycles. Only drains
+    // the accumulator during burst windows (~30% of frames). During pause
+    // windows, returns the raw USB values (typically zero when idle).
+
+    // Adapt burst ratio to accumulator size — larger accumulator = more frequent bursts
+    float accumMag = sqrtf(blender.accumX * blender.accumX + blender.accumY * blender.accumY);
+    uint8_t effectivePause = blender.idlePauseLength;
+    if (accumMag > 10.0f) {
+        effectivePause = blender.idlePauseLength > 2 ? blender.idlePauseLength - 2 : 2;
     }
+
+    // Advance burst state machine
+    blender.idleBurstCounter++;
+
+    if (blender.idleBurstActive) {
+        // Currently in a drain burst
+        if (blender.idleBurstCounter >= blender.idleBurstLength) {
+            blender.idleBurstActive = false;
+            blender.idleBurstCounter = 0;
+            // Vary next pause length slightly (5-8)
+            blender.idlePauseLength = 5 + (uint8_t)(fabsf(gaussianNoise(1.5f))) % 4;
+        }
+    } else {
+        // Currently in a pause
+        if (blender.idleBurstCounter >= effectivePause) {
+            blender.idleBurstActive = true;
+            blender.idleBurstCounter = 0;
+            // Vary next burst length slightly (2-3)
+            blender.idleBurstLength = 2 + (uint8_t)(fabsf(gaussianNoise(0.8f))) % 2;
+        }
+    }
+
+    // If in pause window, return USB passthrough (no drain)
+    if (!blender.idleBurstActive) {
+        // Still store budget for diagnostics
+        for (int axis = 0; axis < 2; axis++) {
+            bool isX = (axis == 0);
+            float budget = calcBudget(isX);
+            if (isX) blender.lastBudgetX = budget;
+            else     blender.lastBudgetY = budget;
+        }
+        outX = usbX;
+        outY = usbY;
+        return;
+    }
+
+    // In burst window — do standard per-axis budget drain (same as baseline idle)
+    outX = usbX;
+    outY = usbY;
+
+    for (int axis = 0; axis < 2; axis++) {
+        bool isX = (axis == 0);
+        float usbVal = isX ? (float)usbX : (float)usbY;
+
+        // Calculate budget
+        float budget = calcBudget(isX);
+        if (isX) blender.lastBudgetX = budget;
+        else     blender.lastBudgetY = budget;
+        if (budget <= 0.0f) continue;
+
+        float userContrib = usbVal;
+
+        // Idle: aimbot gets full budget
+        float aimbotBudget = budget;
+
+        // Ensure minimum drain rate
+        float accumVal = isX ? blender.accumX : blender.accumY;
+        if (fabsf(accumVal) >= 1.0f && aimbotBudget < 1.0f) {
+            aimbotBudget = 1.0f;
+        }
+
+        // Drain accumulator
+        int spread = calcSpreadFrames(isX);
+        float aimbotContrib = drainAccumulator(aimbotBudget, spread, isX);
+
+        if (aimbotContrib == 0.0f) continue;
+
+        // Direction resolution
+        float combined = resolveDirection(userContrib, aimbotContrib, isX);
+
+        // Add noise
+        float noiseSigma = fabsf(aimbotBudget) * 0.05f;
+        if (noiseSigma < 0.2f) noiseSigma = 0.2f;
+        combined += gaussianNoise(noiseSigma);
+
+        // Quantize with sub-pixel accumulator
+        float* outputAccum = isX ? &blender.outputAccumX : &blender.outputAccumY;
+        float total = combined + *outputAccum;
+        int16_t result = (int16_t)total;
+        *outputAccum = total - (float)result;
+
+        if (isX) outX = result;
+        else     outY = result;
+    }
+}
+
+void SunBoxSyntheticHandleOutput::blendMovingDirection(int16_t& outX, int16_t& outY,
+                                                         int16_t usbX, int16_t usbY, float userSpeed) {
+    // Moving path: direction-based vector blending.
+    // Steers user's movement vector toward the aimbot target direction
+    // while preserving the user's speed magnitude. This maintains
+    // speed autocorrelation since output speed ~= input speed.
+
+    // 1. Compute blend_factor from avg sensEff (0..1)
+    float sensEffX = calcSensEffective(true);
+    float sensEffY = calcSensEffective(false);
+    float avgSensEff = (sensEffX + sensEffY) / 2.0f;
+    float blendFactor = avgSensEff / 100.0f;
+    if (blendFactor > 1.0f) blendFactor = 1.0f;
+    if (blendFactor < 0.0f) blendFactor = 0.0f;
+
+    // Compute budgets for diagnostics
+    blender.lastBudgetX = calcBudget(true);
+    blender.lastBudgetY = calcBudget(false);
+
+    // If no blend, passthrough
+    if (blendFactor < 0.001f) {
+        outX = usbX;
+        outY = usbY;
+        return;
+    }
+
+    // 2. Get aimbot direction from accumulator
+    float accumX = blender.accumX;
+    float accumY = blender.accumY;
+    float accumMag = sqrtf(accumX * accumX + accumY * accumY);
+
+    if (accumMag < 0.5f) {
+        // No meaningful accumulator — passthrough
+        outX = usbX;
+        outY = usbY;
+        return;
+    }
+
+    // Aimbot direction unit vector
+    float aimDirX = accumX / accumMag;
+    float aimDirY = accumY / accumMag;
+
+    // Target vector: aimbot direction at user's speed magnitude
+    float targetX = aimDirX * userSpeed;
+    float targetY = aimDirY * userSpeed;
+
+    // 3. Stochastic steering: randomly skip steering on some frames to break
+    // up acceleration autocorrelation. Anti-correlation: if we steered last
+    // frame, slightly less likely to steer this frame (and vice versa).
+    float prob = 0.55f;  // base steering probability
+    if (blender.prevSteerApplied) {
+        prob -= 0.1f;
+    } else {
+        prob += 0.1f;
+    }
+
+    float randVal = fabsf(gaussianNoise(1.0f)) / 3.0f;
+    bool applySteer = (randVal < prob);
+
+    if (!applySteer) {
+        blender.prevSteerApplied = false;
+        outX = usbX;
+        outY = usbY;
+        return;
+    }
+
+    blender.prevSteerApplied = true;
+
+    // 4. Blend: output = user * (1-blend) + target * blend
+    float blendedX = (float)usbX * (1.0f - blendFactor) + targetX * blendFactor;
+    float blendedY = (float)usbY * (1.0f - blendFactor) + targetY * blendFactor;
+
+    // 5. Compute actual steering amount
+    float steerX = blendedX - (float)usbX;
+    float steerY = blendedY - (float)usbY;
+    float steerMag = sqrtf(steerX * steerX + steerY * steerY);
+
+    // 6. Drain accumulator by the actual steering contribution
+    // Drain proportional to how much we steered, projected onto aimbot direction
+    float drainAmount = steerX * aimDirX + steerY * aimDirY;  // dot product
+    if (drainAmount > 0.0f) {
+        float drainX = drainAmount * aimDirX;
+        float drainY = drainAmount * aimDirY;
+
+        // Clamp drain to not exceed accumulator
+        if (fabsf(drainX) > fabsf(accumX)) drainX = accumX;
+        if (fabsf(drainY) > fabsf(accumY)) drainY = accumY;
+
+        blender.accumX -= drainX;
+        blender.accumY -= drainY;
+
+        // Snap small accumulators to zero
+        if (fabsf(blender.accumX) < 1.0f) blender.accumX = 0.0f;
+        if (fabsf(blender.accumY) < 1.0f) blender.accumY = 0.0f;
+    }
+
+    // 7. Add small noise proportional to steer magnitude
+    if (steerMag > 0.1f) {
+        float noiseSigma = steerMag * 0.05f;
+        if (noiseSigma < 0.2f) noiseSigma = 0.2f;
+        blendedX += gaussianNoise(noiseSigma);
+        blendedY += gaussianNoise(noiseSigma);
+    }
+
+    // 8. Quantize with sub-pixel accumulators
+    float totalX = blendedX + blender.outputAccumX;
+    float totalY = blendedY + blender.outputAccumY;
+    outX = (int16_t)totalX;
+    outY = (int16_t)totalY;
+    blender.outputAccumX = totalX - (float)outX;
+    blender.outputAccumY = totalY - (float)outY;
 }
 
 void SunBoxSyntheticHandleOutput::handleSpinBot(uint8_t currentButtons, uint8_t previousButtons, bool isSerialPress) {
@@ -631,11 +833,11 @@ void SunBoxSyntheticHandleOutput::handleSpinBot(uint8_t currentButtons, uint8_t 
     if (enableSpinning == 0) {
         return;
     }
-    
+
     // Check timing preference
     bool shouldSpinBefore = (spinBeforeAfterMouseEvent == 0 || spinBeforeAfterMouseEvent == 2);
     bool shouldSpinAfter = (spinBeforeAfterMouseEvent == 1 || spinBeforeAfterMouseEvent == 2);
-    
+
     if (shouldSpinBefore) {
         // Start spin immediately
         spinActive = true;
@@ -656,12 +858,12 @@ void SunBoxSyntheticHandleOutput::updateSpinBot(int16_t& xMovement, int16_t& yMo
         spinActive = false;
         return;
     }
-    
+
     // Check if it's time for next rotation
     if (millis() >= spinNextMoveTime) {
         xMovement += spinAmountPerRotation;
         spinRotationsRemaining--;
-        
+
         if (spinRotationsRemaining > 0) {
             spinNextMoveTime = millis() + spinDelayBetweenRotationsMilliseconds;
         } else {
@@ -675,11 +877,11 @@ bool SunBoxSyntheticHandleOutput::shouldExcludeButton(uint8_t currentButtons, ui
            (millis() - activationTimestamp4MouseButtonExclusion) <= BUTTON_EXCLUSION_DURATION_MS;
 }
 
-void SunBoxSyntheticHandleOutput::handleMouseButtonConfigCheck(uint8_t& buttons, uint8_t unmodifiedButtons, 
-                                                              uint8_t previousButtons, uint8_t buttonMask, 
+void SunBoxSyntheticHandleOutput::handleMouseButtonConfigCheck(uint8_t& buttons, uint8_t unmodifiedButtons,
+                                                              uint8_t previousButtons, uint8_t buttonMask,
                                                               int disablePassthroughOption, unsigned long& lastPressTime) {
     unsigned long currentTime = millis();
-    
+
     if (unmodifiedButtons & buttonMask) {
         // Button is pressed
         if (disablePassthroughOption == 0) {
@@ -713,7 +915,7 @@ void SunBoxSyntheticHandleOutput::handleMouseButtonConfigCheck(uint8_t& buttons,
                     buttons &= ~buttonMask;
                 }
             }
-            
+
             // Also check MMB exclusion
             if (shouldExcludeButton(unmodifiedButtons, previousButtons, buttonMask)) {
                 buttons &= ~buttonMask;

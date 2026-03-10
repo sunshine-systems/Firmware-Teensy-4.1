@@ -40,15 +40,15 @@ public:
     static uint32_t getCombinedOutputCount() { uint32_t count = combinedOutputPacketCount; combinedOutputPacketCount = 0; return count; }
 
 private:
-    // --- Hardcoded constants for movement sanitization ---
+    // --- Hardcoded constants ---
     static const uint8_t MOVEMENT_HISTORY_SIZE = 32;
-    static const uint8_t MAX_SIGN_FLIPS_PER_SECOND = 8;
     static const uint8_t SENS_RAMP_MS = 32;
-    static const uint8_t OUTPUT_RATE_MARGIN_PCT = 10;
     static const int16_t MIN_SPIKE_THRESHOLD = 3;
-    static const uint8_t ACCUMULATED_DECAY_MS = 50;  // Discard accumulated serial deltas after 50ms
+    static const uint8_t IDLE_RAMP_FRAMES = 75;
+    static const uint16_t SENS_TRANSITION_MS = 200;
+    static const uint16_t SENS_RESET_MS = 250;
 
-    // --- Movement sanitization structs ---
+    // --- Movement profile tracking ---
 
     struct MovementProfileTracker {
         // Real USB movement history (ring buffer)
@@ -65,11 +65,9 @@ private:
         int16_t maxDeltaX;
         int16_t maxDeltaY;
 
-        // Output history for spike detection (combined output)
-        int16_t outputX[MOVEMENT_HISTORY_SIZE];
-        int16_t outputY[MOVEMENT_HISTORY_SIZE];
-        uint8_t outIndex;
-        uint8_t outCount;
+        // Speed standard deviation (for variable budget)
+        int16_t speedStddevX;
+        int16_t speedStddevY;
 
         // USB packet rate tracking
         uint32_t usbPacketCount;
@@ -77,17 +75,51 @@ private:
         uint16_t estimatedUsbRateHz;
     };
 
-    struct SignFlipTracker {
-        int8_t lastSign;
-        uint8_t flipCount;
-        uint32_t windowStartMs;
-    };
+    struct AimbotBlender {
+        // Accumulator — ALL serial deltas go here, drained over multiple frames
+        float accumX;
+        float accumY;
 
-    struct SensReductionSmoother {
-        uint32_t transitionStartMs;
-        bool isTransitioning;
-        int16_t lastEffectiveReductionX;  // 0-100
-        int16_t lastEffectiveReductionY;  // 0-100
+        // Spread sub-pixel accumulators (fractional drain remainder)
+        float spreadAccumX;
+        float spreadAccumY;
+
+        // Output sub-pixel accumulators (final quantization remainder)
+        float outputAccumX;
+        float outputAccumY;
+
+        // Direction conflict counters (consecutive opposing frames before allowing flip)
+        uint8_t opposingFramesX;
+        uint8_t opposingFramesY;
+
+        // Idle ramp state
+        bool wasIdle;
+        uint8_t rampFrame;
+
+        // Sensitivity transition ramp state
+        uint32_t sensTransitionStartMs;
+        uint32_t sensLastSerialMs;
+        bool sensFirstMovement;
+        float sensEffX;  // Current effective aimbot fraction (0-100)
+        float sensEffY;
+
+        // RNG state for gaussian noise (LCG seed)
+        uint32_t rngState;
+
+        // Last computed budget (cached for logging, avoids re-calling calcBudget)
+        float lastBudgetX;
+        float lastBudgetY;
+
+        // --- Direction-blend state ---
+
+        // Burst drain state for idle path
+        uint8_t idleBurstCounter;
+        bool idleBurstActive;
+        uint8_t idleBurstLength;   // frames to drain (2-3)
+        uint8_t idlePauseLength;   // frames to pause (5-8)
+
+        // Stochastic steering state for moving path
+        bool prevSteerApplied;     // anti-correlation tracking
     };
 
     // References
@@ -114,47 +146,42 @@ private:
     unsigned long lastMB4PressTime;
     unsigned long lastMB5PressTime;
 
-    // Sensitivity reduction accumulators
-    int sensReductionXAccumulator;
-    int sensReductionYAccumulator;
-
     // Spin bot state
     bool spinActive;
     int spinRotationsRemaining;
     unsigned long spinNextMoveTime;
     int spinCurrentX;
 
-    // --- Movement sanitization members ---
+    // --- Movement blending members ---
     MovementProfileTracker moveProfile;
-    SignFlipTracker signFlipX;
-    SignFlipTracker signFlipY;
-    SensReductionSmoother sensSmooth;
+    AimbotBlender blender;
 
-    // Accumulated serial deltas for output rate regulation
-    int16_t accumulatedSerialX;
-    int16_t accumulatedSerialY;
-    uint32_t accumulatedSerialTimestampMs;  // When accumulation started (for decay)
-
-    // Output rate tracking
-    uint32_t outputPacketsThisSecond;
-    uint32_t outputWindowStartMs;
+    // Serial-only output pacing (output at USB polling rate when mouse is idle)
+    uint32_t lastOutputMs;
 
     // Helper methods
     void outputMouseData(const uint8_t* data, uint32_t length);
     void performButtonFiltering(uint8_t& buttons, uint8_t previousButtons, uint8_t unmodifiedButtons);
-    void modifyMovementWithSerialData(int16_t& usbX, int16_t& usbY, int16_t serialX, int16_t serialY);
     void handleSpinBot(uint8_t currentButtons, uint8_t previousButtons, bool isSerialPress);
     void updateSpinBot(int16_t& xMovement, int16_t& yMovement);
     bool shouldExcludeButton(uint8_t currentButtons, uint8_t previousButtons, uint8_t buttonMask);
     void handleMouseButtonConfigCheck(uint8_t& buttons, uint8_t unmodifiedButtons, uint8_t previousButtons,
                                      uint8_t buttonMask, int disablePassthroughOption, unsigned long& lastPressTime);
 
-    // Movement sanitization methods
+    // Movement profile methods
     void updateMovementProfile(int16_t usbX, int16_t usbY, bool hasUSBData);
-    void sanitizeSignFlips(int16_t& finalX, int16_t& finalY, int16_t usbX, int16_t usbY);
-    void clampValueSpikes(int16_t& finalX, int16_t& finalY);
-    void recordOutput(int16_t finalX, int16_t finalY);
-    bool shouldThrottleSerialOnly();
+
+    // New blending pipeline methods
+    void blendMovement(int16_t& outX, int16_t& outY, int16_t usbX, int16_t usbY, bool hasAimbot);
+    void blendIdleBurst(int16_t& outX, int16_t& outY, int16_t usbX, int16_t usbY);
+    void blendMovingDirection(int16_t& outX, int16_t& outY, int16_t usbX, int16_t usbY, float userSpeed);
+    float calcBudget(bool isX);
+    float drainAccumulator(float available, int spread, bool isX);
+    float resolveDirection(float userVal, float aimbotVal, bool isX);
+    int calcSpreadFrames(bool isX);
+    void updateSensitivity(bool hasSerial, bool sensActive);
+    float calcSensEffective(bool isX);
+    float gaussianNoise(float sigma);
 
     // Static counters for polling rate measurement
     static uint32_t serialDevicePacketCount;    // S counter
