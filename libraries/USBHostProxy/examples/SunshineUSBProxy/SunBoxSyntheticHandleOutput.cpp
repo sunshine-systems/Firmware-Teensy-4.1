@@ -144,9 +144,11 @@ void SunBoxSyntheticHandleOutput::process() {
     // (sensEff=0 → aimbot drains nothing, USB=0 → no user movement) which creates
     // a stutter pattern: real movement, zero, real movement, zero.
     if (!hasUSBData) {
-        bool sensActive = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
+        bool sensActiveLocal = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
+        bool recentSerialLocal = blender.sensLastSerialMs > 0 &&
+                                 (millis() - blender.sensLastSerialMs) <= SENS_RESET_MS;
         bool hasAccumulator = fabsf(blender.accumX) >= 1.0f || fabsf(blender.accumY) >= 1.0f;
-        if (!sensActive || (!hasAccumulator && !hasSerialData)) {
+        if (!(sensActiveLocal || recentSerialLocal) || (!hasAccumulator && !hasSerialData)) {
             return;  // Nothing useful to output — don't insert zero frames
         }
         // Pace serial-only output at the mouse's polling rate
@@ -175,33 +177,36 @@ void SunBoxSyntheticHandleOutput::process() {
     if (fabsf(blender.accumY) < 1.0f) blender.accumY = 0.0f;
 
     // Force-flush accumulator when it can never meaningfully drain.
-    // Cases that cause drain deadlock (accumulator stuck forever):
-    //   1. sensActive is false (aim key released)
-    //   2. sensActive is true but sensEff < 5.0 on both axes (ramp barely started,
-    //      or sensReductionAmmount=100 → target=0%). Without this threshold, the MIN
-    //      floor of 1.0 fires at sensEff=0.5 and drains full serial into output even
-    //      though the system should be in "user only" mode.
+    // With sensReductionDuration=0, sensActive expires within 1ms of each trigger.
+    // Don't flush accumulator just because sensActive is momentarily false between
+    // serial packets — only flush after a genuine serial gap (>250ms).
     float sensEffCheckX = calcSensEffective(true);
     float sensEffCheckY = calcSensEffective(false);
-    bool canDrain = sensActive && (sensEffCheckX >= 5.0f || sensEffCheckY >= 5.0f);
-    if (!canDrain) {
+    bool recentSerial = blender.sensLastSerialMs > 0 &&
+                        (millis() - blender.sensLastSerialMs) <= SENS_RESET_MS;
+    bool canDrain = (sensActive || recentSerial) &&
+                    (sensEffCheckX >= 5.0f || sensEffCheckY >= 5.0f);
+    if (!canDrain && !recentSerial) {
         blender.accumX = 0.0f;
         blender.accumY = 0.0f;
     }
 
     bool hasAimbot = hasSerialData || fabsf(blender.accumX) >= 1.0f || fabsf(blender.accumY) >= 1.0f;
 
-    // Clean up when aimbot finishes: reset all blender state for clean transition
+    // Clean up when aimbot finishes: reset all blender state for clean transition.
+    // Use serial gap check instead of sensActive — with sensReductionDuration=0,
+    // sensActive expires within 1ms of each trigger, causing false cleanups between
+    // serial packets that are only 5-12ms apart. Only reset after a genuine gap.
     if (!hasAimbot && !hasSerialData) {
         if (!blender.sensFirstMovement) {
-            // Only reset the sensitivity ramp if sensActive has expired.
-            // If sensActive is still true (lockout window open), keep the ramp
-            // state so the next serial packet continues from where it left off
-            // instead of restarting the sawtooth from 0.
-            if (!sensActive) {
+            bool serialGap = blender.sensLastSerialMs == 0 ||
+                             (millis() - blender.sensLastSerialMs) > SENS_RESET_MS;
+            if (!sensActive && serialGap) {
                 blender.sensFirstMovement = true;
                 blender.sensLastSerialMs = 0;
                 blender.sensTransitionStartMs = 0;
+                blender.sensFloorX = 0.0f;
+                blender.sensFloorY = 0.0f;
             }
             // Always clean up sub-pixel and blending state
             blender.spreadAccumX = 0.0f;
@@ -212,10 +217,8 @@ void SunBoxSyntheticHandleOutput::process() {
             blender.opposingFramesY = 0;
             blender.wasIdle = true;
             blender.rampFrame = 0;
-            // Reset direction-blend state
-            blender.ouIntensity = 0.40f;  // OU back to mu
-            blender.sensFloorX = 0.0f;    // Next engagement ramps from 0
-            blender.sensFloorY = 0.0f;
+            // Reset OU state but preserve sensFloor (only reset above with full cleanup)
+            blender.ouIntensity = 0.40f;
             blender.prevSteerApplied = false;
         }
     }
@@ -451,9 +454,14 @@ float SunBoxSyntheticHandleOutput::calcSensEffective(bool isX) {
     // If no serial has arrived yet, aimbot gets nothing
     if (blender.sensFirstMovement) return 0.0f;
 
-    // Check if sens reduction is even active
-    bool sensActive = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
-    if (!sensActive) return 0.0f;
+    // Check if sens reduction is even active.
+    // With sensReductionDuration=0, sensActive expires within 1ms of each trigger.
+    // Allow sensEff to persist between serial packets using the serial gap check,
+    // otherwise the ramp resets to 0 on every USB-only frame.
+    bool sensActiveNow = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
+    bool recentSerial = blender.sensLastSerialMs > 0 &&
+                        (millis() - blender.sensLastSerialMs) <= SENS_RESET_MS;
+    if (!sensActiveNow && !recentSerial) return 0.0f;
 
     // Target aimbot fraction from config
     // Config: sensReductionAmmountX=60 means user keeps 60%, aimbot gets 40%
