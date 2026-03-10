@@ -45,8 +45,11 @@ private:
     static const uint8_t SENS_RAMP_MS = 32;
     static const int16_t MIN_SPIKE_THRESHOLD = 3;
     static const uint8_t IDLE_RAMP_FRAMES = 75;
-    static const uint16_t SENS_TRANSITION_MS = 200;
     static const uint16_t SENS_RESET_MS = 250;
+
+    // v8: minimum spread frames — serial distributed over at least this many USB frames
+    static const uint8_t MIN_SPREAD_IDLE = 4;
+    static const uint8_t MIN_SPREAD_MOVING = 3;
 
     // --- Movement profile tracking ---
 
@@ -88,20 +91,13 @@ private:
         float outputAccumX;
         float outputAccumY;
 
-        // Direction conflict counters (consecutive opposing frames before allowing flip)
-        uint8_t opposingFramesX;
-        uint8_t opposingFramesY;
-
         // Idle ramp state
         bool wasIdle;
         uint8_t rampFrame;
 
-        // Sensitivity transition ramp state
-        uint32_t sensTransitionStartMs;
+        // Serial timing (for recentSerial checks and cleanup gating)
         uint32_t sensLastSerialMs;
         bool sensFirstMovement;
-        float sensEffX;  // Current effective aimbot fraction (0-100)
-        float sensEffY;
 
         // RNG state for gaussian noise (LCG seed)
         uint32_t rngState;
@@ -110,17 +106,9 @@ private:
         float lastBudgetX;
         float lastBudgetY;
 
-        // --- Direction-blend state ---
-
-        // OU-process drain intensity for idle path (replaces burst/pause)
+        // OU-process drain intensity for idle path
         float ouIntensity;         // current OU process value [0, 1]
 
-        // sensEff ramp continuity (snapshot on gap reset)
-        float sensFloorX;          // sensEff value at time of last gap reset
-        float sensFloorY;
-
-        // Stochastic steering state for moving path
-        bool prevSteerApplied;     // anti-correlation tracking
     };
 
     // References
@@ -172,16 +160,15 @@ private:
     // Movement profile methods
     void updateMovementProfile(int16_t usbX, int16_t usbY, bool hasUSBData);
 
-    // New blending pipeline methods
+    // v8 blending pipeline — simple USB scaling + serial drain
     void blendMovement(int16_t& outX, int16_t& outY, int16_t usbX, int16_t usbY, bool hasAimbot);
-    void blendIdleBurst(int16_t& outX, int16_t& outY, int16_t usbX, int16_t usbY);
-    void blendMovingDirection(int16_t& outX, int16_t& outY, int16_t usbX, int16_t usbY, float userSpeed);
+    void blendIdle(float& outX, float& outY, int16_t usbX, int16_t usbY);
+    void blendMoving(float& outX, float& outY, int16_t usbX, int16_t usbY);
+    float scaleUsbAxis(int16_t usbVal, bool isX);
+    float drainAxis(bool isX, float drainAmount);
+    int combineAndQuantize(float scaledUsb, float drainVal, bool isX);
     float calcBudget(bool isX);
-    float drainAccumulator(float available, int spread, bool isX);
-    float resolveDirection(float userVal, float aimbotVal, bool isX);
     int calcSpreadFrames(bool isX);
-    void updateSensitivity(bool hasSerial, bool sensActive);
-    float calcSensEffective(bool isX);
     float gaussianNoise(float sigma);
 
     // Static counters for polling rate measurement

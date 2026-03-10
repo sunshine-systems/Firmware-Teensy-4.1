@@ -29,15 +29,10 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
     memset(&blender, 0, sizeof(blender));
     blender.wasIdle = true;
     blender.sensFirstMovement = true;
-    blender.sensEffX = 0.0f;   // Aimbot starts at 0% until ramp
-    blender.sensEffY = 0.0f;
     blender.rngState = 1;      // Will be re-seeded in begin()
 
-    // Direction-blend state
-    blender.ouIntensity = 0.40f;   // OU process starts at mu (stationary)
-    blender.sensFloorX = 0.0f;
-    blender.sensFloorY = 0.0f;
-    blender.prevSteerApplied = false;
+    // OU process starts at mu (stationary)
+    blender.ouIntensity = 0.40f;
 }
 
 void SunBoxSyntheticHandleOutput::begin() {
@@ -133,6 +128,8 @@ void SunBoxSyntheticHandleOutput::process() {
     if (hasSerialData) {
         blender.accumX += (float)serialState.x;
         blender.accumY += (float)serialState.y;
+        blender.sensLastSerialMs = millis();
+        blender.sensFirstMovement = false;
     }
 
     // === STEP 2: Handle missing USB frames ===
@@ -167,26 +164,21 @@ void SunBoxSyntheticHandleOutput::process() {
     // Only update profile when we have actual USB data (don't pollute with zeros)
     updateMovementProfile(usbState.x, usbState.y, hasUSBData);
 
-    // === STEP 4: Update sensitivity ramp ===
+    // === STEP 4: Sensitivity active check ===
     bool sensActive = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
-    updateSensitivity(hasSerialData, sensActive);
 
     // === STEP 5: Flush sub-pixel residuals and detect aimbot state ===
     // Snap accumulator to zero when residual is < 1.0 (can never drain via integer truncation)
     if (fabsf(blender.accumX) < 1.0f) blender.accumX = 0.0f;
     if (fabsf(blender.accumY) < 1.0f) blender.accumY = 0.0f;
 
-    // Force-flush accumulator when it can never meaningfully drain.
+    // Force-flush accumulator after genuine serial gap.
     // With sensReductionDuration=0, sensActive expires within 1ms of each trigger.
     // Don't flush accumulator just because sensActive is momentarily false between
     // serial packets — only flush after a genuine serial gap (>250ms).
-    float sensEffCheckX = calcSensEffective(true);
-    float sensEffCheckY = calcSensEffective(false);
     bool recentSerial = blender.sensLastSerialMs > 0 &&
                         (millis() - blender.sensLastSerialMs) <= SENS_RESET_MS;
-    bool canDrain = (sensActive || recentSerial) &&
-                    (sensEffCheckX >= 5.0f || sensEffCheckY >= 5.0f);
-    if (!canDrain && !recentSerial) {
+    if (!sensActive && !recentSerial) {
         blender.accumX = 0.0f;
         blender.accumY = 0.0f;
     }
@@ -204,22 +196,15 @@ void SunBoxSyntheticHandleOutput::process() {
             if (!sensActive && serialGap) {
                 blender.sensFirstMovement = true;
                 blender.sensLastSerialMs = 0;
-                blender.sensTransitionStartMs = 0;
-                blender.sensFloorX = 0.0f;
-                blender.sensFloorY = 0.0f;
             }
             // Always clean up sub-pixel and blending state
             blender.spreadAccumX = 0.0f;
             blender.spreadAccumY = 0.0f;
             blender.outputAccumX = 0.0f;
             blender.outputAccumY = 0.0f;
-            blender.opposingFramesX = 0;
-            blender.opposingFramesY = 0;
             blender.wasIdle = true;
             blender.rampFrame = 0;
-            // Reset OU state but preserve sensFloor (only reset above with full cleanup)
             blender.ouIntensity = 0.40f;
-            blender.prevSteerApplied = false;
         }
     }
 
@@ -301,14 +286,12 @@ void SunBoxSyntheticHandleOutput::process() {
 
     // === STEP 10: Log when aimbot active (including drain frames) ===
     if (hasSerialData || blender.accumX != 0.0f || blender.accumY != 0.0f) {
-        float sensEffX = calcSensEffective(true);
-        float sensEffY = calcSensEffective(false);
         logger.infof("SYN:%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
                      millis(),
                      csvRawUsbX, csvRawUsbY,
                      csvRawSerialX, csvRawSerialY,
                      sensActive ? 1 : 0,
-                     (int)sensEffX, (int)sensEffY,
+                     (int)sensReductionAmmountX, (int)sensReductionAmmountY,
                      finalX, finalY,
                      (int)blender.lastBudgetX, (int)blender.lastBudgetY,
                      (int)blender.accumX, (int)blender.accumY);
@@ -428,64 +411,6 @@ float SunBoxSyntheticHandleOutput::gaussianNoise(float sigma) {
     return z * sigma;
 }
 
-void SunBoxSyntheticHandleOutput::updateSensitivity(bool hasSerial, bool sensActive) {
-    if (!(sensActive && hasSerial)) return;
-
-    uint32_t now = millis();
-
-    if (blender.sensFirstMovement) {
-        // First activation — ramp from 0 (sensFloor already 0)
-        blender.sensTransitionStartMs = now;
-        blender.sensFirstMovement = false;
-    } else if (blender.sensLastSerialMs > 0 &&
-               (now - blender.sensLastSerialMs) > SENS_RESET_MS) {
-        // Gap exceeded reset threshold — snapshot current sensEff as floor
-        // before restarting ramp, so it continues from current value
-        // instead of dropping to 0 and causing a 200-500ms stall
-        blender.sensFloorX = calcSensEffective(true);
-        blender.sensFloorY = calcSensEffective(false);
-        blender.sensTransitionStartMs = now;
-    }
-
-    blender.sensLastSerialMs = now;
-}
-
-float SunBoxSyntheticHandleOutput::calcSensEffective(bool isX) {
-    // If no serial has arrived yet, aimbot gets nothing
-    if (blender.sensFirstMovement) return 0.0f;
-
-    // sensEff must use sensActive (not recentSerial) as its gate.
-    // With sensReductionDuration=0, sensActive is only true on the exact frame
-    // a wheel==1 trigger arrives. This means sensEff is only non-zero on serial
-    // frames, which naturally limits the blend factor on USB-only frames to 0.
-    // The other three recentSerial guards (accumulator flush, cleanup, output gate)
-    // keep state alive between packets — but sensEff must decay to prevent the
-    // moving path from over-blending aimbot direction into user movement.
-    bool sensActive = (enableSensReduction == 1 && millis() <= activationTimestamp4MouseMovementLockout);
-    if (!sensActive) return 0.0f;
-
-    // Target aimbot fraction from config
-    // Config: sensReductionAmmountX=60 means user keeps 60%, aimbot gets 40%
-    float target = isX ? (100.0f - (float)sensReductionAmmountX)
-                       : (100.0f - (float)sensReductionAmmountY);
-
-    // Transition ramp over SENS_TRANSITION_MS
-    uint32_t elapsed = millis() - blender.sensTransitionStartMs;
-    float progress = (float)elapsed / (float)SENS_TRANSITION_MS;
-    if (progress > 1.0f) progress = 1.0f;
-
-    // Smoothstep: eliminates constant-slope spectral signature of linear ramp.
-    // Natural sensitivity changes are fastest mid-transition, tapered at edges.
-    progress = progress * progress * (3.0f - 2.0f * progress);
-
-    // Ramp from sensFloor to target instead of 0 to target.
-    // On first activation sensFloor is 0 (normal ramp from 0).
-    // On mid-engagement gap reset, sensFloor holds the previous sensEff
-    // so the ramp continues smoothly instead of dropping to 0.
-    float floor = isX ? blender.sensFloorX : blender.sensFloorY;
-    return floor + (target - floor) * progress;
-}
-
 float SunBoxSyntheticHandleOutput::calcBudget(bool isX) {
     float avgSpeed = isX ? (float)moveProfile.avgSpeedX : (float)moveProfile.avgSpeedY;
     float avgAccel = isX ? (float)moveProfile.avgAccelX : (float)moveProfile.avgAccelY;
@@ -536,310 +461,234 @@ int SunBoxSyntheticHandleOutput::calcSpreadFrames(bool isX) {
     float remaining = fabsf(isX ? blender.accumX : blender.accumY);
     float avgSpeed = isX ? (float)moveProfile.avgSpeedX : (float)moveProfile.avgSpeedY;
 
-    if (remaining <= 0.0f || avgSpeed < 0.5f) return 1;
+    bool isIdle = moveProfile.avgSpeedX < 1 && moveProfile.avgSpeedY < 1;
+    int minSpread = isIdle ? MIN_SPREAD_IDLE : MIN_SPREAD_MOVING;
 
-    int spread = (int)ceilf(remaining / avgSpeed);
-    if (spread < 1) spread = 1;
+    if (remaining <= 0.0f || avgSpeed < 0.5f) return minSpread;
+
+    float effectiveSpeed = avgSpeed;
+    if (effectiveSpeed < 1.0f) effectiveSpeed = 1.0f;
+    int spread = (int)ceilf(remaining / effectiveSpeed);
+    if (spread < minSpread) spread = minSpread;
     if (spread > 16) spread = 16;
     return spread;
 }
 
-float SunBoxSyntheticHandleOutput::drainAccumulator(float available, int spread, bool isX) {
-    float remaining = isX ? blender.accumX : blender.accumY;
-    if (remaining == 0.0f || available <= 0.0f) return 0.0f;
+float SunBoxSyntheticHandleOutput::drainAxis(bool isX, float drainAmount) {
+    float accumVal = isX ? blender.accumX : blender.accumY;
+    if (accumVal == 0.0f || drainAmount <= 0.0f) return 0.0f;
 
-    float sign = (remaining > 0.0f) ? 1.0f : -1.0f;
-    float absRemaining = fabsf(remaining);
+    float sign = (accumVal > 0.0f) ? 1.0f : -1.0f;
+    float absRemaining = fabsf(accumVal);
 
-    // Target per-frame slice
-    float targetSlice = absRemaining / (float)spread;
-    float actualSlice = (targetSlice < available) ? targetSlice : available;
-
-    // Sub-pixel accumulator for spread
+    // Sub-pixel accumulator for smooth drain
     float* spreadAccum = isX ? &blender.spreadAccumX : &blender.spreadAccumY;
-    float buffered = actualSlice + fabsf(*spreadAccum);
+    float buffered = drainAmount + fabsf(*spreadAccum);
     int drainI = (int)buffered;
     *spreadAccum = (buffered - (float)drainI) * sign;
 
     if (drainI == 0) return 0.0f;
 
-    // Don't drain more than what's in the accumulator
+    // Don't drain more than available
     if (drainI > (int)absRemaining) drainI = (int)absRemaining;
     if (drainI == 0) return 0.0f;
 
-    if (isX) blender.accumX -= sign * (float)drainI;
-    else     blender.accumY -= sign * (float)drainI;
+    float drainVal = sign * (float)drainI;
+    if (isX) blender.accumX -= drainVal;
+    else     blender.accumY -= drainVal;
 
-    return sign * (float)drainI;
+    return drainVal;
 }
 
-float SunBoxSyntheticHandleOutput::resolveDirection(float userVal, float aimbotVal, bool isX) {
-    uint8_t* opposingFrames = isX ? &blender.opposingFramesX : &blender.opposingFramesY;
+float SunBoxSyntheticHandleOutput::scaleUsbAxis(int16_t usbVal, bool isX) {
+    if (usbVal == 0) return 0.0f;
 
-    // Zero or same direction: just add
-    if (userVal == 0.0f || aimbotVal == 0.0f) {
-        *opposingFrames = 0;
-        return userVal + aimbotVal;
+    // Use sensReductionAmmount directly — the software handles the ramp curve.
+    // sensReductionAmmountX=80 means user keeps 80% → scale = 0.80.
+    // No firmware-side sensEff ramp — that fights the software's own ramp.
+    float amount = isX ? (float)sensReductionAmmountX : (float)sensReductionAmmountY;
+    float scale = amount / 100.0f;
+    if (scale < 0.0f) scale = 0.0f;
+    if (scale > 1.0f) scale = 1.0f;
+
+    return (float)usbVal * scale;
+}
+
+int SunBoxSyntheticHandleOutput::combineAndQuantize(float scaledUsb, float drainVal, bool isX) {
+    float combined = scaledUsb + drainVal;
+
+    // Add noise proportional to drain magnitude
+    if (drainVal != 0.0f) {
+        float noiseSigma = fabsf(drainVal) * 0.05f;
+        if (noiseSigma < 0.2f) noiseSigma = 0.2f;
+        combined += gaussianNoise(noiseSigma);
     }
 
-    bool sameSign = (userVal > 0.0f) == (aimbotVal > 0.0f);
-    if (sameSign) {
-        *opposingFrames = 0;
-        return userVal + aimbotVal;
-    }
+    // Quantize with output sub-pixel accumulator
+    float* outputAccum = isX ? &blender.outputAccumX : &blender.outputAccumY;
+    float total = combined + *outputAccum;
+    int16_t result = (int16_t)total;
+    *outputAccum = total - (float)result;
 
-    // Opposing directions
-    (*opposingFrames)++;
-    float absUser = fabsf(userVal);
-    float absAimbot = fabsf(aimbotVal);
-
-    if (absAimbot <= absUser) {
-        // Aimbot dampens user but doesn't overcome. Keep user direction.
-        float userSign = (userVal > 0.0f) ? 1.0f : -1.0f;
-        float dampened = absUser - absAimbot;
-        // When aimbot exactly cancels user (result=0), preserve minimum user movement
-        // to prevent "sticky cursor" feel at low sensEff where aimbot drains exactly 1
-        if (dampened < 0.5f && absUser >= 1.0f) {
-            dampened = 0.5f;  // Sub-pixel accumulator will round to 1 over 2 frames
-        }
-        return userSign * dampened;
-    }
-
-    // Aimbot exceeds user. Only flip after 2+ consecutive opposing frames.
-    if (*opposingFrames >= 2) {
-        float aimbotSign = (aimbotVal > 0.0f) ? 1.0f : -1.0f;
-        return aimbotSign * (absAimbot - absUser);
-    } else {
-        // First opposing frame: cancel to zero, don't flip yet
-        return 0.0f;
-    }
+    return (int)result;
 }
 
 void SunBoxSyntheticHandleOutput::blendMovement(int16_t& outX, int16_t& outY,
                                                   int16_t usbX, int16_t usbY, bool hasAimbot) {
-    if (!hasAimbot) {
-        return;
-    }
+    if (!hasAimbot) return;
 
     float userSpeed = sqrtf((float)(usbX * usbX + usbY * usbY));
     bool isIdle = moveProfile.avgSpeedX < 1 && moveProfile.avgSpeedY < 1;
 
+    float fOutX, fOutY;
     if (userSpeed < 0.5f || isIdle) {
-        // === IDLE PATH: burst drain ===
-        blendIdleBurst(outX, outY, usbX, usbY);
+        blendIdle(fOutX, fOutY, usbX, usbY);
     } else {
-        // === MOVING PATH: direction blend ===
-        blendMovingDirection(outX, outY, usbX, usbY, userSpeed);
+        blendMoving(fOutX, fOutY, usbX, usbY);
     }
+
+    outX = (int16_t)fOutX;
+    outY = (int16_t)fOutY;
 }
 
-void SunBoxSyntheticHandleOutput::blendIdleBurst(int16_t& outX, int16_t& outY,
-                                                   int16_t usbX, int16_t usbY) {
-    // Idle path with Ornstein-Uhlenbeck process drain intensity.
-    // Replaces the binary burst/pause state machine. The OU process produces
-    // temporally correlated drain intensities that match natural micro-movement:
-    //   - Positive autocorrelation (clustered bursts, not rhythmic on/off)
-    //   - Variable magnitudes (natural speed CV)
-    //   - ~30% zero frames (when OU intensity clamps to 0)
-    //   - Mean-reverting (prevents drift to extremes)
+void SunBoxSyntheticHandleOutput::blendIdle(float& outX, float& outY,
+                                              int16_t usbX, int16_t usbY) {
+    // Idle path: OU process modulates drain RATE but never pauses
+    // when accumulator has content. Serial is spread over future USB frames.
 
-    // OU parameters (tuned from natural micro-movement recordings)
-    const float OU_THETA = 0.10f;   // mean-reversion speed
-    const float OU_MU = 0.40f;      // long-term mean intensity
-    const float OU_SIGMA = 0.30f;   // volatility
+    const float OU_THETA = 0.10f;
+    const float OU_MU = 0.40f;
+    const float OU_SIGMA = 0.30f;
 
     float mu = OU_MU;
 
-    // Soft accumulator management: boost OU mean when accumulator grows large
+    // Soft accumulator management: boost OU mean when accumulator is large
     float accumMag = sqrtf(blender.accumX * blender.accumX + blender.accumY * blender.accumY);
+    if (accumMag > 20.0f) {
+        mu += 0.1f;
+    }
+
+    // Step the OU process
+    float dw = gaussianNoise(1.0f);
+    blender.ouIntensity += OU_THETA * (mu - blender.ouIntensity) + OU_SIGMA * dw;
+    if (blender.ouIntensity < 0.0f) blender.ouIntensity = 0.0f;
+    if (blender.ouIntensity > 1.0f) blender.ouIntensity = 1.0f;
+
+    // Compute budget for diagnostics
     float budgetX = calcBudget(true);
     float budgetY = calcBudget(false);
     blender.lastBudgetX = budgetX;
     blender.lastBudgetY = budgetY;
-    float avgBudget = (fabsf(budgetX) + fabsf(budgetY)) / 2.0f;
 
-    if (avgBudget > 0.0f && accumMag > avgBudget * 4.0f) {
-        mu += 0.1f;  // gently increase drain rate
-    }
+    bool hasAccum = fabsf(blender.accumX) >= 1.0f || fabsf(blender.accumY) >= 1.0f;
 
-    // Step the OU process: dx = theta * (mu - x) * dt + sigma * dW
-    float dw = gaussianNoise(1.0f);
-    blender.ouIntensity += OU_THETA * (mu - blender.ouIntensity) + OU_SIGMA * dw;
+    // Scale USB
+    float scaledX = scaleUsbAxis(usbX, true);
+    float scaledY = scaleUsbAxis(usbY, false);
 
-    // Clamp to [0, 1]
-    if (blender.ouIntensity < 0.0f) blender.ouIntensity = 0.0f;
-    if (blender.ouIntensity > 1.0f) blender.ouIntensity = 1.0f;
-
-    // If OU intensity is near zero, this is a natural pause frame
-    if (blender.ouIntensity < 0.01f) {
-        outX = usbX;
-        outY = usbY;
+    // If no accumulator, return scaled USB (natural pause frame is OK)
+    if (!hasAccum) {
+        outX = scaledX;
+        outY = scaledY;
+        // Quantize fractional USB through output accum
+        outX = (float)combineAndQuantize(scaledX, 0.0f, true);
+        outY = (float)combineAndQuantize(scaledY, 0.0f, false);
         return;
     }
 
-    // Square the intensity to widen speed distribution (increases speed CV)
-    // while preserving temporal correlation from the OU process.
-    // OU=0.8 -> 0.64, OU=0.5 -> 0.25, OU=0.3 -> 0.09
+    // OU modulates drain rate — squared intensity for natural speed CV
     float effectiveIntensity = blender.ouIntensity * blender.ouIntensity;
+    // Floor: always drain at least some when accumulator has content
+    if (effectiveIntensity < 0.15f) effectiveIntensity = 0.15f;
 
-    // Apply drain with OU-modulated budget
-    outX = usbX;
-    outY = usbY;
+    outX = scaledX;
+    outY = scaledY;
 
+    // Per-axis: drain and combine
     for (int axis = 0; axis < 2; axis++) {
         bool isX = (axis == 0);
-        float usbVal = isX ? (float)usbX : (float)usbY;
-
-        float budget = isX ? budgetX : budgetY;
-        if (budget <= 0.0f) continue;
-
-        float userContrib = usbVal;
-
-        // Scale budget by squared OU intensity
-        float aimbotBudget = budget * effectiveIntensity;
-
-        // Ensure minimum drain rate when accumulator has content
         float accumVal = isX ? blender.accumX : blender.accumY;
-        if (fabsf(accumVal) >= 1.0f && aimbotBudget < 1.0f) {
-            aimbotBudget = 1.0f;
+
+        if (accumVal == 0.0f) {
+            // Quantize fractional scaled USB
+            float sv = isX ? outX : outY;
+            int qv = combineAndQuantize(sv, 0.0f, isX);
+            if (isX) outX = (float)qv;
+            else     outY = (float)qv;
+            continue;
         }
 
-        // Drain accumulator
+        float absRemaining = fabsf(accumVal);
+
+        // Drain rate: intensity-modulated, spread over frames
         int spread = calcSpreadFrames(isX);
-        float aimbotContrib = drainAccumulator(aimbotBudget, spread, isX);
+        float drainTarget = (absRemaining / (float)spread) * effectiveIntensity;
 
-        if (aimbotContrib == 0.0f) continue;
+        // Always at least 1 count when accumulator has content
+        if (drainTarget < 1.0f && absRemaining >= 1.0f) drainTarget = 1.0f;
 
-        // Direction resolution
-        float combined = resolveDirection(userContrib, aimbotContrib, isX);
+        // Small gaussian variation for naturalness
+        drainTarget += gaussianNoise(drainTarget * 0.1f);
+        if (drainTarget < 1.0f && absRemaining >= 1.0f) drainTarget = 1.0f;
 
-        // Add noise
-        float noiseSigma = fabsf(aimbotBudget) * 0.05f;
-        if (noiseSigma < 0.2f) noiseSigma = 0.2f;
-        combined += gaussianNoise(noiseSigma);
-
-        // Quantize with sub-pixel accumulator
-        float* outputAccum = isX ? &blender.outputAccumX : &blender.outputAccumY;
-        float total = combined + *outputAccum;
-        int16_t result = (int16_t)total;
-        *outputAccum = total - (float)result;
-
-        if (isX) outX = result;
-        else     outY = result;
+        float drainVal = drainAxis(isX, drainTarget);
+        float sv = isX ? outX : outY;
+        int qv = combineAndQuantize(sv, drainVal, isX);
+        if (isX) outX = (float)qv;
+        else     outY = (float)qv;
     }
 }
 
-void SunBoxSyntheticHandleOutput::blendMovingDirection(int16_t& outX, int16_t& outY,
-                                                         int16_t usbX, int16_t usbY, float userSpeed) {
-    // Moving path: direction-based vector blending.
-    // Steers user's movement vector toward the aimbot target direction
-    // while preserving the user's speed magnitude. This maintains
-    // speed autocorrelation since output speed ~= input speed.
-
-    // 1. Compute blend_factor from avg sensEff (0..1)
-    float sensEffX = calcSensEffective(true);
-    float sensEffY = calcSensEffective(false);
-    float avgSensEff = (sensEffX + sensEffY) / 2.0f;
-    float blendFactor = avgSensEff / 100.0f;
-    if (blendFactor > 1.0f) blendFactor = 1.0f;
-    if (blendFactor < 0.0f) blendFactor = 0.0f;
+void SunBoxSyntheticHandleOutput::blendMoving(float& outX, float& outY,
+                                                int16_t usbX, int16_t usbY) {
+    // Moving path: scale USB, drain serial every frame.
+    // No stochastic skip — old firmware always added serial immediately.
+    // Anti-detection from spread-over-frames and gaussian noise.
 
     // Compute budgets for diagnostics
     blender.lastBudgetX = calcBudget(true);
     blender.lastBudgetY = calcBudget(false);
 
-    // If no blend, passthrough
-    if (blendFactor < 0.001f) {
-        outX = usbX;
-        outY = usbY;
-        return;
+    // Scale USB
+    float scaledX = scaleUsbAxis(usbX, true);
+    float scaledY = scaleUsbAxis(usbY, false);
+
+    outX = scaledX;
+    outY = scaledY;
+
+    // Per-axis: drain and combine
+    for (int axis = 0; axis < 2; axis++) {
+        bool isX = (axis == 0);
+        float accumVal = isX ? blender.accumX : blender.accumY;
+
+        if (accumVal == 0.0f) {
+            // Quantize fractional scaled USB
+            float sv = isX ? outX : outY;
+            int qv = combineAndQuantize(sv, 0.0f, isX);
+            if (isX) outX = (float)qv;
+            else     outY = (float)qv;
+            continue;
+        }
+
+        float absRemaining = fabsf(accumVal);
+
+        // Drain: remaining / spread, evenly distributed over future frames
+        int spread = calcSpreadFrames(isX);
+        float drainTarget = absRemaining / (float)spread;
+
+        // Minimum 1 count
+        if (drainTarget < 1.0f && absRemaining >= 1.0f) drainTarget = 1.0f;
+
+        // Small variation for naturalness
+        drainTarget += gaussianNoise(drainTarget * 0.1f);
+        if (drainTarget < 1.0f && absRemaining >= 1.0f) drainTarget = 1.0f;
+
+        float drainVal = drainAxis(isX, drainTarget);
+        float sv = isX ? outX : outY;
+        int qv = combineAndQuantize(sv, drainVal, isX);
+        if (isX) outX = (float)qv;
+        else     outY = (float)qv;
     }
-
-    // 2. Get aimbot direction from accumulator
-    float accumX = blender.accumX;
-    float accumY = blender.accumY;
-    float accumMag = sqrtf(accumX * accumX + accumY * accumY);
-
-    if (accumMag < 0.5f) {
-        // No meaningful accumulator — passthrough
-        outX = usbX;
-        outY = usbY;
-        return;
-    }
-
-    // Aimbot direction unit vector
-    float aimDirX = accumX / accumMag;
-    float aimDirY = accumY / accumMag;
-
-    // Target vector: aimbot direction at user's speed magnitude
-    float targetX = aimDirX * userSpeed;
-    float targetY = aimDirY * userSpeed;
-
-    // 3. Stochastic steering: randomly skip steering on some frames to break
-    // up acceleration autocorrelation. Anti-correlation: if we steered last
-    // frame, slightly less likely to steer this frame (and vice versa).
-    float prob = 0.55f;  // base steering probability
-    if (blender.prevSteerApplied) {
-        prob -= 0.1f;
-    } else {
-        prob += 0.1f;
-    }
-
-    float randVal = fabsf(gaussianNoise(1.0f)) / 3.0f;
-    bool applySteer = (randVal < prob);
-
-    if (!applySteer) {
-        blender.prevSteerApplied = false;
-        outX = usbX;
-        outY = usbY;
-        return;
-    }
-
-    blender.prevSteerApplied = true;
-
-    // 4. Blend: output = user * (1-blend) + target * blend
-    float blendedX = (float)usbX * (1.0f - blendFactor) + targetX * blendFactor;
-    float blendedY = (float)usbY * (1.0f - blendFactor) + targetY * blendFactor;
-
-    // 5. Compute actual steering amount
-    float steerX = blendedX - (float)usbX;
-    float steerY = blendedY - (float)usbY;
-    float steerMag = sqrtf(steerX * steerX + steerY * steerY);
-
-    // 6. Drain accumulator by the actual steering contribution
-    // Drain proportional to how much we steered, projected onto aimbot direction
-    float drainAmount = steerX * aimDirX + steerY * aimDirY;  // dot product
-    if (drainAmount > 0.0f) {
-        float drainX = drainAmount * aimDirX;
-        float drainY = drainAmount * aimDirY;
-
-        // Clamp drain to not exceed accumulator
-        if (fabsf(drainX) > fabsf(accumX)) drainX = accumX;
-        if (fabsf(drainY) > fabsf(accumY)) drainY = accumY;
-
-        blender.accumX -= drainX;
-        blender.accumY -= drainY;
-
-        // Snap small accumulators to zero
-        if (fabsf(blender.accumX) < 1.0f) blender.accumX = 0.0f;
-        if (fabsf(blender.accumY) < 1.0f) blender.accumY = 0.0f;
-    }
-
-    // 7. Add small noise proportional to steer magnitude
-    if (steerMag > 0.1f) {
-        float noiseSigma = steerMag * 0.05f;
-        if (noiseSigma < 0.2f) noiseSigma = 0.2f;
-        blendedX += gaussianNoise(noiseSigma);
-        blendedY += gaussianNoise(noiseSigma);
-    }
-
-    // 8. Quantize with sub-pixel accumulators
-    float totalX = blendedX + blender.outputAccumX;
-    float totalY = blendedY + blender.outputAccumY;
-    outX = (int16_t)totalX;
-    outY = (int16_t)totalY;
-    blender.outputAccumX = totalX - (float)outX;
-    blender.outputAccumY = totalY - (float)outY;
 }
 
 void SunBoxSyntheticHandleOutput::handleSpinBot(uint8_t currentButtons, uint8_t previousButtons, bool isSerialPress) {
