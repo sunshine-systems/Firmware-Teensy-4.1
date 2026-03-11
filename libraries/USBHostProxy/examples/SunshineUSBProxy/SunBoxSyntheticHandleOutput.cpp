@@ -726,6 +726,9 @@ void SunBoxSyntheticHandleOutput::blendMoving(float& outX, float& outY,
             else     outY = (float)qv;
         } else {
             // === DRAIN PATH (opposite direction or user idle on this axis) ===
+            // Matches old behavior: serial is always applied at full drain rate.
+            // Sens reduction only scales the USER's input, not the aimbot's.
+            // Budget cap provides anti-detection smoothness.
             int spread = calcSpreadFrames(isX);
             float drainTarget = absAccum / (float)spread;
 
@@ -733,23 +736,8 @@ void SunBoxSyntheticHandleOutput::blendMoving(float& outX, float& outY,
             float budget = isX ? blender.lastBudgetX : blender.lastBudgetY;
             if (drainTarget > budget) drainTarget = budget;
 
-            // Direction protection: when user is actively moving opposite to
-            // aimbot, limit drain so it can't overpower the user's scaled input.
-            // drain ≤ |scaledUsb| * aimbotFraction → user always moves in their
-            // intended direction. At sens=90 (aimbot=10%): drain ≤ 10% of scaledUsb.
-            if (rawUsb != 0) {
-                float sensAmount = isX ? (float)sensReductionAmmountX : (float)sensReductionAmmountY;
-                float aimbotFraction = (100.0f - sensAmount) / 100.0f;
-                if (aimbotFraction < 0.0f) aimbotFraction = 0.0f;
-                if (aimbotFraction > 1.0f) aimbotFraction = 1.0f;
-                float maxCounter = fabsf(scaledUsb) * aimbotFraction;
-                // Hard ceiling: never flip user's direction
-                if (maxCounter > fabsf(scaledUsb)) maxCounter = fabsf(scaledUsb);
-                if (drainTarget > maxCounter) drainTarget = maxCounter;
-            } else {
-                // User idle on this axis — drain freely up to budget
-                if (drainTarget < 1.0f && absAccum >= 1.0f) drainTarget = 1.0f;
-            }
+            // Minimum drain of 1 when accumulator has content
+            if (drainTarget < 1.0f && absAccum >= 1.0f) drainTarget = 1.0f;
 
             // Small gaussian variation for naturalness
             if (drainTarget > 0.0f) {
