@@ -726,15 +726,14 @@ void SunBoxSyntheticHandleOutput::blendMoving(float& outX, float& outY,
             else     outY = (float)qv;
         } else {
             // === DRAIN PATH (opposite direction or user idle on this axis) ===
-            // Matches old behavior: serial is always applied at full drain rate.
-            // Sens reduction only scales the USER's input, not the aimbot's.
-            // Budget cap provides anti-detection smoothness.
+            // Spread is the only smoother — no budget cap. This matches the old
+            // code's behavior where serial was added in full each frame. The spread
+            // distributes it over MIN_SPREAD_MOVING (3) frames for anti-detection,
+            // but the budget cap on top created persistent drag that felt "stuck"
+            // (budget=3 at low speeds meant 3-5 frame drain for a -10 serial impulse,
+            // when the old code applied it in one frame).
             int spread = calcSpreadFrames(isX);
             float drainTarget = absAccum / (float)spread;
-
-            // Budget cap for frame-to-frame smoothness (prevents wild jumps)
-            float budget = isX ? blender.lastBudgetX : blender.lastBudgetY;
-            if (drainTarget > budget) drainTarget = budget;
 
             // Minimum drain of 1 when accumulator has content
             if (drainTarget < 1.0f && absAccum >= 1.0f) drainTarget = 1.0f;
