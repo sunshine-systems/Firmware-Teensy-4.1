@@ -124,12 +124,29 @@ void SunBoxSyntheticHandleOutput::process() {
     int16_t csvRawSerialX = hasSerialData ? serialState.x : 0;
     int16_t csvRawSerialY = hasSerialData ? serialState.y : 0;
 
-    // === STEP 1: Always accumulate serial deltas into blender ===
+    // === STEP 1: Accumulate serial deltas into blender, capped by drain capacity ===
     if (hasSerialData) {
         blender.accumX += (float)serialState.x;
         blender.accumY += (float)serialState.y;
         blender.sensLastSerialMs = millis();
         blender.sensFirstMovement = false;
+
+        // Cap accumulator to what can drain in ~32 frames (the spread window).
+        // With the credit system, same-direction user movement drains the accum
+        // fast, so a generous cap is fine. This just prevents extreme accumulation
+        // when serial floods in with no USB frames to drain against.
+        for (int axis = 0; axis < 2; axis++) {
+            bool isX = (axis == 0);
+            float* accum = isX ? &blender.accumX : &blender.accumY;
+            float budget = isX ? blender.lastBudgetX : blender.lastBudgetY;
+            if (budget < 3.0f) budget = 3.0f;
+            float accumCap = budget * 32.0f;
+            if (accumCap < 16.0f) accumCap = 16.0f;
+            if (fabsf(*accum) > accumCap) {
+                float sign = (*accum > 0.0f) ? 1.0f : -1.0f;
+                *accum = sign * accumCap;
+            }
+        }
     }
 
     // === STEP 2: Handle missing USB frames ===
@@ -503,9 +520,11 @@ float SunBoxSyntheticHandleOutput::drainAxis(bool isX, float drainAmount) {
 float SunBoxSyntheticHandleOutput::scaleUsbAxis(int16_t usbVal, bool isX) {
     if (usbVal == 0) return 0.0f;
 
-    // Use sensReductionAmmount directly — the software handles the ramp curve.
-    // sensReductionAmmountX=80 means user keeps 80% → scale = 0.80.
-    // No firmware-side sensEff ramp — that fights the software's own ramp.
+    // sensReductionAmmount = how much user input to keep (0=lockout, 100=full movement).
+    // Software ramps this from initial (e.g. 0) upward to give user back control.
+    //   sensReductionAmmountX=0   → full lockout   → scale = 0.00
+    //   sensReductionAmmountX=70  → user keeps 70% → scale = 0.70
+    //   sensReductionAmmountX=100 → full movement  → scale = 1.00
     float amount = isX ? (float)sensReductionAmmountX : (float)sensReductionAmmountY;
     float scale = amount / 100.0f;
     if (scale < 0.0f) scale = 0.0f;
@@ -624,6 +643,10 @@ void SunBoxSyntheticHandleOutput::blendIdle(float& outX, float& outY,
         int spread = calcSpreadFrames(isX);
         float drainTarget = (absRemaining / (float)spread) * effectiveIntensity;
 
+        // Budget cap for smoothness (no aimbotFraction — user is idle, no input to protect)
+        float budget = isX ? blender.lastBudgetX : blender.lastBudgetY;
+        if (drainTarget > budget) drainTarget = budget;
+
         // Always at least 1 count when accumulator has content
         if (drainTarget < 1.0f && absRemaining >= 1.0f) drainTarget = 1.0f;
 
@@ -641,28 +664,35 @@ void SunBoxSyntheticHandleOutput::blendIdle(float& outX, float& outY,
 
 void SunBoxSyntheticHandleOutput::blendMoving(float& outX, float& outY,
                                                 int16_t usbX, int16_t usbY) {
-    // Moving path: scale USB, drain serial every frame.
-    // No stochastic skip — old firmware always added serial immediately.
-    // Anti-detection from spread-over-frames and gaussian noise.
+    // Moving path: two behaviors depending on whether user agrees with aimbot.
+    //
+    // SAME DIRECTION (user moving where aimbot wants):
+    //   Credit the user's raw movement against the accumulator — the user is
+    //   already doing the aimbot's work. Output scaled USB only (no drain added).
+    //   This lets the aimbot "hide" behind the user's natural movement.
+    //
+    // OPPOSITE DIRECTION (user fights aimbot):
+    //   Drain from accumulator, but limit drain so it can never flip the user's
+    //   movement direction. At high sens (user keeps 80%+), drain is tiny.
 
-    // Compute budgets for diagnostics
+    // Compute budgets (for smoothness cap and logging)
     blender.lastBudgetX = calcBudget(true);
     blender.lastBudgetY = calcBudget(false);
 
-    // Scale USB
+    // Scale USB by sensitivity reduction
     float scaledX = scaleUsbAxis(usbX, true);
     float scaledY = scaleUsbAxis(usbY, false);
 
     outX = scaledX;
     outY = scaledY;
 
-    // Per-axis: drain and combine
+    // Per-axis: credit or drain
     for (int axis = 0; axis < 2; axis++) {
         bool isX = (axis == 0);
         float accumVal = isX ? blender.accumX : blender.accumY;
 
         if (accumVal == 0.0f) {
-            // Quantize fractional scaled USB
+            // No aimbot pending — just quantize scaled USB
             float sv = isX ? outX : outY;
             int qv = combineAndQuantize(sv, 0.0f, isX);
             if (isX) outX = (float)qv;
@@ -670,24 +700,69 @@ void SunBoxSyntheticHandleOutput::blendMoving(float& outX, float& outY,
             continue;
         }
 
-        float absRemaining = fabsf(accumVal);
+        int16_t rawUsb = isX ? usbX : usbY;
+        float scaledUsb = isX ? scaledX : scaledY;
+        float absAccum = fabsf(accumVal);
+        float accumSign = (accumVal > 0.0f) ? 1.0f : -1.0f;
 
-        // Drain: remaining / spread, evenly distributed over future frames
-        int spread = calcSpreadFrames(isX);
-        float drainTarget = absRemaining / (float)spread;
+        // Check if user is moving in the same direction as the accumulator
+        bool sameDirection = (accumVal > 0.0f && rawUsb > 0) ||
+                             (accumVal < 0.0f && rawUsb < 0);
 
-        // Minimum 1 count
-        if (drainTarget < 1.0f && absRemaining >= 1.0f) drainTarget = 1.0f;
+        if (sameDirection) {
+            // === CREDIT PATH ===
+            // User naturally moving where aimbot wants — credit their raw
+            // movement against the accumulator. Output scaled USB only.
+            float credit = (float)(rawUsb < 0 ? -rawUsb : rawUsb);
+            if (credit > absAccum) credit = absAccum;
 
-        // Small variation for naturalness
-        drainTarget += gaussianNoise(drainTarget * 0.1f);
-        if (drainTarget < 1.0f && absRemaining >= 1.0f) drainTarget = 1.0f;
+            // Deduct credit from accumulator
+            if (isX) blender.accumX -= accumSign * credit;
+            else     blender.accumY -= accumSign * credit;
 
-        float drainVal = drainAxis(isX, drainTarget);
-        float sv = isX ? outX : outY;
-        int qv = combineAndQuantize(sv, drainVal, isX);
-        if (isX) outX = (float)qv;
-        else     outY = (float)qv;
+            // Output scaled USB only (sens reduction applies, no drain needed)
+            int qv = combineAndQuantize(scaledUsb, 0.0f, isX);
+            if (isX) outX = (float)qv;
+            else     outY = (float)qv;
+        } else {
+            // === DRAIN PATH (opposite direction or user idle on this axis) ===
+            int spread = calcSpreadFrames(isX);
+            float drainTarget = absAccum / (float)spread;
+
+            // Budget cap for frame-to-frame smoothness (prevents wild jumps)
+            float budget = isX ? blender.lastBudgetX : blender.lastBudgetY;
+            if (drainTarget > budget) drainTarget = budget;
+
+            // Direction protection: when user is actively moving opposite to
+            // aimbot, limit drain so it can't overpower the user's scaled input.
+            // drain ≤ |scaledUsb| * aimbotFraction → user always moves in their
+            // intended direction. At sens=90 (aimbot=10%): drain ≤ 10% of scaledUsb.
+            if (rawUsb != 0) {
+                float sensAmount = isX ? (float)sensReductionAmmountX : (float)sensReductionAmmountY;
+                float aimbotFraction = (100.0f - sensAmount) / 100.0f;
+                if (aimbotFraction < 0.0f) aimbotFraction = 0.0f;
+                if (aimbotFraction > 1.0f) aimbotFraction = 1.0f;
+                float maxCounter = fabsf(scaledUsb) * aimbotFraction;
+                // Hard ceiling: never flip user's direction
+                if (maxCounter > fabsf(scaledUsb)) maxCounter = fabsf(scaledUsb);
+                if (drainTarget > maxCounter) drainTarget = maxCounter;
+            } else {
+                // User idle on this axis — drain freely up to budget
+                if (drainTarget < 1.0f && absAccum >= 1.0f) drainTarget = 1.0f;
+            }
+
+            // Small gaussian variation for naturalness
+            if (drainTarget > 0.0f) {
+                drainTarget += gaussianNoise(drainTarget * 0.1f);
+                if (drainTarget < 0.0f) drainTarget = 0.0f;
+            }
+
+            float drainVal = drainAxis(isX, drainTarget);
+            float sv = isX ? outX : outY;
+            int qv = combineAndQuantize(sv, drainVal, isX);
+            if (isX) outX = (float)qv;
+            else     outY = (float)qv;
+        }
     }
 }
 
