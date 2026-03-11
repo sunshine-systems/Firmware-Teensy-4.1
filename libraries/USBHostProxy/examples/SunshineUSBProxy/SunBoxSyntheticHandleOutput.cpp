@@ -560,7 +560,7 @@ void SunBoxSyntheticHandleOutput::blendMovement(int16_t& outX, int16_t& outY,
     bool isIdle = moveProfile.avgSpeedX < 1 && moveProfile.avgSpeedY < 1;
 
     float fOutX, fOutY;
-    if (userSpeed < 0.5f || isIdle) {
+    if (userSpeed < 0.5f && isIdle) {
         blendIdle(fOutX, fOutY, usbX, usbY);
     } else {
         blendMoving(fOutX, fOutY, usbX, usbY);
@@ -642,10 +642,6 @@ void SunBoxSyntheticHandleOutput::blendIdle(float& outX, float& outY,
         // Drain rate: intensity-modulated, spread over frames
         int spread = calcSpreadFrames(isX);
         float drainTarget = (absRemaining / (float)spread) * effectiveIntensity;
-
-        // Budget cap for smoothness (no aimbotFraction — user is idle, no input to protect)
-        float budget = isX ? blender.lastBudgetX : blender.lastBudgetY;
-        if (drainTarget > budget) drainTarget = budget;
 
         // Always at least 1 count when accumulator has content
         if (drainTarget < 1.0f && absRemaining >= 1.0f) drainTarget = 1.0f;
