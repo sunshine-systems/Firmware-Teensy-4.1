@@ -61,8 +61,6 @@ FLASHMEM void startup_debug_reset(void) { __asm__ volatile("nop"); }
 
 // ==== USB Host Proxy Implementation ====
 volatile uint8_t readyForProxy = 0;
-static uint32_t proxy_start_time = 0;
-static uint8_t proxy_sequence_started = 0;
 
 FLASHMEM void SunBoxStartup_begin(void);
 FLASHMEM uint8_t SunBoxStartup_isReady(void);

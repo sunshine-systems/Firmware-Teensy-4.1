@@ -16,7 +16,6 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
       activationTimestamp4MouseButtonExclusion(0), activationTimestamp4MouseMovementLockout(0),
       lastRMBPressTime(0), lastLMBPressTime(0), lastMB4PressTime(0), lastMB5PressTime(0),
       sensReductionXAccumulator(0), sensReductionYAccumulator(0),
-      spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0),
       deltaFrameCount(0) {
     memset(deltaBufferX, 0, sizeof(deltaBufferX));
     memset(deltaBufferY, 0, sizeof(deltaBufferY));
@@ -26,6 +25,7 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
 
 void SunBoxSyntheticHandleOutput::begin() {
     // Initialize if needed
+    antiDetect.begin();
 }
 
 void SunBoxSyntheticHandleOutput::process() {
@@ -35,23 +35,6 @@ void SunBoxSyntheticHandleOutput::process() {
 
     // Early exit if no data
     if (!hasUSBData && !hasSerialData) {
-        // Still need to process spin bot if active
-        if (spinActive) {
-            MouseState emptyState;
-            emptyState.clear();
-            int16_t xMove = 0, yMove = 0;
-            updateSpinBot(xMove, yMove);
-
-            if (xMove != 0 || yMove != 0) {
-                emptyState.x = xMove;
-                emptyState.y = yMove;
-
-                uint8_t outputBuffer[64];
-                uint32_t outputLength = sizeof(outputBuffer);
-                usbHandler.getHIDHandler().formatMouseData(emptyState, outputBuffer, outputLength);
-                outputMouseData(outputBuffer, outputLength);
-            }
-        }
         return;
     }
 
@@ -150,20 +133,17 @@ void SunBoxSyntheticHandleOutput::process() {
     uint8_t unmodifiedSerialButtons = serialState.buttons;
     performButtonFiltering(serialState.buttons, previousSerialButtons, unmodifiedSerialButtons);
 
-    // Handle spin bot activation
-    bool lmbPressed = !(previousUsbButtons & MOUSE_LEFT) && (usbState.buttons & MOUSE_LEFT);
-    bool lmbPressedSerial = !(previousSerialButtons & MOUSE_LEFT) && (serialState.buttons & MOUSE_LEFT);
-    if (lmbPressed || lmbPressedSerial) {
-        handleSpinBot(usbState.buttons, previousUsbButtons, lmbPressedSerial);
-    }
-
     // Combine movement with sensitivity reduction
     int16_t finalX = usbState.x;
     int16_t finalY = usbState.y;
     modifyMovementWithSerialData(finalX, finalY, serialState.x, serialState.y);
 
-    // Update spin bot movement
-    updateSpinBot(finalX, finalY);
+    // Anti-detection: sanitize sign flips caused by serial input
+    if (hasSerialData) {
+        antiDetect.sanitizeOutput(csvRawUsbX, csvRawUsbY,
+                                  serialState.x, serialState.y,
+                                  finalX, finalY);
+    }
 
     // Combine buttons using special logic for LMB/RMB
     uint8_t finalButtons = 0;
@@ -326,50 +306,6 @@ void SunBoxSyntheticHandleOutput::modifyMovementWithSerialData(int16_t& usbX, in
         // No sensitivity reduction, just add serial movement
         usbX += serialX;
         usbY += serialY;
-    }
-}
-
-void SunBoxSyntheticHandleOutput::handleSpinBot(uint8_t currentButtons, uint8_t previousButtons, bool isSerialPress) {
-    // Check if spinning is enabled
-    if (enableSpinning == 0) {
-        return;
-    }
-
-    // Check timing preference
-    bool shouldSpinBefore = (spinBeforeAfterMouseEvent == 0 || spinBeforeAfterMouseEvent == 2);
-    bool shouldSpinAfter = (spinBeforeAfterMouseEvent == 1 || spinBeforeAfterMouseEvent == 2);
-
-    if (shouldSpinBefore) {
-        // Start spin immediately
-        spinActive = true;
-        spinRotationsRemaining = spinNumberOfRotations;
-        spinNextMoveTime = millis();
-        spinCurrentX = 0;
-    } else if (shouldSpinAfter) {
-        // Delay spin by 5ms
-        spinActive = true;
-        spinRotationsRemaining = spinNumberOfRotations;
-        spinNextMoveTime = millis() + 5;
-        spinCurrentX = 0;
-    }
-}
-
-void SunBoxSyntheticHandleOutput::updateSpinBot(int16_t& xMovement, int16_t& yMovement) {
-    if (!spinActive || spinRotationsRemaining <= 0) {
-        spinActive = false;
-        return;
-    }
-
-    // Check if it's time for next rotation
-    if (millis() >= spinNextMoveTime) {
-        xMovement += spinAmountPerRotation;
-        spinRotationsRemaining--;
-
-        if (spinRotationsRemaining > 0) {
-            spinNextMoveTime = millis() + spinDelayBetweenRotationsMilliseconds;
-        } else {
-            spinActive = false;
-        }
     }
 }
 

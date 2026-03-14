@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "HIDMouseDescriptorHandler.h"
 #include "USBDeviceProxy.h"
+#include "AntiDetect.h"
 
 // Mouse button definitions (matching Arduino)
 #define MOUSE_LEFT      0x1
@@ -68,12 +69,6 @@ private:
     int sensReductionXAccumulator;
     int sensReductionYAccumulator;
 
-    // Spin bot state
-    bool spinActive;
-    int spinRotationsRemaining;
-    unsigned long spinNextMoveTime;
-    int spinCurrentX;
-
     // Delta buffer for M: output (every 10 USB frames)
     static const uint8_t DELTA_BUFFER_SIZE = 10;
     int16_t deltaBufferX[10];
@@ -84,11 +79,12 @@ private:
     void outputMouseData(const uint8_t* data, uint32_t length);
     void performButtonFiltering(uint8_t& buttons, uint8_t previousButtons, uint8_t unmodifiedButtons);
     void modifyMovementWithSerialData(int16_t& usbX, int16_t& usbY, int16_t serialX, int16_t serialY);
-    void handleSpinBot(uint8_t currentButtons, uint8_t previousButtons, bool isSerialPress);
-    void updateSpinBot(int16_t& xMovement, int16_t& yMovement);
     bool shouldExcludeButton(uint8_t currentButtons, uint8_t previousButtons, uint8_t buttonMask);
     void handleMouseButtonConfigCheck(uint8_t& buttons, uint8_t unmodifiedButtons, uint8_t previousButtons,
                                      uint8_t buttonMask, int disablePassthroughOption, unsigned long& lastPressTime);
+
+    // Anti-detection sanitizer
+    AntiDetect antiDetect;
 
     // Static counters for polling rate measurement
     static uint32_t serialDevicePacketCount;    // S counter
