@@ -16,7 +16,8 @@ SunBoxSyntheticHandleOutput::SunBoxSyntheticHandleOutput(SunBoxCommands& command
       activationTimestamp4MouseButtonExclusion(0), activationTimestamp4MouseMovementLockout(0),
       lastRMBPressTime(0), lastLMBPressTime(0), lastMB4PressTime(0), lastMB5PressTime(0),
       sensReductionXAccumulator(0), sensReductionYAccumulator(0),
-      spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0) {
+      spinActive(false), spinRotationsRemaining(0), spinNextMoveTime(0), spinCurrentX(0),
+      deltaSumX(0), deltaSumY(0), deltaFrameCount(0) {
     previousUsbState.clear();
     previousSerialState.clear();
 }
@@ -241,6 +242,22 @@ void SunBoxSyntheticHandleOutput::process() {
 
     // Send the formatted data
     outputMouseData(outputBuffer, outputLength);
+
+    // Accumulate raw USB deltas for M: delta output (every 10 USB frames)
+    if (hasUSBData) {
+        deltaSumX += csvRawUsbX;
+        deltaSumY += csvRawUsbY;
+        deltaFrameCount++;
+
+        if (deltaFrameCount >= 10) {
+            int16_t avgX = (int16_t)(deltaSumX / deltaFrameCount);
+            int16_t avgY = (int16_t)(deltaSumY / deltaFrameCount);
+            logger.mousef("%d:%d", avgX, avgY);
+            deltaSumX = 0;
+            deltaSumY = 0;
+            deltaFrameCount = 0;
+        }
+    }
 
     // Update previous state
     if (hasUSBData) {

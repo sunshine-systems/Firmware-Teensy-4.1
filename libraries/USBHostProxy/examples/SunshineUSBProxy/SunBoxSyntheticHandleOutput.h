@@ -74,6 +74,11 @@ private:
     unsigned long spinNextMoveTime;
     int spinCurrentX;
 
+    // Delta averaging for M: output (every 10 USB frames)
+    int32_t deltaSumX;
+    int32_t deltaSumY;
+    uint8_t deltaFrameCount;
+
     // Helper methods
     void outputMouseData(const uint8_t* data, uint32_t length);
     void performButtonFiltering(uint8_t& buttons, uint8_t previousButtons, uint8_t unmodifiedButtons);
