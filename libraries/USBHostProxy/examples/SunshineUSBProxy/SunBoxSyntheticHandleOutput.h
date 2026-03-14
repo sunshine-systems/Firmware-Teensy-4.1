@@ -74,9 +74,10 @@ private:
     unsigned long spinNextMoveTime;
     int spinCurrentX;
 
-    // Delta averaging for M: output (every 10 USB frames)
-    int32_t deltaSumX;
-    int32_t deltaSumY;
+    // Delta buffer for M: output (every 10 USB frames)
+    static const uint8_t DELTA_BUFFER_SIZE = 10;
+    int16_t deltaBufferX[10];
+    int16_t deltaBufferY[10];
     uint8_t deltaFrameCount;
 
     // Helper methods
