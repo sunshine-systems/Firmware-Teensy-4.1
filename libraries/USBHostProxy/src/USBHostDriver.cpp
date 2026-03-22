@@ -15,7 +15,8 @@ USBHostDriver::USBHostDriver(USBHost& host)
       config_num_interfaces(0), config_value(1), config_attributes(0xA0), config_max_power(0x31),
       interface_count(0),
       control_pending(false), control_complete(false), control_length_received(0),
-      control_success(false), control_last_token(0), in_pipe(nullptr), out_pipe(nullptr),
+      control_success(false), control_last_token(0), lastControlTransferCompleteUs(0),
+      in_pipe(nullptr), out_pipe(nullptr),
       in_endpoint_addr(0), out_endpoint_addr(0), in_endpoint_size(0),
       out_endpoint_size(0), in_endpoint_interval(1), out_endpoint_interval(1),
       last_rx_length(0), new_data_available(false),
@@ -382,13 +383,24 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
         logger.error("SunBox USB Host Driver Error: Control transfer failed - no device");
         return false;
     }
-    
+
+    // Inter-transfer throttle: ensure minimum gap between control transfers.
+    // Vendor software (Razer Synapse, Logitech G HUB) rapid-fires requests;
+    // the device needs brief recovery time between them. During enumeration,
+    // host pacing naturally spaces transfers so this adds near-zero overhead.
+    if (lastControlTransferCompleteUs != 0) {
+        uint32_t elapsed = micros() - lastControlTransferCompleteUs;
+        if (elapsed < CONTROL_TRANSFER_MIN_GAP_US) {
+            delayMicroseconds(CONTROL_TRANSFER_MIN_GAP_US - elapsed);
+        }
+    }
+
     // Always print debug for descriptor requests
     // logger.debugf("Control transfer: bmRequestType=0x%02X bRequest=0x%02X wValue=0x%04X wIndex=0x%04X wLength=%d",
     //             bmRequestType, bRequest, wValue, wIndex, wLength);
-    
+
     // Log timestamp for timing analysis
-    
+
     // // Log raw setup packet bytes - commented out for production
     // uint8_t setup_bytes[8];
     // setup_bytes[0] = bmRequestType;
@@ -453,6 +465,7 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     
     if (!queue_result) {
         logger.error("Failed to queue control transfer!");
+        lastControlTransferCompleteUs = micros();  // Update throttle timestamp on failure too
         return false;
     }
     
@@ -471,6 +484,7 @@ bool USBHostDriver::controlTransfer(uint8_t bmRequestType, uint8_t bRequest,
     if (!control_complete) {
         logger.warningf("Control transfer timeout after %lums", timeout_ms);
         control_pending = false;  // Reset state
+        lastControlTransferCompleteUs = micros();  // Update throttle timestamp on timeout too
         return false;
     }
     
@@ -514,7 +528,8 @@ void USBHostDriver::control(const Transfer_t *transfer) {
         control_pending = false;
         control_complete = true;
         control_length_received = transfer->length;
-        
+        lastControlTransferCompleteUs = micros();  // Update throttle timestamp
+
         // Check for errors in the transfer
         uint32_t token = transfer->qtd.token;
         control_last_token = token;

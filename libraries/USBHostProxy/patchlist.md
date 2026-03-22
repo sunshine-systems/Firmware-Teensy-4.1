@@ -175,6 +175,27 @@ Added dynamic button positioning based on HID descriptor:
 
 ---
 
+## 2026-03-22: Control Transfer Timing Fix — Inter-Transfer Throttle + SET_CONFIG Settle
+
+**Issue:** Removing all control transfer delays (2026-03-06) broke HID interface initialization and vendor software communication. All 3 HID interfaces failed to start (EventID 411 "had a problem starting"), causing a 4.4-second Windows retry cycle. Vendor compliance software (Razer Synapse, Logitech G HUB, etc.) could not communicate with devices because rapid-fire class/vendor control transfers overwhelmed the device before it had time to recover.
+
+**Root Cause:** Two separate timing issues:
+1. **Post-configuration settle time**: After SET_CONFIGURATION, the device needs time to initialize its HID interfaces before the host sends class-specific requests (GET_REPORT_DESCRIPTOR, SET_IDLE). Without the original `delay(5)` per transfer, these requests arrived before interfaces were ready.
+2. **Inter-transfer recovery**: Vendor software rapid-fires control transfers at runtime. The device needs brief recovery time between consecutive transfers.
+
+**Fix Applied:**
+1. **Inter-transfer throttle** (`USBHostDriver`): Tracks `lastControlTransferCompleteUs` timestamp. Before each new control transfer, if less than `CONTROL_TRANSFER_MIN_GAP_US` (800µs) has elapsed since the last completion, delays only the remaining difference. Updated on all completion paths (success, failure, timeout). First transfer always passes with zero delay. During enumeration, host pacing naturally spaces transfers >800µs apart, so this adds near-zero overhead.
+2. **Post-SET_CONFIGURATION settle delay** (`USBDeviceProxy`): `SET_CONFIG_SETTLE_MS` (5ms) delay after SET_CONFIGURATION completes (after endpoint setup and `resumeDataTransfers()`). Fires once per enumeration. Gives the device time to initialize HID interfaces before Windows sends class-specific requests.
+
+**Impact:** HID interfaces start cleanly on first attempt (zero EventID 411 errors). Vendor software communicates successfully. Enumeration time ~197ms (up from ~120ms but down from 4.6s failure case). Previous ~120ms was non-functional.
+
+**Files Modified:**
+- `src/USBHostDriver.h` — Added `CONTROL_TRANSFER_MIN_GAP_US` constant (800µs), `lastControlTransferCompleteUs` member
+- `src/USBHostDriver.cpp` — Throttle logic at start of `controlTransfer()`, timestamp updates in `control()` callback, queue failure path, and timeout path
+- `src/USBDeviceProxy.cpp` — Added `SET_CONFIG_SETTLE_MS` constant (5ms), `delay()` after SET_CONFIGURATION handling
+
+---
+
 ## 2026-03-08: Movement Sanitization System
 
 **Issue:** Combined USB + serial mouse output created detectable signatures: polling rate inflation from extra serial-only frames, rapid direction reversals (sign flips) when serial fought USB direction, single-frame value spikes from async serial deltas, and instant velocity step-functions from sensitivity reduction toggling.

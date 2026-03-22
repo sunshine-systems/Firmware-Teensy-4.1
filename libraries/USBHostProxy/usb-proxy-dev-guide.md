@@ -348,7 +348,7 @@ The `configureEndpoint` function correctly sets:
 - **USB Speed**: Dynamically matched (1.5, 12, or 480 Mbps)
 - **HID Report Rate**: Up to 8kHz achieved and verified
 - **Control Transfer Handling**: ~50-100ms typical for vendor commands
-- **Enumeration Time**: ~120ms (optimized from ~315ms; direct USB is ~92ms)
+- **Enumeration Time**: ~197ms (optimized from ~315ms; direct USB is ~92ms; includes 5ms post-SET_CONFIG settle for HID interface reliability)
 
 ### Memory Layout
 ```
@@ -468,6 +468,15 @@ The `configureEndpoint` function correctly sets:
 - Added USB descriptor caching (-7ms)
 - Implemented logging channel system with compile-time toggle
 - Final result: ~120ms enumeration (28ms irreducible overhead from synchronous control transfers)
+
+### Phase 9: Control Transfer Timing Fix (Completed)
+- Phase 8 delay removal broke HID interface initialization and vendor software communication
+- All 3 HID interfaces failed to start (EventID 411), triggering 4.4s Windows retry cycle
+- Vendor software (Razer Synapse, Logitech G HUB) could not communicate with devices
+- **Fix 1**: Inter-transfer throttle — 800µs minimum gap between consecutive control transfers, only delays when transfers arrive back-to-back (near-zero overhead during enumeration)
+- **Fix 2**: Post-SET_CONFIGURATION settle delay — 5ms delay after configuration to let device initialize HID interfaces before class-specific requests arrive
+- Final result: ~197ms enumeration with reliable HID startup and working vendor software
+- Further optimization planned: selective throttling, reduced settle delay, HID descriptor caching
 
 ---
 

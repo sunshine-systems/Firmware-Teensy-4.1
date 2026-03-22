@@ -31,6 +31,11 @@ static uint8_t proxy_descriptor_buffer[512] __attribute__((aligned(32)));
 static uint8_t proxy_in_buffers[NUM_ENDPOINTS][64] __attribute__((aligned(32)));
 static transfer_t proxy_in_transfers[NUM_ENDPOINTS] __attribute__((aligned(32)));
 
+// Delay (ms) after SET_CONFIGURATION completes to let the device initialize
+// its HID interfaces before the host sends class-specific requests
+// (GET_REPORT_DESCRIPTOR, SET_IDLE, etc.).
+static const uint8_t SET_CONFIG_SETTLE_MS = 5;
+
 // =============================================================================
 // USBDeviceProxy Implementation
 // =============================================================================
@@ -571,6 +576,10 @@ void USBDeviceProxy::handleSetupPacket(uint32_t setup0, uint32_t setup1) {
         
         // Resume after configuration changes
         hostDriver->resumeDataTransfers();
+
+        // Let the device settle after configuration so its HID interfaces
+        // are ready before Windows sends class-specific control transfers
+        delay(SET_CONFIG_SETTLE_MS);
         return;
     }
 

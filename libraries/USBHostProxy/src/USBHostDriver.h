@@ -10,6 +10,12 @@
 #define MAX_INTERFACES 8
 #define MAX_CONFIG_DESCRIPTOR_SIZE 2048  // Maximum size for configuration descriptor
 
+// Minimum gap between control transfer completions (microseconds).
+// Vendor software (Razer Synapse, Logitech G HUB, etc.) rapid-fires control
+// transfers at runtime. Without a small recovery gap the device can't keep up.
+// During enumeration, host pacing naturally spaces transfers so this adds ~zero overhead.
+#define CONTROL_TRANSFER_MIN_GAP_US 800
+
 // Claim types from USBHost_t36
 #define CLAIM_REPORT        0
 #define CLAIM_INTERFACE     1
@@ -143,6 +149,7 @@ private:
     volatile uint16_t control_length_received;
     volatile bool control_success;
     volatile uint32_t control_last_token;
+    volatile uint32_t lastControlTransferCompleteUs;  // Inter-transfer throttle timestamp
     
     // Endpoints
     Pipe_t* in_pipe;
