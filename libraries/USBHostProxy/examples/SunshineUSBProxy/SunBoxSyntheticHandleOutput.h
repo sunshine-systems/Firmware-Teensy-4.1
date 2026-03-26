@@ -13,6 +13,26 @@
 #define MOUSE_BUTTON4   0x8
 #define MOUSE_BUTTON5   0x10
 
+// Button handoff state machine states
+enum ButtonHandoffState {
+    HANDOFF_IDLE,           // Normal OR logic
+    HANDOFF_SYNTHETIC_HOLD, // Synthetic is holding, user not pressing
+    HANDOFF_RELEASE,        // Forcing a release for naturalistic gap
+    HANDOFF_USER_CONTROL    // User has taken over, synthetic ignored
+};
+
+// Per-button handoff tracking
+struct ButtonHandoff {
+    ButtonHandoffState state = HANDOFF_IDLE;
+    unsigned long releaseStartMs = 0;
+    unsigned long gapDurationMs = 0;    // Randomized per-handoff (18-75ms)
+    uint8_t lastOutputState = 0;        // Last state sent to PC for this button (0 or 1)
+};
+
+// Handoff gap timing constants
+static const unsigned long HANDOFF_GAP_MIN_MS = 18;
+static const unsigned long HANDOFF_GAP_MAX_MS = 75;
+
 // Forward declarations
 class SunBoxCommands;
 class SunBoxUSBMouseDataHandler;
@@ -85,6 +105,18 @@ private:
 
     // Anti-detection sanitizer
     AntiDetect antiDetect;
+
+    // Button handoff state machines for LMB and RMB
+    ButtonHandoff lmbHandoff;
+    ButtonHandoff rmbHandoff;
+
+    // Last output button state
+    uint8_t lastOutputButtons = 0;
+
+    // Button handoff processing
+    uint8_t processButtonHandoff(ButtonHandoff& handoff, uint8_t buttonMask,
+                                 uint8_t serialButtons, uint8_t usbButtons,
+                                 uint8_t prevUsbButtons);
 
     // Static counters for polling rate measurement
     static uint32_t serialDevicePacketCount;    // S counter

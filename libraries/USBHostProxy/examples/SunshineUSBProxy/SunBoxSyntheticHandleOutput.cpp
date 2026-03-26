@@ -145,19 +145,19 @@ void SunBoxSyntheticHandleOutput::process() {
                                   finalX, finalY);
     }
 
-    // Combine buttons using special logic for LMB/RMB
+    // Combine buttons using handoff state machine for LMB/RMB
     uint8_t finalButtons = 0;
 
     // Handle each button
     for (uint8_t buttonMask = 1; buttonMask <= 0x10; buttonMask <<= 1) {
-        if (buttonMask == MOUSE_LEFT || buttonMask == MOUSE_RIGHT) {
-            // Special handling for LMB/RMB - Simple OR logic
-            if (!(usbState.buttons & buttonMask) && !(serialState.buttons & buttonMask)) {
-                continue;
-            }
-            if ((usbState.buttons & buttonMask) || (serialState.buttons & buttonMask)) {
-                finalButtons |= buttonMask;
-            }
+        if (buttonMask == MOUSE_LEFT) {
+            finalButtons |= processButtonHandoff(lmbHandoff, buttonMask,
+                                                 serialState.buttons, usbState.buttons,
+                                                 previousUsbButtons);
+        } else if (buttonMask == MOUSE_RIGHT) {
+            finalButtons |= processButtonHandoff(rmbHandoff, buttonMask,
+                                                 serialState.buttons, usbState.buttons,
+                                                 previousUsbButtons);
         } else {
             // Normal handling for other buttons (MMB, MB4, MB5)
             if (usbState.buttons & buttonMask) {
@@ -222,6 +222,9 @@ void SunBoxSyntheticHandleOutput::process() {
                      0, 0);  // accumX, accumY (N/A in simple firmware)
     }
 
+    // Track last output button state
+    lastOutputButtons = finalState.buttons;
+
     // Send the formatted data
     outputMouseData(outputBuffer, outputLength);
 
@@ -258,6 +261,60 @@ void SunBoxSyntheticHandleOutput::outputMouseData(const uint8_t* data, uint32_t 
         combinedOutputPacketCount++;
         usbDeviceProxy->sendDataOnEndpoint(mouseEndpoint, data, length);
     }
+}
+
+uint8_t SunBoxSyntheticHandleOutput::processButtonHandoff(
+    ButtonHandoff& handoff, uint8_t buttonMask,
+    uint8_t serialButtons, uint8_t usbButtons, uint8_t prevUsbButtons) {
+
+    bool synHeld = (serialButtons & buttonMask) != 0;
+    bool usbHeld = (usbButtons & buttonMask) != 0;
+    bool usbEdge = usbHeld && !(prevUsbButtons & buttonMask);  // Rising edge on USB
+
+    switch (handoff.state) {
+        case HANDOFF_IDLE:
+            if (synHeld && !usbHeld) {
+                handoff.state = HANDOFF_SYNTHETIC_HOLD;
+                return buttonMask;  // Pressed (synthetic controls)
+            }
+            // Normal OR logic when idle
+            return (synHeld || usbHeld) ? buttonMask : 0;
+
+        case HANDOFF_SYNTHETIC_HOLD:
+            if (!synHeld) {
+                // Synthetic released normally
+                handoff.state = HANDOFF_IDLE;
+                return usbHeld ? buttonMask : 0;
+            }
+            if (usbEdge) {
+                // User pressed while synthetic holding — begin handoff
+                handoff.state = HANDOFF_RELEASE;
+                handoff.releaseStartMs = millis();
+                handoff.gapDurationMs = HANDOFF_GAP_MIN_MS +
+                    (random(0, HANDOFF_GAP_MAX_MS - HANDOFF_GAP_MIN_MS + 1));
+                return 0;  // Force release
+            }
+            return buttonMask;  // Still held by synthetic
+
+        case HANDOFF_RELEASE:
+            if (millis() - handoff.releaseStartMs >= handoff.gapDurationMs) {
+                // Gap elapsed, hand control to user
+                handoff.state = HANDOFF_USER_CONTROL;
+                return usbHeld ? buttonMask : 0;
+            }
+            return 0;  // Maintain forced release during gap
+
+        case HANDOFF_USER_CONTROL:
+            if (!synHeld && !usbHeld) {
+                // Both released — reset to idle
+                handoff.state = HANDOFF_IDLE;
+                return 0;
+            }
+            // User controls, synthetic ignored
+            return usbHeld ? buttonMask : 0;
+    }
+
+    return 0;
 }
 
 void SunBoxSyntheticHandleOutput::performButtonFiltering(uint8_t& buttons, uint8_t previousButtons, uint8_t unmodifiedButtons) {
