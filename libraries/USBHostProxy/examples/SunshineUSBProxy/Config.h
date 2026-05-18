@@ -36,4 +36,6 @@ extern int disablePassthroughForLMB; //0 = False, 1 = True, 2 = Only if MMB has 
 extern int disablePassthroughForMB4; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration
 extern int disablePassthroughForMB5; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration
 
+extern int enableDeltaLogging; // 0 = Disabled (default), 1 = Enabled — logs raw USB mouse deltas via M: output
+
 #endif

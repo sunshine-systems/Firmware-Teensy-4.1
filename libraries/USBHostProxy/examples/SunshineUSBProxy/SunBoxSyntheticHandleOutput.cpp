@@ -229,14 +229,14 @@ void SunBoxSyntheticHandleOutput::process() {
     outputMouseData(outputBuffer, outputLength);
 
     // Buffer raw USB deltas for M: output (every 10 USB frames)
-    if (hasUSBData) {
+    if (enableDeltaLogging && hasUSBData) {
         deltaBufferX[deltaFrameCount] = csvRawUsbX;
         deltaBufferY[deltaFrameCount] = csvRawUsbY;
         deltaFrameCount++;
 
         if (deltaFrameCount >= DELTA_BUFFER_SIZE) {
             // Format: M: x,y:x,y:x,y:... (10 pairs)
-            char buf[128];
+            char buf[160];
             int pos = 0;
             for (uint8_t i = 0; i < DELTA_BUFFER_SIZE; i++) {
                 if (i > 0) buf[pos++] = ':';

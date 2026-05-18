@@ -4,6 +4,7 @@
 #include "SunBoxEEPROM.h"
 #include "SunBoxStartup.h"
 #include "SunBoxLogger.h"
+#include "Config.h"
 
 CommandsSunBoxDevtoolsInterface::CommandsSunBoxDevtoolsInterface()
     : usbHostDriver(nullptr), hidHandler(nullptr), debugEnabled(false) {
@@ -43,6 +44,9 @@ void CommandsSunBoxDevtoolsInterface::handleCommand(const String& cmd) {
     else if (baseCommand == "claimclear") {
         handleClaimClear();
     }
+    else if (baseCommand == "deltalog") {
+        handleDeltaLog();
+    }
     else if (baseCommand == "pwrclear") {
         // Hidden command - not shown in help
         handlePwrClear();
@@ -62,6 +66,7 @@ void CommandsSunBoxDevtoolsInterface::handleHelp() {
     logger.info("claimcorrection vid,pid,interface,endpoint - Force specific interface");
     logger.info("               Example: claimcorrection 046d,c53f,1,82");
     logger.info("claimclear     - Clear forced interface configuration");
+    logger.info("deltalog       - Toggle mouse delta logging (M: output)");
     logger.info("=================================");
 }
 
@@ -169,6 +174,11 @@ void CommandsSunBoxDevtoolsInterface::handleClaimCorrection(const String& args) 
 void CommandsSunBoxDevtoolsInterface::handleClaimClear() {
     sunboxEEPROM.clearClaimConfig();
     logger.info("Claim correction configuration cleared");
+}
+
+void CommandsSunBoxDevtoolsInterface::handleDeltaLog() {
+    enableDeltaLogging = enableDeltaLogging ? 0 : 1;
+    logger.infof("Delta logging %s", enableDeltaLogging ? "ON" : "OFF");
 }
 
 void CommandsSunBoxDevtoolsInterface::handlePwrClear() {

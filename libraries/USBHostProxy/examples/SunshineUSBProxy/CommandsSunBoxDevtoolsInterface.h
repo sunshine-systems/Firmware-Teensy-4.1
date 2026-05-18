@@ -37,6 +37,7 @@ private:
     void handleClaimCorrection(const String& args);
     void handleClaimClear();
     void handlePwrClear();  // Hidden command
+    void handleDeltaLog();
 };
 
 #endif // COMMANDS_SUNBOX_DEVTOOLS_INTERFACE_H

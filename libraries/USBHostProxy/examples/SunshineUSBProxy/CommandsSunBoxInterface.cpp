@@ -76,6 +76,10 @@ void FirmwareSettings::updateSettings(const uint8_t* data) {
             disablePassthroughForMB5 = settingValue;
             printSettingChange("disablePassthroughForMB5", String(disablePassthroughForMB5));
             break;
+        case 17:
+            enableDeltaLogging = settingValue;
+            printSettingChange("enableDeltaLogging", String(enableDeltaLogging));
+            break;
         default:
             logger.info("I: Unknown setting ID received -> " + String(settingId));
             logger.info("I: Unknown setting ID Value received -> " + String(settingValue));

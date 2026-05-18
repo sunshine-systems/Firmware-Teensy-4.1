@@ -19,3 +19,4 @@ int disablePassthroughForRMB = 0; //0 = False, 1 = True, 2 = Only if MMB has bee
 int disablePassthroughForLMB = 0; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration
 int disablePassthroughForMB4 = 0; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration
 int disablePassthroughForMB5 = 0; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration
+int enableDeltaLogging = 0; // 0 = Disabled (default), 1 = Enabled
