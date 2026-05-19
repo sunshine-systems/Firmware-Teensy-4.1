@@ -163,11 +163,18 @@ goto MENU
 REM ============================================================
 :CLOSE_IDE
 REM ============================================================
+REM Decide whether the visible IDE was actually open, then kill EVERY
+REM Arduino-related process (IDE + helpers + arduino-cli daemon +
+REM serial-/mdns-/dfu-discovery + language server) so the file copy
+REM and cache wipe can proceed cleanly.
 set "IDE_WAS_RUNNING=0"
 set "IDE_PATH="
-tasklist /FI "IMAGENAME eq Arduino IDE.exe" 2>nul | find /I "Arduino IDE.exe" >nul
-if errorlevel 1 goto :EOF
-set "IDE_WAS_RUNNING=1"
+
+REM Electron apps that are actually open always have multiple
+REM Arduino IDE.exe instances. A single match is a leftover zombie.
+set "IDE_COUNT=0"
+for /f %%C in ('powershell -NoProfile -Command "@(Get-Process 'Arduino IDE' -ErrorAction SilentlyContinue).Count"') do set "IDE_COUNT=%%C"
+if %IDE_COUNT% GEQ 2 set "IDE_WAS_RUNNING=1"
 
 if exist "%LOCALAPPDATA%\Programs\Arduino IDE\Arduino IDE.exe" (
     set "IDE_PATH=%LOCALAPPDATA%\Programs\Arduino IDE\Arduino IDE.exe"
@@ -177,17 +184,14 @@ if exist "%LOCALAPPDATA%\Programs\Arduino IDE\Arduino IDE.exe" (
     set "IDE_PATH=%ProgramFiles(x86)%\Arduino IDE\Arduino IDE.exe"
 )
 
-echo Arduino IDE is running. Closing ...
-taskkill /IM "Arduino IDE.exe" /T /F >nul 2>&1
-REM Poll until the process tree is really gone (Electron helpers can linger).
-REM Up to ~10 seconds, re-killing on each iteration.
-for /L %%N in (1,1,10) do (
-    ping -n 2 127.0.0.1 >nul
-    tasklist /FI "IMAGENAME eq Arduino IDE.exe" 2>nul | find /I "Arduino IDE.exe" >nul
-    if errorlevel 1 goto :CLOSE_IDE_DONE
-    taskkill /IM "Arduino IDE.exe" /T /F >nul 2>&1
-)
-:CLOSE_IDE_DONE
+echo Closing any running Arduino processes ...
+REM Kill any process whose executable path contains 'arduino' (case
+REM insensitive). Catches: the IDE itself, Electron helpers, bundled
+REM arduino-cli, serial-/mdns-/dfu-discovery, the language server, and
+REM any build tools spawned from %APPDATA%\Arduino15 or .arduinoIDE.
+REM Loops up to ~10s, re-killing on each pass so Electron helpers do
+REM not respawn faster than we can stop them.
+powershell -NoProfile -Command "$n=0; while ($n -lt 20) { $p = Get-Process | Where-Object { $_.Path -and $_.Path -match 'arduino' }; if (-not $p) { break }; $p | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; $n++ }"
 goto :EOF
 
 REM ============================================================
@@ -217,7 +221,10 @@ REM ============================================================
 if "%IDE_WAS_RUNNING%"=="1" (
     if defined IDE_PATH (
         echo Relaunching Arduino IDE ...
-        start "" "%IDE_PATH%"
+        REM Use PowerShell Start-Process so the IDE is a fully detached
+        REM child of the OS, not of this cmd. Otherwise the IDE inherits
+        REM our console handles and dumps its logs into the terminal.
+        powershell -NoProfile -Command "Start-Process -FilePath '%IDE_PATH%'"
     ) else (
         echo [WARN] Arduino IDE was running but its install path was not found.
         echo        Please reopen the IDE manually.
