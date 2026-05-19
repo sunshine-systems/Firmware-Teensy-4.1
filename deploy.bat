@@ -29,32 +29,49 @@ if not exist "%FIRMWARE%\boards.txt" (
     exit /b 1
 )
 
-REM --- Detect installed Teensy core (deploy target) ---
-set "TEENSY_BASE=%LOCALAPPDATA%\Arduino15\packages\teensy\hardware\avr"
-if not exist "%TEENSY_BASE%\" (
-    echo [ERROR] Arduino Teensy core base path not found:
-    echo         %TEENSY_BASE%
-    echo Install the Teensy boards package via Arduino IDE first.
+REM --- Detect / create Teensy core install path ---
+REM DEFAULT_VERSION is the folder name used when the Teensy package
+REM is not yet installed and we have to create the path ourselves.
+REM Matches the firmware\ contents shipped in this repo.
+set "DEFAULT_VERSION=1.59.0"
+
+REM Require Arduino IDE itself to be installed (Arduino15\packages must
+REM exist). If the Teensy subfolder is missing we'll create it below.
+set "PACKAGES_BASE=%LOCALAPPDATA%\Arduino15\packages"
+if not exist "%PACKAGES_BASE%\" (
+    echo [ERROR] Arduino15\packages not found:
+    echo         %PACKAGES_BASE%
+    echo Install Arduino IDE first ^(this creates the packages folder^).
     pause
     exit /b 1
 )
+set "TEENSY_BASE=%PACKAGES_BASE%\teensy\hardware\avr"
 
 set "INSTALL_TARGET="
 set "VERSION_COUNT=0"
 set "FIRST_VERSION="
-for /d %%V in ("%TEENSY_BASE%\*") do (
-    set /a VERSION_COUNT+=1
-    if not defined FIRST_VERSION set "FIRST_VERSION=%%V"
+if exist "%TEENSY_BASE%\" (
+    for /d %%V in ("%TEENSY_BASE%\*") do (
+        set /a VERSION_COUNT+=1
+        if not defined FIRST_VERSION set "FIRST_VERSION=%%V"
+    )
 )
 
 if "%VERSION_COUNT%"=="0" (
-    echo [ERROR] No Teensy core versions installed under
-    echo         %TEENSY_BASE%
-    pause
-    exit /b 1
-)
-
-if "%VERSION_COUNT%"=="1" (
+    REM Teensy package not installed yet - create the path so deploy
+    REM can write the firmware into a fresh location. The user can
+    REM still run [2] Deploy directly; Backup will refuse because
+    REM there is nothing pristine to capture.
+    echo Teensy core not found. Creating fresh install location:
+    echo   %TEENSY_BASE%\%DEFAULT_VERSION%
+    mkdir "%TEENSY_BASE%\%DEFAULT_VERSION%" 2>nul
+    if not exist "%TEENSY_BASE%\%DEFAULT_VERSION%\" (
+        echo [ERROR] Could not create %TEENSY_BASE%\%DEFAULT_VERSION%
+        pause
+        exit /b 1
+    )
+    set "INSTALL_TARGET=%TEENSY_BASE%\%DEFAULT_VERSION%"
+) else if "%VERSION_COUNT%"=="1" (
     set "INSTALL_TARGET=%FIRST_VERSION%"
 ) else (
     echo Multiple Teensy core versions detected under
