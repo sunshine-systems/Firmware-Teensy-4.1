@@ -1,0 +1,13 @@
+# Deployed mirrors (vendor Teensy core files copied to top level by deploy.bat)
+/cores/
+/libraries/
+/boards.txt
+/platform.txt
+/keywords.txt
+/installed.json
+
+# One-time pristine backup zip
+/teensy_core_backup.zip
+
+# IDE
+/.vscode/
