@@ -111,16 +111,19 @@ if /i not "%OK%"=="Y" goto MENU
 call :CLOSE_IDE
 call :WIPE_CACHES
 call :WIPE_VENDOR
+call :START_GUARD
 
 echo Copying firmware\ contents to %REPO% ...
 xcopy "%FIRMWARE%\*" "%REPO%\" /E /I /Y /Q >nul
 if errorlevel 1 (
     echo [ERROR] xcopy failed.
+    call :STOP_GUARD
     call :REOPEN_IDE
     pause
     goto MENU
 )
 echo [OK] Deploy complete.
+call :STOP_GUARD
 call :REOPEN_IDE
 pause
 goto MENU
@@ -142,16 +145,19 @@ if /i not "%OK%"=="Y" goto MENU
 call :CLOSE_IDE
 call :WIPE_CACHES
 call :WIPE_VENDOR
+call :START_GUARD
 
 echo Expanding %BACKUP_ZIP% to %REPO% ...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%BACKUP_ZIP%' -DestinationPath '%REPO%' -Force"
 if errorlevel 1 (
     echo [ERROR] Expand-Archive failed.
+    call :STOP_GUARD
     call :REOPEN_IDE
     pause
     goto MENU
 )
 echo [OK] Restore complete.
+call :STOP_GUARD
 call :REOPEN_IDE
 pause
 goto MENU
@@ -174,9 +180,16 @@ if exist "%LOCALAPPDATA%\Programs\Arduino IDE\Arduino IDE.exe" (
 )
 
 echo Arduino IDE is running. Closing ...
-taskkill /IM "Arduino IDE.exe" /F >nul 2>&1
-REM Brief settle so file handles release
-ping -n 3 127.0.0.1 >nul
+taskkill /IM "Arduino IDE.exe" /T /F >nul 2>&1
+REM Poll until the process tree is really gone (Electron helpers can linger).
+REM Up to ~10 seconds, re-killing on each iteration.
+for /L %%N in (1,1,10) do (
+    ping -n 2 127.0.0.1 >nul
+    tasklist /FI "IMAGENAME eq Arduino IDE.exe" 2>nul | find /I "Arduino IDE.exe" >nul
+    if errorlevel 1 goto :CLOSE_IDE_DONE
+    taskkill /IM "Arduino IDE.exe" /T /F >nul 2>&1
+)
+:CLOSE_IDE_DONE
 goto :EOF
 
 REM ============================================================
@@ -197,6 +210,28 @@ for %%I in (%VENDOR_ITEMS%) do (
     ) else if exist "%REPO%\%%I" (
         del /F /Q "%REPO%\%%I"
     )
+)
+goto :EOF
+
+REM ============================================================
+:START_GUARD
+REM ============================================================
+REM Background PowerShell that re-kills Arduino IDE if it respawns
+REM during the file copy. Exits when the sentinel file appears.
+set "GUARD_STOP=%TEMP%\deploy_guard_stop.flag"
+if exist "%GUARD_STOP%" del /F /Q "%GUARD_STOP%" >nul 2>&1
+echo Starting Arduino IDE respawn guard ...
+start "" /B powershell -NoProfile -WindowStyle Hidden -Command "$s='%GUARD_STOP%'; while (-not (Test-Path $s)) { Stop-Process -Name 'Arduino IDE' -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }"
+goto :EOF
+
+REM ============================================================
+:STOP_GUARD
+REM ============================================================
+if defined GUARD_STOP (
+    echo. > "%GUARD_STOP%"
+    REM Wait ~3s so the guard's 500ms poll definitely sees the sentinel and exits.
+    REM The stale sentinel is cleaned up by the next START_GUARD invocation.
+    ping -n 4 127.0.0.1 >nul
 )
 goto :EOF
 
