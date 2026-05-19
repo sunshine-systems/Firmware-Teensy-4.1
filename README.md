@@ -25,42 +25,44 @@ data flow, descriptors, EEPROM layout, verified devices, etc.).
 └── .gitattributes
 ```
 
-The repo lives at the Arduino Teensy core install path
-(`%LOCALAPPDATA%\Arduino15\packages\teensy\hardware\avr\1.59.0`). The
-`firmware/` folder holds the canonical sources. `deploy.bat` pushes
-`firmware/` into the surrounding folder so the Arduino IDE picks up your
-changes when it scans for cores.
+Clone this repo anywhere on disk — the `firmware/` folder holds the
+canonical sources. `deploy.bat` auto-detects your installed Teensy core
+at `%LOCALAPPDATA%\Arduino15\packages\teensy\hardware\avr\<version>` and
+pushes `firmware/` into it so the Arduino IDE picks up your changes.
 
 ## Quick start
 
-1. Clone this repo directly over the Teensy 1.59.0 install path. The
-   path is auto-detected by Arduino IDE at
-   `%LOCALAPPDATA%\Arduino15\packages\teensy\hardware\avr\1.59.0`.
-2. Run `deploy.bat`.
-3. Choose **[1] Backup** the first time — this snapshots the pristine
-   vendor core to `teensy_core_backup.zip` so you can revert later.
-4. Edit anything you need under `firmware/`.
-5. Choose **[2] Deploy** to push `firmware/` into the live core path. The
-   script closes the Arduino IDE, clears its caches, copies the files,
-   and reopens the IDE if it was running.
-6. Choose **[3] Restore** at any time to revert the live core to the
-   pristine state captured in step 3.
+1. Install the Teensy boards package via Arduino IDE (Boards Manager →
+   "Teensy by Paul Stoffregen"). This creates the install path the
+   script will target.
+2. Clone this repo to any folder (e.g. `Documents\GitHub\Teensy-Core-1.59.0`).
+3. Run `deploy.bat`. If you have multiple Teensy core versions installed
+   the script will ask which one to target.
+4. Choose **[1] Backup** the first time — this snapshots the pristine
+   vendor core (from the install path) to `teensy_core_backup.zip` so
+   you can revert later.
+5. Edit anything you need under `firmware/`.
+6. Choose **[2] Deploy** to push `firmware/` into the live install path.
+   The script closes any running Arduino processes, clears the IDE
+   caches, copies the files, and re-launches the IDE if it was open.
+7. Choose **[3] Restore** at any time to revert the live install to the
+   pristine state captured in step 4.
 
-`deploy.bat` resolves all paths relative to the active Windows user —
+All paths are auto-resolved relative to the active Windows user —
 nothing is hardcoded.
 
 ## What deploy.bat actually touches
 
-| Path                                     | When                  |
-|------------------------------------------|-----------------------|
-| `<repo>\cores`, `<repo>\libraries`, …    | overwritten on deploy/restore |
-| `%APPDATA%\Arduino IDE`                  | deleted before deploy/restore |
-| `%APPDATA%\arduino-ide`                  | deleted before deploy/restore |
-| `Arduino IDE.exe` process                | killed if running, relaunched after |
+| Path                                                              | When                                  |
+|-------------------------------------------------------------------|---------------------------------------|
+| `<install>\cores`, `<install>\libraries`, `boards.txt`, etc.       | overwritten on deploy / restore       |
+| `%APPDATA%\Arduino IDE`, `%APPDATA%\arduino-ide`                   | deleted before deploy / restore       |
+| Any process whose exe path contains `arduino` (IDE, arduino-cli, discovery tools, language server) | killed before deploy / restore        |
+| `Arduino IDE.exe` (detached relaunch via `Start-Process`)          | re-launched after, only if the IDE was open when the script ran |
 
-Everything else at the repo root (`.git/`, `CLAUDE.md`, `README.md`,
+The repo files themselves (`.git/`, `CLAUDE.md`, `README.md`,
 `firmware/`, `deploy.bat`, `.gitattributes`, `.gitignore`,
-`teensy_core_backup.zip`) is never touched.
+`teensy_core_backup.zip`) are never touched.
 
 ## Building a sketch
 
