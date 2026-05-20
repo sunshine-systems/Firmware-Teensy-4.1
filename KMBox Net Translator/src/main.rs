@@ -57,12 +57,13 @@ use crate::streamcheats::PACKET_LEN;
 use crate::util::settings::{load_or_create, LoadOutcome, Settings};
 use crate::util::translator::{SerialEnvelope, Translator};
 
-/// Heartbeat interval. Mirrors `FirmwareInterface.py`'s
-/// `heartbeat_interval = 2.5` (seconds). Emitting a benign packet on this
-/// cadence keeps the FTDI / CH340 chip and the Windows COM-port driver
-/// out of any idle low-power state, so the next real translation packet
-/// doesn't pay the 85–415 ms cold-path wakeup latency.
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(2500);
+/// Heartbeat interval. `FirmwareInterface.py` uses 2.5 s, but in
+/// observation the FT232H / CH340 chip would still cold-down between
+/// 2.5 s heartbeats under serialport-rs on Windows (heartbeat writes
+/// themselves taking 460–961 ms). Shortening to 500 ms keeps the chip
+/// continuously warm. Cost: 18 extra bytes/s over the serial link
+/// — well under 0.02 % of the 115 200 bit/s budget.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
 
 /// 9-byte heartbeat packet: length prefix `0x03` routes the firmware
 /// to its settings handler, `setting_id=0` is `FIRMWARE_VERSION` (read
@@ -166,6 +167,20 @@ fn run(settings: Settings) -> Result<()> {
                 settings.com_port, settings.baud_rate
             )
         })?;
+
+    // Match pyserial's default open behaviour: assert DTR and RTS. Most
+    // USB-serial chips (FT232H, CH340) interpret DTR low as "host is
+    // gone" and enter a low-power state — which makes the first write
+    // after any idle period take 100s of ms while the chip wakes up.
+    // pyserial sets fDtrControl/fRtsControl = ENABLE in its DCB by
+    // default; serialport-rs leaves them at whatever Windows defaults
+    // to. Forcing them HIGH here removes that difference.
+    if let Err(e) = serial.write_data_terminal_ready(true) {
+        warn!("could not assert DTR on {}: {}", settings.com_port, e);
+    }
+    if let Err(e) = serial.write_request_to_send(true) {
+        warn!("could not assert RTS on {}: {}", settings.com_port, e);
+    }
 
     // Clone the handle so a reader thread can pull bytes from the firmware
     // independently of the writer thread.
