@@ -2,8 +2,12 @@
 //! the writer (serial2 supports `&self` on both directions), buffers
 //! bytes by newline, and emits one `IN (COMx):` log line per complete
 //! firmware response line. Non-printable bytes are escaped as `\xHH`.
+//!
+//! Every complete non-NUL line also increments the shared
+//! `lines_received` counter so the heartbeat thread can detect when
+//! the device has gone unresponsive even though USB is still alive.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tracing::warn;
@@ -15,24 +19,36 @@ use super::format::flush_line;
 /// are rendered as `\xHH` so binary noise stays readable. A 4 KiB
 /// safety cap forces a flush if the firmware ever omits a newline.
 ///
-/// Exits when the per-session `running` flag flips to `false` OR when
-/// `read` returns a non-recoverable error (which on Windows USB-CDC is
-/// the usual "device unplugged" path). Either way the supervisor joins
-/// this thread, drops the port, and goes back to scanning.
+/// Exits when the per-session `session_running` flag flips to `false`
+/// (the supervisor signalling teardown, or another thread requesting
+/// disconnect) OR when `read` returns a non-recoverable error (Windows
+/// USB-CDC's "device unplugged" path). The read-error path **also**
+/// flips `session_running` to `false` so the writer thread notices and
+/// can run the disconnect SOP — without that hand-off, paused
+/// heartbeats would leave the writer with no traffic to fail on and
+/// the supervisor would stall.
 pub(crate) fn serial_reader_loop(
     serial: &serial2::SerialPort,
     port_name: &str,
-    running: Arc<AtomicBool>,
+    session_running: Arc<AtomicBool>,
+    lines_received: Arc<AtomicU64>,
 ) {
     let mut buf = [0u8; 256];
     let mut line: Vec<u8> = Vec::with_capacity(256);
 
-    while running.load(Ordering::SeqCst) {
+    while session_running.load(Ordering::SeqCst) {
         match serial.read(&mut buf) {
             Ok(0) => {}
             Ok(n) => {
                 for &b in &buf[..n] {
                     if b == b'\n' {
+                        // Count real activity from the firmware. The
+                        // all-NUL noise that FTDI drivers sometimes
+                        // emit during port settling doesn't qualify as
+                        // a sign of life.
+                        if !line.is_empty() && line.iter().any(|&b| b != 0) {
+                            lines_received.fetch_add(1, Ordering::Relaxed);
+                        }
                         flush_line(port_name, &line);
                         line.clear();
                     } else if b == b'\r' {
@@ -42,6 +58,9 @@ pub(crate) fn serial_reader_loop(
                         // Guard against runaway buffer if the firmware
                         // never sends a newline.
                         if line.len() > 4096 {
+                            if line.iter().any(|&b| b != 0) {
+                                lines_received.fetch_add(1, Ordering::Relaxed);
+                            }
                             flush_line(port_name, &line);
                             line.clear();
                         }
@@ -53,10 +72,10 @@ pub(crate) fn serial_reader_loop(
             Err(e) => {
                 // Anything else (BrokenPipe, NotConnected, Os{...}) is
                 // almost certainly "the user unplugged the Teensy".
-                // Don't hot-spin retrying on a dead handle — bail and
-                // let the supervisor's session-teardown path reclaim
-                // us.
+                // Bail and signal the writer so it can run the SOP and
+                // the supervisor can rescan.
                 warn!("serial read error on {}: {} — ending session", port_name, e);
+                session_running.store(false, Ordering::SeqCst);
                 break;
             }
         }

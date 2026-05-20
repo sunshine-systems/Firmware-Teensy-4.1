@@ -38,26 +38,36 @@ const HEARTBEAT_FAILURE_THRESHOLD: u32 = 3;
 /// the OS buffer; explicitly flushing on top of that just adds latency
 /// for no benefit (pyserial doesn't flush either).
 ///
-/// On reaching [`HEARTBEAT_FAILURE_THRESHOLD`] the writer runs the
-/// disconnect SOP — clear `holder` first so the translator, the
-/// heartbeat, and any interpolation worker stop pushing fresh packets,
-/// then drain the receiver so anything queued during the failure window
-/// doesn't surface on the next session. Channel disconnect (all senders
-/// dropped, only happens at program shutdown) is a clean exit with no
-/// SOP needed. Non-heartbeat write failures (mouse packets, settings)
-/// are logged and dropped but never count toward the threshold — only
-/// heartbeats decide session liveness.
+/// On reaching [`HEARTBEAT_FAILURE_THRESHOLD`] the writer flips
+/// `session_running` to `false` and breaks out of its loop; the
+/// post-loop block then runs the disconnect SOP — clear `holder` first
+/// so the translator, the heartbeat, and any interpolation worker stop
+/// pushing fresh packets, then drain the receiver so anything queued
+/// during the failure window doesn't surface on the next session.
+///
+/// The reader thread can also flip `session_running` (e.g. on a hard
+/// read error from a yanked USB cable), in which case the writer's
+/// outer loop notices and converges on the same SOP. That's how the
+/// "device gone but heartbeats are paused so writes aren't happening"
+/// case still ends up in the discovery loop rather than hanging.
+///
+/// Non-heartbeat write failures (mouse packets, settings) are logged
+/// and dropped but never count toward the threshold — only heartbeats
+/// decide session liveness. Channel disconnect (all senders dropped,
+/// only happens at program shutdown) is a clean exit with no SOP
+/// needed.
 pub(crate) fn serial_writer_loop(
     serial: &serial2::SerialPort,
     port_name: &str,
     rx: Receiver<SerialEnvelope>,
     holder: SerialTxHolder,
     running: Arc<AtomicBool>,
+    session_running: Arc<AtomicBool>,
     enable_timing: bool,
 ) {
     let mut consecutive_heartbeat_failures: u32 = 0;
 
-    while running.load(Ordering::SeqCst) {
+    while running.load(Ordering::SeqCst) && session_running.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok((origin, pkt)) => {
                 let dequeued = Instant::now();
@@ -99,31 +109,10 @@ pub(crate) fn serial_writer_loop(
                                     "{} consecutive heartbeat failures on {} — ending session",
                                     HEARTBEAT_FAILURE_THRESHOLD, port_name
                                 );
-                                // SOP: clear holder *first* so every
-                                // sender (translator, heartbeat, interp
-                                // workers) sees `None` on its next
-                                // attempt and stops.
-                                *holder.lock().unwrap() = None;
-                                // Then drain any envelopes already in
-                                // flight so the next session doesn't
-                                // inherit stale packets the moment its
-                                // writer starts up.
-                                let mut drained = 0usize;
-                                while rx.try_recv().is_ok() {
-                                    drained += 1;
-                                }
-                                if drained > 0 {
-                                    info!(
-                                        "Dropped {} pending packet(s) on disconnect",
-                                        drained
-                                    );
-                                }
-                                return;
+                                session_running.store(false, Ordering::SeqCst);
+                                break;
                             }
                         } else {
-                            // Non-heartbeat failure: log and drop the
-                            // packet. Liveness is the heartbeat's call,
-                            // not ours.
                             warn!(
                                 "serial write failed on {} (mouse/settings packet dropped): {}",
                                 port_name, e
@@ -136,6 +125,23 @@ pub(crate) fn serial_writer_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    // One flush on shutdown so any tail bytes leave the hardware FIFO.
-    let _ = serial.flush();
+
+    if !session_running.load(Ordering::SeqCst) && running.load(Ordering::SeqCst) {
+        // Disconnect path: someone flipped session_running to false —
+        // either us (3-strike heartbeat) or the reader (hard read
+        // error). Run the SOP so the next session starts clean.
+        *holder.lock().unwrap() = None;
+        let mut drained = 0usize;
+        while rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        if drained > 0 {
+            info!("Dropped {} pending packet(s) on disconnect", drained);
+        }
+    } else {
+        // Graceful shutdown (or channel disconnect during shutdown):
+        // flush any tail bytes out of the hardware FIFO and leave the
+        // holder for the run()-side cleanup.
+        let _ = serial.flush();
+    }
 }

@@ -99,7 +99,7 @@ mod util;
 use std::env;
 use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -245,6 +245,7 @@ fn configure_session_port(port: &mut serial2::SerialPort, port_name: &str) -> Re
 fn supervisor_loop(
     holder: SerialTxHolder,
     running: Arc<AtomicBool>,
+    lines_received: Arc<AtomicU64>,
     enable_timing: bool,
 ) {
     info!("Scanning available COM ports for firmware...");
@@ -280,6 +281,7 @@ fn supervisor_loop(
                 *holder.lock().unwrap() = Some(tx);
 
                 let writer_running = running.clone();
+                let writer_session_running = session_running.clone();
                 let writer_port_name = port_name.clone();
                 let writer_holder = holder.clone();
                 let writer_thread = thread::spawn(move || {
@@ -289,17 +291,20 @@ fn supervisor_loop(
                         rx,
                         writer_holder,
                         writer_running,
+                        writer_session_running,
                         enable_timing,
                     );
                 });
 
-                let reader_running = session_running.clone();
+                let reader_session_running = session_running.clone();
+                let reader_lines = lines_received.clone();
                 let reader_port_name = port_name.clone();
                 let reader_thread = thread::spawn(move || {
                     crate::streamcheats::reader::serial_reader_loop(
                         &reader_port,
                         &reader_port_name,
-                        reader_running,
+                        reader_session_running,
+                        reader_lines,
                     );
                 });
 
@@ -365,19 +370,37 @@ fn run(settings: Settings) -> Result<()> {
     // outbound packets silently and the heartbeat skips its tick.
     let serial_tx_holder: SerialTxHolder = Arc::new(Mutex::new(None));
 
+    // Monotonic counter of real (non-NUL) firmware lines seen by the
+    // reader. The heartbeat thread compares this counter against the
+    // value it saw at its last send to decide whether the firmware is
+    // still responsive; on three consecutive zero-deltas it pauses
+    // sends until any new line bumps the counter again.
+    let lines_received: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+
     // Heartbeat is permanent — it lives across all sessions and
     // automatically idles when no session is active.
     let heartbeat_running = running.clone();
     let heartbeat_holder = serial_tx_holder.clone();
+    let heartbeat_lines = lines_received.clone();
     let heartbeat_thread = thread::spawn(move || {
-        crate::streamcheats::heartbeat::heartbeat_loop(heartbeat_holder, heartbeat_running);
+        crate::streamcheats::heartbeat::heartbeat_loop(
+            heartbeat_holder,
+            heartbeat_running,
+            heartbeat_lines,
+        );
     });
 
     // Supervisor owns the discovery + per-session writer/reader threads.
     let supervisor_running = running.clone();
     let supervisor_holder = serial_tx_holder.clone();
+    let supervisor_lines = lines_received.clone();
     let supervisor_thread = thread::spawn(move || {
-        supervisor_loop(supervisor_holder, supervisor_running, settings.enable_timing_logs);
+        supervisor_loop(
+            supervisor_holder,
+            supervisor_running,
+            supervisor_lines,
+            settings.enable_timing_logs,
+        );
     });
 
     let translator = Translator::new(
