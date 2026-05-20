@@ -82,7 +82,7 @@ use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::streamcheats::PACKET_LEN;
+use crate::streamcheats::{build_settings_packet, DeviceSettings, PACKET_LEN};
 use crate::util::settings::{load_or_create, LoadOutcome, Settings};
 use crate::util::translator::{SerialEnvelope, Translator};
 
@@ -92,13 +92,13 @@ use crate::util::translator::{SerialEnvelope, Translator};
 /// what's different about the write path.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(2500);
 
-/// 9-byte heartbeat packet: length prefix `0x03` routes the firmware
-/// to its settings handler, `setting_id=0` is `FIRMWARE_VERSION` (read
-/// only — triggers a `V: x.xx` reply, no HID side-effect), and the
-/// remaining bytes are zero-padded. Byte-for-byte identical to Python's
-/// `create_settings_report("FIRMWARE_VERSION", 0, 0)`.
+/// 9-byte heartbeat packet — a [`DeviceSettings::FirmwareVersion`] read
+/// with value `0`. Triggers the firmware's `V: x.xx` reply line on its
+/// serial output and has no HID side-effect. Byte-for-byte identical to
+/// Python's `create_settings_report("FIRMWARE_VERSION", 0, 0)`. Pinned
+/// in `streamcheats::device_settings::tests::heartbeat_packet_is_firmware_version_zero`.
 const HEARTBEAT_PACKET: [u8; PACKET_LEN] =
-    [0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    build_settings_packet(DeviceSettings::FirmwareVersion, 0);
 
 /// Initialise `tracing_subscriber` with an `info`-level default filter and
 /// enable ANSI escape-sequence processing on Windows consoles so colour

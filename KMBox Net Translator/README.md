@@ -111,12 +111,20 @@ implement them — those docs are the canonical reference. The headlines:
   layout and the `CMD_*` table live in
   [`src/kmbox_net/schema.rs`](src/kmbox_net/schema.rs); the decoders are
   in [`src/kmbox_net/parser.rs`](src/kmbox_net/parser.rs).
-* **Outgoing (Streamcheats serial)** — fixed 9 bytes: a `0x08` length
-  prefix, button bitmask, an int8/sentinel low byte for X and Y, the
-  wheel delta, and an always-populated 16-bit extended `(x, y)` pair.
-  The byte-by-byte layout and the "always extended for Python parity"
-  rationale live at the top of
+* **Outgoing (Streamcheats serial — mouse HID)** — fixed 9 bytes: a
+  `0x08` length prefix, button bitmask, an int8/sentinel low byte for X
+  and Y, the wheel delta, and an always-populated 16-bit extended
+  `(x, y)` pair. The byte-by-byte layout and the "always extended for
+  Python parity" rationale live at the top of
   [`src/streamcheats/packet.rs`](src/streamcheats/packet.rs).
+* **Outgoing (Streamcheats serial — device settings)** — fixed 9 bytes
+  with a `0x03` length prefix instead of `0x08`. Byte 1 is the
+  [`DeviceSettings`](src/streamcheats/device_settings.rs) ID (0–17,
+  mirroring the firmware's `FirmwareSettings::updateSettings` switch),
+  bytes 2–3 are the signed `i16` value LE, the rest are zero. Currently
+  emitted only as the 2.5 s heartbeat
+  (`build_settings_packet(DeviceSettings::FirmwareVersion, 0)`); the
+  full enum is exposed for future settings-write features.
 
 ## Supported commands
 
@@ -178,7 +186,8 @@ src/
     parser.rs              # decoders for the above + Header::reply
   streamcheats/
     mod.rs                 # re-exports
-    packet.rs              # 9-byte serial packet builder + button bitmask constants
+    packet.rs              # 9-byte mouse-HID serial packet builder + button bitmask constants
+    device_settings.rs     # firmware setting IDs (DeviceSettings enum) + 3-byte settings packet builder
   util/
     mod.rs                 # re-exports
     settings.rs            # config.json load / validate / default-rewrite (three-way LoadOutcome)
@@ -226,7 +235,7 @@ pyserial does by default.
 cargo test --release
 ```
 
-Currently runs **18 tests** covering:
+Currently runs **24 tests** covering:
 
 * `kmbox_net::parser` — header decode (little-endian), reply
   construction (byte-for-byte echo of the request header), `SoftMouse`
@@ -235,6 +244,11 @@ Currently runs **18 tests** covering:
   reference for in-range zeros, positive and negative axis overflow,
   the `-128` / `+127` boundary that takes the sentinel path, wheel-only
   packets, and out-of-range clamping.
+* `streamcheats::device_settings` — the `0x03`-prefixed wire form, the
+  heartbeat byte sequence matches the literal that `main.rs` used
+  before this module existed, negative / positive / `i16::MAX` /
+  `i16::MIN` values pack as expected, and every `DeviceSettings`
+  variant's discriminant matches the firmware's switch ID.
 * `util::settings` — MAC parsing (accept lowercase, reject wrong length
   and non-hex), `listen_addr` / `com_port` requiredness, defaulting of
   `udp_port` / `baud_rate` / `device_mac` when omitted, and that
