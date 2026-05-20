@@ -32,30 +32,6 @@ void FirmwareSettings::updateSettings(const uint8_t* data) {
             sensReductionAmmountY = settingValue;
             printSettingChange("sensReductionAmmountY", String(sensReductionAmmountY));
             break;
-        case 6:
-            enableSpinning = settingValue;
-            printSettingChange("enableSpinning", String(enableSpinning));
-            break;
-        case 7:
-            spinAmountPerRotation = settingValue;
-            printSettingChange("spinAmountPerRotation", String(spinAmountPerRotation));
-            break;
-        case 8:
-            spinNumberOfRotations = settingValue;
-            printSettingChange("spinNumberOfRotations", String(spinNumberOfRotations));
-            break;
-        case 9:
-            spinDelayBetweenRotationsMilliseconds = settingValue;
-            printSettingChange("spinDelayBetweenRotationsMilliseconds", String(spinDelayBetweenRotationsMilliseconds));
-            break;
-        case 10:
-            spinLockoutMouseUntilCompletion = settingValue;
-            printSettingChange("spinLockoutMouseUntilCompletion", String(spinLockoutMouseUntilCompletion));
-            break;
-        case 11:
-            spinBeforeAfterMouseEvent = settingValue;
-            printSettingChange("spinBeforeAfterMouseEvent", String(spinBeforeAfterMouseEvent));
-            break;
         case 12:
             disablePassthroughForMMB = settingValue;
             printSettingChange("disablePassthroughForMMB", String(disablePassthroughForMMB));
