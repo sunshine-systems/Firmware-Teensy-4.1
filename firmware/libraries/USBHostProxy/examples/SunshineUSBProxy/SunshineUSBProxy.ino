@@ -11,7 +11,6 @@
 #include "SunBoxLogger.h"
 #include "USBDeviceProxy.h"
 #include "Config.h"
-#include "SunBoxAuth.h"
 
 // =============================================================================
 // Configuration
@@ -71,14 +70,7 @@ void updatePollingRateStats();
 void setup() {
     // Initialize LED
     pinMode(LED_BUILTIN, OUTPUT);
-    
-    // Check authorization status (Serial4 already initialized by startup.c)
-    if (!SunBoxAuth::isAuthorized()) {
-        // Unauthorized mode - only process auth commands
-        logger.startup("Error, power fault. This is a known issue with this version and can be resolved using the devtools command interface. Please contact the developer on discord sir.sunshine for the commands to generate a debug log and resolution");
-        return;  // Exit setup, loop will handle auth commands
-    }
-    
+
     // Initialize EEPROM
     sunboxEEPROM.begin();
     
@@ -128,23 +120,6 @@ void setup() {
 // =============================================================================
 
 void loop() {
-    // Check if unauthorized - handle auth commands only
-    if (!SunBoxAuth::isAuthorized()) {
-        // Check for serial commands
-        if (Serial4.available()) {
-            String cmd = Serial4.readStringUntil('\n');
-            SunBoxAuth::processCommand(cmd);
-        }
-        
-        // Blink LED slowly to indicate unauthorized state
-        static unsigned long lastBlink = 0;
-        if (millis() - lastBlink >= 2000) {
-            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-            lastBlink = millis();
-        }
-        return;  // Skip all other processing
-    }
-    
     // Process USB Host tasks
     myusb.Task();
     

@@ -209,13 +209,7 @@ static void ResetHandler2(void)
 	// Wait for initial delay
 	while (millis() < TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
 
-	// Initialize authorization and Serial4 (always runs)
-	SunBoxStartup_authorize();
-	
-	// Only initialize USB proxy if authorized
-	if (SunBoxStartup_isAuthorized()) {
-		SunBoxStartup_begin();
-	}
+	SunBoxStartup_begin();
 
 	while (millis() < TEENSY_INIT_USB_DELAY_AFTER + TEENSY_INIT_USB_DELAY_BEFORE) ; // wait
 

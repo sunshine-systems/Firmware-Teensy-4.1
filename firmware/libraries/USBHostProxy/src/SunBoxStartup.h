@@ -9,8 +9,6 @@ extern "C" {
 #endif
 
 // C-callable functions for startup.c
-void SunBoxStartup_authorize(void);
-uint8_t SunBoxStartup_isAuthorized(void);
 void SunBoxStartup_begin(void);
 uint8_t SunBoxStartup_isReady(void);
 uint8_t SunBoxStartup_isDebugEnabled(void);

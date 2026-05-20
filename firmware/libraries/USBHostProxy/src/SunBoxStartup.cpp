@@ -4,7 +4,6 @@
 #include <EEPROM.h>
 #include "SunBoxEEPROM.h"  // For the struct definitions and constants
 #include "SunBoxLogger.h"  // For logger
-#include "SunBoxAuth.h"    // For authorization
 
 // Static member initialization
 bool SunBoxStartup::initialized = false;
@@ -15,18 +14,15 @@ void SunBoxStartup::begin() {
     if (initialized) {
         return;
     }
-    
+
     initialized = true;
-    
-    // Note: Serial4 is already initialized by SunBoxAuth in SunBoxStartup_authorize()
-    // Logger is also already initialized
-    
-    // Only proceed if authorized
-    if (!SunBoxAuth::isAuthorized()) {
-        // Silent failure - don't set ready flag
-        return;
-    }
-    
+
+    Serial4.begin(115200);
+    Serial4.setTimeout(0);  // Non-blocking to prevent stalling when FT232H buffer is full
+    delay(100);
+
+    logger.begin(&Serial4);
+
     LOG_STARTUP(LOG_BOOT, "SunBox Initializing...");
     
     // Load debug mode from EEPROM directly (can't use sunboxEEPROM object yet)

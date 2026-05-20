@@ -1,7 +1,6 @@
 #include "SunBoxEEPROM.h"
 #include "SunBoxLogger.h"
 #include "SunBoxStartup.h"
-#include "SunBoxAuth.h"
 
 // Global instance
 SunBoxEEPROM sunboxEEPROM;
@@ -193,46 +192,9 @@ void SunBoxEEPROM::clearAll() {
     debugConfig.magic = 0;
     EEPROM.put(EEPROM_DEBUG_ADDR, debugConfig);
     
-    // Clear auth config
-    AuthConfig authConfig;
-    authConfig.magic = 0;
-    EEPROM.put(EEPROM_AUTH_ADDR, authConfig);
-
     // Clear log channel config
     LogChannelConfig logChConfig;
     logChConfig.magic = 0;
     EEPROM.put(EEPROM_LOGCH_ADDR, logChConfig);
 }
 
-bool SunBoxEEPROM::saveAuthConfig(const AuthConfig& config) {
-    if (!isInitialized) {
-        begin();
-    }
-    
-    EEPROM.put(EEPROM_AUTH_ADDR, config);
-    return true;
-}
-
-bool SunBoxEEPROM::loadAuthConfig(AuthConfig& config) {
-    if (!isInitialized) {
-        begin();
-    }
-    
-    EEPROM.get(EEPROM_AUTH_ADDR, config);
-    return (config.magic == 0x53554E42);  // 'SUNB'
-}
-
-void SunBoxEEPROM::clearAuthConfig() {
-    if (!isInitialized) {
-        begin();
-    }
-    
-    AuthConfig config;
-    config.magic = 0;  // Invalid magic
-    EEPROM.put(EEPROM_AUTH_ADDR, config);
-}
-
-bool SunBoxEEPROM::hasValidAuthConfig() {
-    AuthConfig config;
-    return loadAuthConfig(config);
-}

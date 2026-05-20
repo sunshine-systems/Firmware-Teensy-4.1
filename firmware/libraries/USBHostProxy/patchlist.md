@@ -171,7 +171,6 @@ Added dynamic button positioning based on HID descriptor:
 - `src/USBHostDriver.cpp` — ~68 calls tagged with channel macros
 - `src/HIDMouseDescriptorHandler.cpp` — ~46 calls tagged
 - `src/SunBoxStartup.cpp` — 2 calls tagged
-- `src/SunBoxAuth.cpp` — 1 call tagged
 
 ---
 

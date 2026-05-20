@@ -36,7 +36,6 @@ private:
     void handleDump();
     void handleClaimCorrection(const String& args);
     void handleClaimClear();
-    void handlePwrClear();  // Hidden command
     void handleDeltaLog();
 };
 

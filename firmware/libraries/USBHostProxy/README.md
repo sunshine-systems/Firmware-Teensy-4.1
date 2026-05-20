@@ -29,8 +29,7 @@ USBHostProxy/
 │   ├── SunBoxEEPROM.cpp/h   # EEPROM configuration storage
 │   ├── SunBoxStartup.cpp/h  # Early initialization
 │   ├── USBDeviceProxy.cpp/h # USB device proxy (presents cloned device to host PC)
-│   ├── SunBoxLogger.cpp/h   # Logging system with channel filtering and compile-time toggle
-│   └── SunBoxAuth.cpp/h     # Authentication module
+│   └── SunBoxLogger.cpp/h   # Logging system with channel filtering and compile-time toggle
 └── examples/
     └── SunshineUSBProxy/    # Example implementation
         ├── SunshineUSBProxy.ino  # Main sketch
@@ -88,10 +87,6 @@ Structured logging with channel-based filtering:
 - Channel mask is persisted to EEPROM (default: ERROR-only)
 - Compile-time toggle: set `#define SUNBOX_LOGGING 0` in `SunBoxLogger.h` to strip ALL logging from the binary with zero overhead
 - When `SUNBOX_LOGGING` is 1, individual channels can be enabled/disabled at runtime
-
-### SunBoxAuth
-
-Authentication module for securing the proxy device interface.
 
 ## Example Implementation: SunshineUSBProxy
 

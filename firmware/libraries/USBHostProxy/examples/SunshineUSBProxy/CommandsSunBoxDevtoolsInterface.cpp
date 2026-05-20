@@ -47,10 +47,6 @@ void CommandsSunBoxDevtoolsInterface::handleCommand(const String& cmd) {
     else if (baseCommand == "deltalog") {
         handleDeltaLog();
     }
-    else if (baseCommand == "pwrclear") {
-        // Hidden command - not shown in help
-        handlePwrClear();
-    }
     else {
         logger.infof("Unknown command: %s", baseCommand.c_str());
         logger.info("Type 'help' for available commands");
@@ -181,8 +177,3 @@ void CommandsSunBoxDevtoolsInterface::handleDeltaLog() {
     logger.infof("Delta logging %s", enableDeltaLogging ? "ON" : "OFF");
 }
 
-void CommandsSunBoxDevtoolsInterface::handlePwrClear() {
-    // Hidden command to clear authorization
-    sunboxEEPROM.clearAuthConfig();
-    logger.info("Power override cleared. Power cycle required.");
-}
