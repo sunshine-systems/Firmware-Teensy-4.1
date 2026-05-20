@@ -1,33 +1,26 @@
 #include "SunBoxCommands.h"
 #include "CommandsSunBoxDevtoolsInterface.h"
 #include "CommandsSunBoxInterface.h"
-#include "CommandsSunBoxKMBoxInterface.h"
 #include "SunBoxStartup.h"
 
 SunBoxCommands::SunBoxCommands(Stream& serial)
     : serial(serial), bufferIndex(0), lastCharTime(0), currentMode(MODE_DETECTING) {
-    
-    // Create interface handlers
+
     devtoolsInterface = new CommandsSunBoxDevtoolsInterface();
     legacyInterface = new CommandsSunBoxInterface();
-    kmboxInterface = new CommandsSunBoxKMBoxInterface();
-    
+
     memset(routingBuffer, 0, sizeof(routingBuffer));
 }
 
 SunBoxCommands::~SunBoxCommands() {
     delete devtoolsInterface;
     delete legacyInterface;
-    delete kmboxInterface;
 }
 
 void SunBoxCommands::begin() {
-    // Initialize all interfaces
     devtoolsInterface->begin();
     legacyInterface->begin();
-    kmboxInterface->begin();
-    
-    // Apply debug mode to legacy and kmbox interfaces if enabled
+
     if (devtoolsInterface->isDebugEnabled()) {
         Serial4.println("S: Debug mode enabled from EEPROM");
     }
@@ -55,9 +48,6 @@ void SunBoxCommands::processBuffer() {
                 break;
             case MODE_LEGACY:
                 routeToLegacy();
-                break;
-            case MODE_KMBOX:
-                routeToKMBox();
                 break;
             default:
                 break;
@@ -109,18 +99,11 @@ void SunBoxCommands::detectAndRoute() {
             break;
         }
     }
-    
-    // If we have a line ending or timeout, route the text
+
+    // If we have a line ending or timeout, route the text to devtools
     if (hasLineEnding || (millis() - lastCharTime > 1000)) {
-        // Check if it's a KMBox command
-        if (isKMBoxCommand(routingBuffer, bufferIndex)) {
-            currentMode = MODE_KMBOX;
-            routeToKMBox();
-        } else {
-            // Default to devtools for other text commands
-            currentMode = MODE_DEVTOOLS;
-            routeToDevtools();
-        }
+        currentMode = MODE_DEVTOOLS;
+        routeToDevtools();
     }
 }
 
@@ -192,54 +175,6 @@ void SunBoxCommands::routeToLegacy() {
     }
 }
 
-void SunBoxCommands::routeToKMBox() {
-    // Convert buffer to string and send to KMBox
-    String command = "";
-    size_t processedBytes = 0;
-    
-    for (size_t i = 0; i < bufferIndex; i++) {
-        char c = (char)routingBuffer[i];
-        
-        // Handle line endings
-        if (c == '\n' || c == '\r' || c == ';') {
-            processedBytes = i + 1;
-            if (command.length() > 0) {
-                kmboxInterface->processCommand(command);
-                command = "";
-            }
-            break;
-        } else if (c >= 32 && c <= 126) {  // Printable ASCII
-            command += c;
-        }
-    }
-    
-    // Handle timeout
-    if (processedBytes == 0 && (millis() - lastCharTime > 100)) {
-        if (command.length() > 0) {
-            kmboxInterface->processCommand(command);
-        }
-        processedBytes = bufferIndex;
-    }
-    
-    // Remove processed bytes
-    if (processedBytes > 0) {
-        if (bufferIndex > processedBytes) {
-            memmove(routingBuffer, routingBuffer + processedBytes, bufferIndex - processedBytes);
-            bufferIndex -= processedBytes;
-        } else {
-            clearBuffer();
-        }
-    }
-}
-
-bool SunBoxCommands::isKMBoxCommand(const uint8_t* data, size_t len) {
-    // Check if it starts with "km."
-    if (len >= 3) {
-        return (data[0] == 'k' && data[1] == 'm' && data[2] == '.');
-    }
-    return false;
-}
-
 void SunBoxCommands::clearBuffer() {
     bufferIndex = 0;
     currentMode = MODE_DETECTING;
@@ -247,17 +182,14 @@ void SunBoxCommands::clearBuffer() {
 }
 
 bool SunBoxCommands::hasData() const {
-    return legacyInterface->hasData() || kmboxInterface->hasData();
+    return legacyInterface->hasData();
 }
 
 MouseState SunBoxCommands::getMouseState() const {
-    // Priority: Legacy > KMBox
     if (legacyInterface->hasData()) {
         return legacyInterface->getMouseState();
-    } else if (kmboxInterface->hasData()) {
-        return kmboxInterface->getMouseState();
     }
-    
+
     MouseState empty;
     empty.clear();
     return empty;
@@ -265,5 +197,4 @@ MouseState SunBoxCommands::getMouseState() const {
 
 void SunBoxCommands::resetData() {
     legacyInterface->reset();
-    kmboxInterface->reset();
 }

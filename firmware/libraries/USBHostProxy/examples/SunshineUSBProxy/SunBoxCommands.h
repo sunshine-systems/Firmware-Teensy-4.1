@@ -7,7 +7,6 @@
 // Forward declarations
 class CommandsSunBoxDevtoolsInterface;
 class CommandsSunBoxInterface;
-class CommandsSunBoxKMBoxInterface;
 
 class SunBoxCommands {
 public:
@@ -32,7 +31,6 @@ public:
     // Get interface references (for external configuration)
     CommandsSunBoxDevtoolsInterface* getDevtools() { return devtoolsInterface; }
     CommandsSunBoxInterface* getLegacyInterface() { return legacyInterface; }
-    CommandsSunBoxKMBoxInterface* getKMBoxInterface() { return kmboxInterface; }
     
 private:
     // Serial port
@@ -41,7 +39,6 @@ private:
     // Interface handlers
     CommandsSunBoxDevtoolsInterface* devtoolsInterface;
     CommandsSunBoxInterface* legacyInterface;
-    CommandsSunBoxKMBoxInterface* kmboxInterface;
     
     // Routing buffer
     static const size_t BUFFER_SIZE = 256;
@@ -53,20 +50,17 @@ private:
     enum RoutingMode {
         MODE_DETECTING,      // Analyzing what type of data this is
         MODE_DEVTOOLS,       // Text command for devtools
-        MODE_LEGACY,         // Binary legacy protocol
-        MODE_KMBOX          // KMBox text protocol
+        MODE_LEGACY          // Binary legacy protocol
     };
     RoutingMode currentMode;
-    
+
     // Helper methods
     void processBuffer();
     void detectAndRoute();
     void routeToDevtools();
     void routeToLegacy();
-    void routeToKMBox();
     void clearBuffer();
     bool isTextCommand(const uint8_t* data, size_t len);
-    bool isKMBoxCommand(const uint8_t* data, size_t len);
 };
 
 #endif // _SUNBOX_COMMANDS_H_

@@ -67,7 +67,6 @@ Physical Mouse → USB Host (Teensy) → Processing → USB Device (Teensy) → 
 The example implementation (`examples/SunshineUSBProxy/`) supports multiple input protocols:
 
 - **Sunshine Legacy Protocol**: 9-byte binary format
-- **KMBox B+ Protocol**: Text-based commands (`km.command()`)
 - **DevTools Commands**: Built-in diagnostics and configuration
 
 ### 5. Intelligent Device Handling

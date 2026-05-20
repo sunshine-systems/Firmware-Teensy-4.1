@@ -35,7 +35,6 @@ USBHostProxy/
         ├── SunshineUSBProxy.ino  # Main sketch
         ├── SunBoxCommands.cpp/h  # Command routing system
         ├── CommandsSunBoxInterface.cpp/h  # Legacy protocol handler
-        ├── CommandsSunBoxKMBoxInterface.cpp/h  # KMBox protocol handler
         ├── CommandsSunBoxDevtoolsInterface.cpp/h  # DevTools commands
         ├── SunBoxUSBMouseDataHandler.cpp/h  # USB mouse data processor
         └── SunBoxSyntheticHandleOutput.cpp/h  # Output mixer
@@ -101,7 +100,6 @@ The example sketch demonstrates a complete USB mouse proxy implementation with m
 
 **Protocol Handlers:**
 - **CommandsSunBoxInterface** - Sunshine legacy 9-byte protocol
-- **CommandsSunBoxKMBoxInterface** - KMBox B+ text commands
 - **CommandsSunBoxDevtoolsInterface** - Built-in diagnostic commands
 
 **SunBoxUSBMouseDataHandler** - Processes USB mouse data:
@@ -129,11 +127,6 @@ These prefixes are now routed through SunBoxLogger with channel gating, so outpu
 - 9-byte format: `[length][data_bytes]`
 - Length byte indicates payload size (3 or 8)
 - 8-byte payload contains HID report data
-
-#### KMBox B+ Protocol  
-- Text-based commands starting with `km.`
-- Command format: `km.command(parameters)`
-- Line-based with timeout detection
 
 #### DevTools Commands
 
