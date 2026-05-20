@@ -3,11 +3,13 @@
 use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 
-use super::schema::{
-    Header, SoftKeyboard, SoftMouse, HEADER_LEN, SOFT_KEYBOARD_LEN, SOFT_MOUSE_LEN,
-};
+use super::schema::{Header, SoftMouse, HEADER_LEN, SOFT_MOUSE_LEN};
 
 impl Header {
+    /// Decode the leading 16 bytes of `bytes` as a [`Header`]. Returns an
+    /// error if the slice is shorter than [`HEADER_LEN`]; trailing bytes
+    /// (the command body) are ignored and parsed separately by the body
+    /// type that matches the command code.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < HEADER_LEN {
             bail!(
@@ -24,7 +26,10 @@ impl Header {
         })
     }
 
-    /// Build the reply header: same mac, echo rand, `indexpts + 1`, same cmd.
+    /// Build the reply header: same `mac`, echo `rand`, `indexpts + 1`
+    /// (wrapping), same `cmd`. The wrapping addition matches the vendor
+    /// SDK; host apps treat the index as a free-running counter, so an
+    /// overflow from `u32::MAX` -> 0 is legal.
     pub fn reply(&self) -> [u8; HEADER_LEN] {
         let mut out = [0u8; HEADER_LEN];
         LittleEndian::write_u32(&mut out[0..4], self.mac);
@@ -36,6 +41,9 @@ impl Header {
 }
 
 impl SoftMouse {
+    /// Decode the post-header body of a mouse-shaped command. `body` is
+    /// the datagram with the 16-byte header already stripped; it must be
+    /// at least [`SOFT_MOUSE_LEN`] bytes.
     pub fn parse(body: &[u8]) -> Result<Self> {
         if body.len() < SOFT_MOUSE_LEN {
             bail!(
@@ -59,28 +67,6 @@ impl SoftMouse {
             y,
             wheel,
             point,
-        })
-    }
-}
-
-#[allow(dead_code)]
-impl SoftKeyboard {
-    pub fn parse(body: &[u8]) -> Result<Self> {
-        if body.len() < SOFT_KEYBOARD_LEN {
-            bail!(
-                "soft_keyboard body too short: {} < {}",
-                body.len(),
-                SOFT_KEYBOARD_LEN
-            );
-        }
-        let mut button = [0i8; 10];
-        for (i, b) in button.iter_mut().enumerate() {
-            *b = body[2 + i] as i8;
-        }
-        Ok(SoftKeyboard {
-            ctrl: body[0] as i8,
-            resvel: body[1] as i8,
-            button,
         })
     }
 }

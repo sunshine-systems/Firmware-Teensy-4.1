@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 """
-SunBox firmware serial debug tool.
+Streamcheats firmware serial debug tool — companion to the KMBox Net
+Translator.
 
-Sends 9-byte Sunshine binary packets directly to the Teensy over the
-serial port — byte-for-byte identical to the production
-``FirmwareInterface.create_spoofed_hid_report`` builder in
-``sunshine-core/StreamCheats Framework/backend/sunbox_interface/core``.
-
-Use it to confirm the firmware is reading and acting on Sunshine
-packets independent of the KMBox Net Translator. Bypasses UDP, bypasses
-the translator, talks to the device directly.
+Sends 9-byte Streamcheats binary packets directly to the Teensy over the
+serial port, byte-for-byte identical to the production
+``FirmwareInterface.create_spoofed_hid_report`` builder in the Python
+``sunbox_interface`` reference. Bypasses UDP and bypasses the translator
+entirely — use it when you need to isolate a firmware-side issue from a
+translator-side one.
 
 Requirements:
     pip install pyserial
 
 Usage:
-    python serial_debug.py --port COM8
-    python serial_debug.py --port COM8 --baud 115200
+    python serial_debug.py --port COM7
+    python serial_debug.py --port COM7 --baud 115200
 
-Then pick options from the menu. The right column of every OUT line is
-the exact hex the firmware will receive.
+Arguments:
+    --port   Serial port name (required). COM<n> on Windows,
+             /dev/ttyUSB<n> on Linux.
+    --baud   Baud rate. Defaults to 115200 to match the firmware.
+
+The interactive menu (movement shortcuts, button clicks, spam loop,
+heartbeat) is described at runtime once the port is open. The right
+column of every OUT line is the exact hex the firmware will receive.
 """
 
 import argparse

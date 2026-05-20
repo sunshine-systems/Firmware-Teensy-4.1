@@ -1,3 +1,41 @@
+//! Windows PC-side bridge between third-party KMBox Net host apps and the
+//! Teensy USB Host Proxy firmware.
+//!
+//! Listens for KMBox Net UDP commands on a configurable address/port,
+//! translates each one into the Streamcheats firmware's 9-byte binary
+//! serial protocol, and forwards the resulting packets to a Teensy 4.1
+//! over a configured COM port. The Teensy injects HID mouse events into
+//! the target PC; this process is invisible to the host app, which
+//! continues to see normal KMBox Net replies.
+//!
+//! ```text
+//! host app  --UDP (KMBox Net)-->  THIS TRANSLATOR  --serial (9-byte binary)-->  Teensy proxy
+//! ```
+//!
+//! # Module layout
+//!
+//! * [`kmbox_net`] — incoming wire format (16-byte LE header + body) and
+//!   parsing. Start in [`kmbox_net::schema`] for the type and command
+//!   tables, [`kmbox_net::parser`] for the decoders.
+//! * [`streamcheats`] — outgoing 9-byte mouse packet builder for the
+//!   Teensy firmware. The byte-by-byte layout lives at the top of
+//!   [`streamcheats::packet`].
+//! * [`util`] — runtime glue: persisted [`util::settings`] loader and the
+//!   [`util::translator::Translator`] state machine that holds the
+//!   cumulative button mask and dispatches each incoming command.
+//!
+//! # Log channels
+//!
+//! All structured log lines emitted by the translator carry one of three
+//! channel prefixes so the direction of every event is unambiguous:
+//!
+//! * `IN (KMBOX NET):` — a UDP datagram arrived from a host app and was
+//!   accepted. The remainder names the decoded command and its arguments.
+//! * `OUT (COMx):` — a 9-byte Streamcheats packet was written to the
+//!   serial port. The remainder is the raw hex.
+//! * `IN (COMx):` — a newline-terminated line was received from the
+//!   firmware. Non-printable bytes are escaped as `\xHH`.
+
 mod kmbox_net;
 mod streamcheats;
 mod util;
@@ -19,6 +57,10 @@ use crate::streamcheats::PACKET_LEN;
 use crate::util::settings::{load_or_create, LoadOutcome, Settings};
 use crate::util::translator::Translator;
 
+/// Initialise `tracing_subscriber` with an `info`-level default filter and
+/// enable ANSI escape-sequence processing on Windows consoles so colour
+/// codes render rather than printing literally. `RUST_LOG` overrides the
+/// default filter.
 fn init_logging() {
     // Enable VT escape-sequence processing on Windows so the ANSI colors
     // tracing-subscriber emits actually render instead of printing
@@ -91,6 +133,10 @@ fn main() -> ExitCode {
     }
 }
 
+/// Main service loop: opens the serial port, binds the UDP socket, spawns
+/// the serial reader and writer threads, and dispatches every incoming
+/// UDP datagram through a [`Translator`]. Returns when the Ctrl+C handler
+/// flips the shared `running` flag.
 fn run(settings: Settings) -> Result<()> {
     // Open serial first — fail fast if it's wrong.
     // 2 second timeout matches the Python reference (sunbox_interface's
@@ -154,11 +200,7 @@ fn run(settings: Settings) -> Result<()> {
         serial_reader_loop(&mut *serial_reader, &reader_port, reader_running);
     });
 
-    let translator = Translator::new(
-        settings.device_mac,
-        settings.com_port.clone(),
-        serial_tx,
-    );
+    let translator = Translator::new(settings.device_mac, serial_tx);
 
     let mut buf = [0u8; 2048];
     while running.load(Ordering::SeqCst) {
@@ -189,6 +231,11 @@ fn run(settings: Settings) -> Result<()> {
     Ok(())
 }
 
+/// Writer loop: pulls 9-byte packets off the mpsc channel and writes each
+/// to the serial port. Logs successful writes as `OUT (<port>): <hex>`.
+/// Polls the receiver with a 50 ms timeout so the thread stays responsive
+/// to a shutdown request without busy-spinning. See the in-body comment
+/// for why we deliberately do NOT call `flush()` per packet on Windows.
 fn serial_writer_loop(
     serial: &mut dyn serialport::SerialPort,
     port_name: &str,
@@ -225,8 +272,9 @@ fn serial_writer_loop(
 }
 
 /// Reader loop: collects bytes from the firmware, splits on newline, and
-/// logs every complete line as `IN:<port> <text>`. Non-printable bytes are
-/// rendered as `\xHH` so binary noise stays readable.
+/// logs every complete line as `IN (<port>): <text>`. Non-printable bytes
+/// are rendered as `\xHH` so binary noise stays readable. A 4 KiB
+/// safety cap forces a flush if the firmware ever omits a newline.
 fn serial_reader_loop(
     serial: &mut dyn serialport::SerialPort,
     port_name: &str,
@@ -272,6 +320,9 @@ fn serial_reader_loop(
     }
 }
 
+/// Emit a single firmware line as `IN (<port>): <rendered>`. All-NUL
+/// lines (a common transient when the FTDI driver is settling) are
+/// discarded so they don't pollute the log.
 fn flush_line(port_name: &str, line: &[u8]) {
     if line.iter().all(|&b| b == 0) {
         return; // ignore all-NUL noise
@@ -292,6 +343,8 @@ fn render_line(bytes: &[u8]) -> String {
     out
 }
 
+/// Render a byte slice as space-separated uppercase hex (e.g. `08 01 00 ...`).
+/// Used to log outbound Streamcheats packets.
 fn hex_bytes(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 3);
     for (i, b) in bytes.iter().enumerate() {

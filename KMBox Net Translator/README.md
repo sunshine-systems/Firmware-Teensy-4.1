@@ -1,60 +1,201 @@
 # KMBox Net Translator
 
-Bridges third-party **KMBox Net** UDP host apps to the Teensy USB Host Proxy
-firmware, which speaks the **Sunshine binary 9-byte serial protocol**.
+A Windows PC-side bridge between third-party KMBox Net host apps and the
+Teensy 4.1 USB Host Proxy firmware. It listens for KMBox Net UDP commands
+from any host app that already speaks the protocol (game tools, anti-cheats
+with KMBox support, etc.), translates each command into the Streamcheats
+firmware's 9-byte binary serial protocol, and forwards the result to the
+Teensy over a configured COM port. The Teensy injects the resulting HID
+mouse events into the target PC; the host app on the input PC continues to
+see normal KMBox Net replies, so it has no idea anything has been swapped
+out.
 
 ```
-host app  --KMBox Net UDP-->  THIS TRANSLATOR  --Sunshine binary serial-->  Teensy  --USB HID-->  PC
+host app  --UDP (KMBox Net)-->  THIS TRANSLATOR  --serial (9-byte binary)-->  Teensy proxy
 ```
 
-## Build
+## Quick start
 
-From inside this folder:
+From inside the `KMBox Net Translator/` folder:
 
 ```
 cargo build --release
+.\target\release\kmbox_net_translator.exe
 ```
 
-The resulting binary is `target/release/kmbox_net_translator.exe`.
+On the **first run** the binary writes a default `config.json` next to
+itself (whatever the process's current working directory is) and exits
+with a message asking you to edit it. The minimum you must set before
+the next run is:
 
-## Run
+* `listen_addr` — the local IP to bind the UDP listener on. `0.0.0.0`
+  accepts traffic from any interface.
+* `com_port` — the Windows COM-port identifier of the Teensy (e.g. `COM7`).
+
+If you already have a `config.json` with one of these set to a bad value
+(e.g. an unparseable IP, an empty COM name), the translator prints a
+specific error naming the field and exits without touching the file —
+your other edits are preserved. Only an unreadable / unparseable file
+gets discarded and replaced with a fresh default.
+
+If your shell path contains the space in `KMBox Net Translator`, quote
+it according to your shell's rules:
+
+* PowerShell: `cd 'C:\...\KMBox Net Translator'`
+* cmd.exe:    `cd "C:\...\KMBox Net Translator"`
+* bash (Git Bash / WSL): `cd "/c/.../KMBox Net Translator"`
+
+## `config.json` reference
+
+The file lives in the working directory and uses these fields:
+
+| Field         | Type   | Required | Default      | Validation                                         | Example          |
+|---------------|--------|----------|--------------|----------------------------------------------------|------------------|
+| `listen_addr` | string | yes      | (none)       | Must parse as an IPv4 or IPv6 address.             | `"0.0.0.0"`      |
+| `udp_port`    | u16    | no       | `8888`       | `1..=65535` (zero is rejected).                    | `8888`           |
+| `com_port`    | string | yes      | (none)       | Non-empty after trimming.                          | `"COM7"`         |
+| `baud_rate`   | u32    | no       | `115200`     | Must be > 0. The Teensy firmware is fixed at 115200. | `115200`       |
+| `device_mac`  | string | no       | `"01FBC068"` | Exactly 8 hex characters. Host app must send this value in every packet's header. | `"01FBC068"` |
+
+A working example lives at `config.example.json` next to the source.
+
+## Log format
+
+All log lines come from `tracing_subscriber` and use one of three channel
+prefixes so the direction of each event is unambiguous:
+
+* `IN (KMBOX NET):` — a UDP datagram from a host app was accepted (MAC
+  matched, header parsed). Followed by the decoded command and its args.
+* `OUT (COM<n>):` — a 9-byte Streamcheats packet was written to the
+  serial port. Followed by space-separated uppercase hex.
+* `IN (COM<n>):` — a newline-terminated line was received back from the
+  firmware. Non-printable bytes are escaped as `\xHH`.
+
+Annotated example:
 
 ```
-kmbox_net_translator.exe
+2026-05-19T14:22:01.041Z  INFO Listening on 0.0.0.0:8888, forwarding to COM7 @ 115200, mac=01FBC068
+2026-05-19T14:22:03.118Z  INFO IN (KMBOX NET): cmd=connect (reset button mask)            # host app handshake; button state zeroed
+2026-05-19T14:22:03.224Z  INFO IN (KMBOX NET): cmd=mouse_move x=12 y=-3 mask=0x00          # decoded UDP packet
+2026-05-19T14:22:03.224Z  INFO OUT (COM7): 08 00 0C FD 00 0C 00 FD FF                      # the 9 bytes we wrote to serial
+2026-05-19T14:22:03.255Z  INFO IN (COM7): S:ready                                          # firmware status line
 ```
 
-On first run with no `config.json` present, the program writes a default
-`config.json` to the working directory and exits with a message telling you
-to edit `listen_addr` and `com_port`. If the existing `config.json` fails to
-parse or is missing required fields, it is deleted and replaced with a
-fresh default.
+Set `RUST_LOG=debug` to add the per-packet "dropping packet with wrong
+mac" lines and other lower-level diagnostics. The default level is `info`.
 
-## `config.json`
+## Wire formats
 
-```json
-{
-  "listen_addr": "0.0.0.0",
-  "udp_port": 8888,
-  "com_port": "COM7",
-  "baud_rate": 115200,
-  "device_mac": "01FBC068"
-}
+The two wire formats are documented inline next to the types that
+implement them — those docs are the canonical reference. The headlines:
+
+* **Incoming (KMBox Net UDP)** — 16-byte little-endian `Header` plus a
+  command-specific body (most commonly a 56-byte `SoftMouse`). The full
+  layout and the `CMD_*` table live in
+  [`src/kmbox_net/schema.rs`](src/kmbox_net/schema.rs); the decoders are
+  in [`src/kmbox_net/parser.rs`](src/kmbox_net/parser.rs).
+* **Outgoing (Streamcheats serial)** — fixed 9 bytes: a `0x08` length
+  prefix, button bitmask, an int8/sentinel low byte for X and Y, the
+  wheel delta, and an always-populated 16-bit extended `(x, y)` pair.
+  The byte-by-byte layout and the "always extended for Python parity"
+  rationale live at the top of
+  [`src/streamcheats/packet.rs`](src/streamcheats/packet.rs).
+
+## Supported commands
+
+| `CMD_*` constant       | Command label    | Translator behaviour                                                                                  |
+|------------------------|------------------|-------------------------------------------------------------------------------------------------------|
+| `CMD_CONNECT`          | `connect`        | Clear the cumulative button mask. Reply only — no serial output.                                      |
+| `CMD_MOUSE_MOVE`       | `mouse_move`     | Emit one Streamcheats packet with `(x, y)` delta and the current button mask.                         |
+| `CMD_MOUSE_LEFT`       | `mouse_left`     | Set or clear `BTN_LEFT` in the cumulative mask; emit one packet with the new mask, no motion.         |
+| `CMD_MOUSE_RIGHT`      | `mouse_right`    | Same as left, but for `BTN_RIGHT`.                                                                    |
+| `CMD_MOUSE_MIDDLE`     | `mouse_middle`   | Same as left, but for `BTN_MIDDLE`.                                                                   |
+| `CMD_MOUSE_WHEEL`      | `mouse_wheel`    | Emit one packet with wheel delta in byte 4, zero motion, current button mask.                         |
+| `CMD_MOUSE_AUTOMOVE`   | `mouse_automove` | Spawn a linear interpolation worker that emits delta packets every 4 ms over `duration_ms`.           |
+| `CMD_BAZER_MOVE`       | `bezier_move`    | Spawn a cubic-bezier interpolation worker with the given control points, same 4 ms cadence.           |
+| `CMD_KEYBOARD_ALL`     | `keyboard_all`   | Ack only. Keyboard forwarding is not yet wired through to serial.                                     |
+| `CMD_REBOOT`           | `reboot`         | Ack only.                                                                                             |
+| `CMD_MONITOR`          | `monitor`        | Ack only.                                                                                             |
+| `CMD_MASK_MOUSE`       | `mask_mouse`     | Ack only.                                                                                             |
+| `CMD_UNMASK_ALL`       | `unmask_all`     | Ack only.                                                                                             |
+| `CMD_SETCONFIG`        | `setconfig`      | Ack only.                                                                                             |
+| `CMD_SETVIDPID`        | `setvidpid`      | Ack only.                                                                                             |
+| `CMD_DEBUG`            | `debug`          | Ack only.                                                                                             |
+| `CMD_SHOWPIC`          | `showpic`        | Ack only.                                                                                             |
+| `CMD_TRACE_ENABLE`     | `trace_enable`   | Ack only.                                                                                             |
+
+Every accepted command produces a reply header (same `mac`, echo `rand`,
+`indexpts + 1`, same `cmd`). Unknown command codes are logged as
+`unknown(0x<code>)` and still get the echo reply, matching the vendor
+SDK's behaviour.
+
+## Companion debug tool: `serial_debug.py`
+
+`serial_debug.py` sends the same 9-byte Streamcheats packets straight to
+the COM port, bypassing UDP and the translator entirely. Reach for it
+when you want to confirm whether a problem lives on the firmware side or
+the translator side. Run it like:
+
+```
+python serial_debug.py --port COM7
+python serial_debug.py --port COM7 --baud 115200
 ```
 
-| Field         | Type   | Required | Notes                                                       |
-|---------------|--------|----------|-------------------------------------------------------------|
-| `listen_addr` | string | yes      | Any local IP, e.g. `0.0.0.0` or `127.0.0.1`.                |
-| `udp_port`    | u16    | no       | Defaults to `8888`.                                         |
-| `com_port`    | string | yes      | Windows COM name, e.g. `COM7`.                              |
-| `baud_rate`   | u32    | no       | Defaults to `115200`.                                       |
-| `device_mac`  | string | no       | 8 hex chars. Defaults to `01FBC068`. Must match the host app. |
+The interactive menu (described at runtime) covers cardinal-direction
+moves, custom `(dx, dy)`, button presses/clicks, a 10 ms spam loop, and a
+"heartbeat" settings packet that asks the firmware for its version. It
+requires `pyserial` (`pip install pyserial`).
 
-## Logging
-
-Set `RUST_LOG=debug` for verbose logs. Default level is `info`.
-
-## Tests
+## Module layout
 
 ```
-cargo test
+src/
+  main.rs                  # entrypoint, UDP loop, serial reader+writer threads, log formatting
+  kmbox_net/
+    mod.rs                 # re-exports the items most call sites need
+    schema.rs              # wire-format types (Header, SoftMouse) + CMD_* table
+    parser.rs              # decoders for the above + Header::reply
+  streamcheats/
+    mod.rs                 # re-exports
+    packet.rs              # 9-byte serial packet builder + button bitmask constants
+  util/
+    mod.rs                 # re-exports
+    settings.rs            # config.json load / validate / default-rewrite (three-way LoadOutcome)
+    translator.rs          # Translator state machine + linear/bezier interpolation workers
 ```
+
+## Testing
+
+```
+cargo test --release
+```
+
+Currently runs **17 tests** covering:
+
+* `kmbox_net::parser` — header decode (little-endian), reply construction
+  (the `indexpts + 1` invariant), `SoftMouse` body decode for both plain
+  moves and automove-with-control-points.
+* `streamcheats::packet` — byte-for-byte parity with the Python reference
+  for in-range zeros, positive and negative axis overflow, the `-128` /
+  `+127` boundary that takes the sentinel path, wheel-only packets, and
+  out-of-range clamping.
+* `util::settings` — MAC parsing (accept lowercase, reject wrong length
+  and non-hex), `listen_addr` / `com_port` requiredness, and defaulting
+  of `udp_port` / `baud_rate` / `device_mac` when omitted.
+
+## Not yet implemented
+
+The following parts of the KMBox Net surface are recognised but not
+forwarded to serial, by design:
+
+* `CMD_KEYBOARD_ALL` — the translator acknowledges with the reply
+  header but drops the body. Adding keyboard forwarding will need a
+  new `SoftKeyboard` body decoder plus a Streamcheats packet shape the
+  firmware can route to HID keyboard output.
+* The `enc_*` encrypted variants of every mouse/keyboard command — the
+  vendor SDK can encrypt packet bodies with a session key. We currently
+  only handle the clear-text codes; encrypted traffic will be dropped on
+  the `unknown(0x<code>)` path.
+
+These are intentional gaps, not bugs — the natural entry point for new
+work is `Translator::dispatch`.

@@ -24,15 +24,20 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 
-// Button bit positions — must match firmware.
-pub const BTN_LEFT: u8 = 0x01;
-pub const BTN_RIGHT: u8 = 0x02;
-pub const BTN_MIDDLE: u8 = 0x04;
-#[allow(dead_code)]
-pub const BTN_SIDE1: u8 = 0x08;
-#[allow(dead_code)]
-pub const BTN_SIDE2: u8 = 0x10;
+// Button bit positions — must match firmware. The Teensy USB Host Proxy
+// reads byte [1] of the 9-byte packet as a standard HID mouse button
+// bitmask, so changing these values would desync the host PC's view of
+// which button is pressed.
 
+/// Bitmask for the primary (left) mouse button — bit 0.
+pub const BTN_LEFT: u8 = 0x01;
+/// Bitmask for the secondary (right) mouse button — bit 1.
+pub const BTN_RIGHT: u8 = 0x02;
+/// Bitmask for the middle/wheel mouse button — bit 2.
+pub const BTN_MIDDLE: u8 = 0x04;
+
+/// Length in bytes of every Streamcheats serial packet (1 length prefix
+/// + 8 payload bytes).
 pub const PACKET_LEN: usize = 9;
 
 /// Encode a single axis byte the way the Python reference does:

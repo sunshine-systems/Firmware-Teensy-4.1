@@ -23,36 +23,49 @@ use crate::streamcheats::{
 /// One outgoing Streamcheats packet bound for the serial worker.
 pub type SerialPacket = [u8; PACKET_LEN];
 
-/// Step interval for interpolated motion (automove / bezier).
+/// Wall-clock step interval (milliseconds) used by the interpolation
+/// workers. Each tick emits one delta packet. 4 ms ≈ 250 Hz, which keeps
+/// motion smooth without saturating the serial pipe.
 const STEP_MS: u64 = 4;
 
+/// Per-process state machine that decodes incoming KMBox Net packets and
+/// emits Streamcheats packets onto the serial-writer channel.
+///
+/// `Translator` owns the cumulative mouse button mask (shared with the
+/// interpolation workers via `Arc<Mutex<u8>>`), which is needed because
+/// per-button `mouse_left` / `mouse_right` / `mouse_middle` commands only
+/// touch a single bit at a time but the Streamcheats packet always
+/// re-transmits the full state.
 pub struct Translator {
     expected_mac: u32,
-    /// Serial port name (e.g. "COM8") — only used to label outbound logs
-    /// emitted by the interpolation workers. The main serial writer
-    /// thread also uses the name for its `OUT:` lines.
-    #[allow(dead_code)]
-    serial_port: String,
     button_mask: Arc<Mutex<u8>>,
     serial_tx: Sender<SerialPacket>,
 }
 
 impl Translator {
-    pub fn new(
-        expected_mac: u32,
-        serial_port: String,
-        serial_tx: Sender<SerialPacket>,
-    ) -> Self {
+    /// Build a new translator.
+    ///
+    /// * `expected_mac` — the 4-byte device identifier read from
+    ///   `config.json`. Packets whose [`Header::mac`](crate::kmbox_net::Header::mac)
+    ///   does not equal this value are silently dropped.
+    /// * `serial_tx` — sender half of the mpsc channel the main serial
+    ///   writer thread reads from. The translator and every interpolation
+    ///   worker it spawns share clones of this sender.
+    pub fn new(expected_mac: u32, serial_tx: Sender<SerialPacket>) -> Self {
         Self {
             expected_mac,
-            serial_port,
             button_mask: Arc::new(Mutex::new(0)),
             serial_tx,
         }
     }
 
-    /// Returns the bytes to reply to the sender with, or None if the
-    /// packet was silently dropped (wrong MAC, too short to parse).
+    /// Process one incoming UDP datagram end-to-end.
+    ///
+    /// Returns the 16-byte reply the caller should send back to the peer,
+    /// or `None` when the packet was silently dropped (wrong MAC, too
+    /// short to parse). Side effects — sending Streamcheats packets to
+    /// the serial worker, mutating the cumulative button mask, spawning
+    /// interpolation worker threads — happen before the reply is built.
     pub fn handle_packet(&self, datagram: &[u8]) -> Option<[u8; HEADER_LEN]> {
         let header = match Header::parse(datagram) {
             Ok(h) => h,
@@ -159,6 +172,12 @@ impl Translator {
             return;
         };
         let pressed = m.button != 0;
+        // KMBox Net sends each button as a separate command (`mouse_left`,
+        // `mouse_right`, `mouse_middle`) but the Streamcheats serial
+        // packet always carries the *full* button bitmask. So we mutate
+        // a single bit here and re-emit the cumulative mask on the wire,
+        // which means a held left button stays held while right is
+        // toggling.
         let mask = {
             let mut g = self.button_mask.lock().unwrap();
             if pressed {
@@ -219,7 +238,9 @@ impl Translator {
 }
 
 /// Linear interpolation worker: emits incremental moves so the cumulative
-/// delta equals `(target_x, target_y)` over `duration_ms`, in `STEP_MS` steps.
+/// delta equals `(target_x, target_y)` over `duration_ms`, in [`STEP_MS`]
+/// increments. A duration shorter than one step is rounded up to a
+/// single-step move so a `automove(..., 0)` still moves the cursor.
 fn interp_linear(
     target_x: i32,
     target_y: i32,
@@ -229,6 +250,11 @@ fn interp_linear(
 ) {
     let dur_ms = duration_ms.max(STEP_MS);
     let steps = ((dur_ms + STEP_MS - 1) / STEP_MS).max(1) as i64;
+    // Anchor every step's target time to the worker's start instant
+    // rather than the previous step's wake time. That way an occasional
+    // long sleep can't accumulate into drift across a long automove —
+    // we just skip the sleep on a step we're already late for, and the
+    // final emitted total still lands on the requested target.
     let start = Instant::now();
     let mut emitted_x: i64 = 0;
     let mut emitted_y: i64 = 0;
