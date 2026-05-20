@@ -24,6 +24,30 @@
 //!   [`util::translator::Translator`] state machine that holds the
 //!   cumulative button mask and dispatches each incoming command.
 //!
+//! # Threading model
+//!
+//! Five thread types are in flight at runtime:
+//!
+//! * **Main** — owns the UDP socket and the [`Translator`]; runs
+//!   `recv_from` in a loop, parses headers, drops on MAC mismatch,
+//!   dispatches via `Translator::handle_packet`, and sends the reply.
+//! * **Writer** (`serial_writer_loop`) — drains the mpsc channel and
+//!   calls `write_all` on the serial port.
+//! * **Reader** (`serial_reader_loop`) — concurrently reads from the
+//!   same port (`serial2` supports concurrent read+write on `&self`),
+//!   buffers by `\n`, and emits `IN (COMx):` lines.
+//! * **Heartbeat** (`heartbeat_loop`) — every [`HEARTBEAT_INTERVAL`]
+//!   pushes a benign settings packet through the mpsc channel so the
+//!   USB-serial chip never goes idle.
+//! * **Interpolation workers** — short-lived, spawned per
+//!   `cmd_mouse_automove` / `cmd_bezier_move`; emit delta packets at
+//!   `STEP_MS = 4 ms` cadence and then exit.
+//!
+//! The serial port is wrapped in an `Arc<serial2::SerialPort>` and
+//! shared by the writer and reader threads — no `try_clone` of OS
+//! handles needed. The button mask is the only other shared mutable
+//! state, held in `Arc<Mutex<u8>>`.
+//!
 //! # Log channels
 //!
 //! All structured log lines emitted by the translator carry one of three
@@ -35,6 +59,11 @@
 //!   serial port. The remainder is the raw hex.
 //! * `IN (COMx):` — a newline-terminated line was received from the
 //!   firmware. Non-printable bytes are escaped as `\xHH`.
+//!
+//! With `enable_timing_logs: true` in `config.json`, the `IN (KMBOX NET)`
+//! lines also carry a `parse=Nµs` suffix and the `OUT (COMx)` lines
+//! carry `(lat=X.YYms q=A.BBms w=C.DDms)` — `lat` total origin → wire,
+//! `q` mpsc-queue wait, `w` the `write_all` syscall duration.
 
 mod kmbox_net;
 mod streamcheats;
@@ -291,10 +320,10 @@ fn run(settings: Settings) -> Result<()> {
 }
 
 /// Heartbeat loop: every [`HEARTBEAT_INTERVAL`] sends a single
-/// [`HEARTBEAT_PACKET`] through the same mpsc channel the translator and
-/// interpolation workers use. Matches `FirmwareInterface.py`'s
-/// `_send_heartbeat` and is the reason Python tooling doesn't experience
-/// the 85–415 ms cold-path wakeup the Rust translator hit before this.
+/// [`HEARTBEAT_PACKET`] through the same mpsc channel the translator
+/// and interpolation workers use. Matches `FirmwareInterface.py`'s
+/// `_send_heartbeat` so the USB-serial chip / driver pipeline stays
+/// out of any idle low-power state.
 ///
 /// Polls in 100 ms ticks rather than sleeping for the full interval so
 /// Ctrl+C shutdown is honoured within ~100 ms instead of up to 2.5 s.

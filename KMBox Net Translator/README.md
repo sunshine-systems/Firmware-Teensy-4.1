@@ -72,7 +72,7 @@ prefixes so the direction of each event is unambiguous:
 * `IN (COM<n>):` — a newline-terminated line was received back from the
   firmware. Non-printable bytes are escaped as `\xHH`.
 
-Annotated example:
+Annotated example (with `enable_timing_logs: false`, the default):
 
 ```
 2026-05-19T14:22:01.041Z  INFO Listening on 0.0.0.0:8888, forwarding to COM7 @ 115200, mac=01FBC068
@@ -80,7 +80,23 @@ Annotated example:
 2026-05-19T14:22:03.224Z  INFO IN (KMBOX NET): cmd=mouse_move x=12 y=-3 mask=0x00          # decoded UDP packet
 2026-05-19T14:22:03.224Z  INFO OUT (COM7): 08 00 0C FD 00 0C 00 FD FF                      # the 9 bytes we wrote to serial
 2026-05-19T14:22:03.255Z  INFO IN (COM7): S:ready                                          # firmware status line
+2026-05-19T14:22:05.624Z  INFO Sending heartbeat (firmware version request)               # keepalive (every 2.5s, see "Heartbeat" below)
+2026-05-19T14:22:05.625Z  INFO OUT (COM7): 03 00 00 00 00 00 00 00 00
+2026-05-19T14:22:05.626Z  INFO IN (COM7): I: V: 5.17                                       # firmware version reply
 ```
+
+With `enable_timing_logs: true`, every `IN (KMBOX NET):` line gets a
+`parse=Nµs` suffix and every `OUT (COMx):` line gets a
+`(lat=X.YYms q=A.BBms w=C.DDms)` suffix:
+
+```
+INFO IN (KMBOX NET): cmd=mouse_move x=12 y=-3 mask=0x00 parse=18µs
+INFO OUT (COM7): 08 00 0C FD 00 0C 00 FD FF (lat=1.23ms q=0.04ms w=1.19ms)
+```
+
+`lat` is total origin → wire; `q` is mpsc-queue wait; `w` is the
+`write_all` syscall duration. The flag is purely diagnostic — leave it
+off for normal operation.
 
 Set `RUST_LOG=debug` to add the per-packet "dropping packet with wrong
 mac" lines and other lower-level diagnostics. The default level is `info`.
@@ -125,10 +141,14 @@ implement them — those docs are the canonical reference. The headlines:
 | `CMD_SHOWPIC`          | `showpic`        | Ack only.                                                                                             |
 | `CMD_TRACE_ENABLE`     | `trace_enable`   | Ack only.                                                                                             |
 
-Every accepted command produces a reply header (same `mac`, echo `rand`,
-`indexpts + 1`, same `cmd`). Unknown command codes are logged as
-`unknown(0x<code>)` and still get the echo reply, matching the vendor
-SDK's behaviour.
+Every accepted command produces a reply header that is a **byte-for-byte
+echo** of the request header (same `mac`, `rand`, `indexpts`, and
+`cmd`). The vendor SDK's `NetRxReturnHandle` enforces
+`rx.indexpts == tx.indexpts`; the official client also overwrites its
+own `ret = 0` after the check so it silently accepts a mismatch, but
+stricter third-party clients honour the result and refuse to connect on
+anything else. Unknown command codes are still echoed back so the host
+app doesn't stall.
 
 ## Companion debug tool: `serial_debug.py`
 
@@ -151,7 +171,7 @@ requires `pyserial` (`pip install pyserial`).
 
 ```
 src/
-  main.rs                  # entrypoint, UDP loop, serial reader+writer threads, log formatting
+  main.rs                  # entrypoint, UDP loop, serial reader+writer+heartbeat threads, log formatting
   kmbox_net/
     mod.rs                 # re-exports the items most call sites need
     schema.rs              # wire-format types (Header, SoftMouse) + CMD_* table
@@ -165,24 +185,60 @@ src/
     translator.rs          # Translator state machine + linear/bezier interpolation workers
 ```
 
+## Threading model
+
+Five thread types are in flight at runtime:
+
+| Thread | Owns | Responsibility |
+|---|---|---|
+| **Main** | the UDP socket, the `Translator` | `recv_from` loop, header parse + MAC check, dispatch via `Translator::handle_packet`, send UDP reply |
+| **Writer** | a clone of `Arc<SerialPort>` | drains the mpsc channel and calls `write_all` on the serial port; logs `OUT (COMx): …` |
+| **Reader** | a clone of `Arc<SerialPort>` | blocks in `read()` on the same port (concurrent with the writer; serial2 supports this), buffers by `\n`, logs `IN (COMx): …` |
+| **Heartbeat** | `Sender<SerialEnvelope>` clone | every 2.5 s sends a 3-byte `FIRMWARE_VERSION` request via the mpsc channel so the USB-serial chip / driver pipeline never goes idle long enough to cool down |
+| **Worker** | `Sender<SerialEnvelope>` clone, snapshot of button mask | spawned per `cmd_mouse_automove` / `cmd_bezier_move`, short-lived, emits delta packets at `STEP_MS = 4 ms` cadence |
+
+The button mask is the only shared mutable state; it lives in
+`Arc<Mutex<u8>>` and is locked briefly per per-button-command (main
+thread) and per interpolation step (worker threads).
+
+The mpsc channel is unbounded and uses real OS wake-ups — when the main
+thread does `tx.send(...)`, the writer thread is woken immediately, not
+after up to a polling interval. None of the timeouts in the loop bodies
+(`socket.set_read_timeout(250ms)`, `rx.recv_timeout(50ms)`, the heartbeat
+tick) gate throughput; they only bound shutdown responsiveness.
+
+## Implementation notes
+
+This crate uses [`serial2`](https://docs.rs/serial2/) for the serial
+side rather than the more common `serialport-rs`. The older crate's
+Windows implementation calls `WriteFile` with `lpOverlapped = NULL` on a
+handle opened with `FILE_FLAG_OVERLAPPED`, which forces `WriteFile` to
+honour the `COMMTIMEOUTS` write-timeout and pick up the FTDI/CH340
+driver's internal write-batching, producing 500-630 ms first-write
+latencies on this hardware. `serial2` uses overlapped I/O properly and
+exposes separate read and write timeouts, so we can set the write
+timeout to zero (no ceiling, blocks until physically out) the same way
+pyserial does by default.
+
 ## Testing
 
 ```
 cargo test --release
 ```
 
-Currently runs **17 tests** covering:
+Currently runs **18 tests** covering:
 
-* `kmbox_net::parser` — header decode (little-endian), reply construction
-  (the `indexpts + 1` invariant), `SoftMouse` body decode for both plain
-  moves and automove-with-control-points.
-* `streamcheats::packet` — byte-for-byte parity with the Python reference
-  for in-range zeros, positive and negative axis overflow, the `-128` /
-  `+127` boundary that takes the sentinel path, wheel-only packets, and
-  out-of-range clamping.
+* `kmbox_net::parser` — header decode (little-endian), reply
+  construction (byte-for-byte echo of the request header), `SoftMouse`
+  body decode for both plain moves and automove-with-control-points.
+* `streamcheats::packet` — byte-for-byte parity with the Python
+  reference for in-range zeros, positive and negative axis overflow,
+  the `-128` / `+127` boundary that takes the sentinel path, wheel-only
+  packets, and out-of-range clamping.
 * `util::settings` — MAC parsing (accept lowercase, reject wrong length
-  and non-hex), `listen_addr` / `com_port` requiredness, and defaulting
-  of `udp_port` / `baud_rate` / `device_mac` when omitted.
+  and non-hex), `listen_addr` / `com_port` requiredness, defaulting of
+  `udp_port` / `baud_rate` / `device_mac` when omitted, and that
+  `enable_timing_logs` can be opted into via the config file.
 
 ## Not yet implemented
 
