@@ -5,10 +5,11 @@ Teensy 4.1 USB Host Proxy firmware. It listens for KMBox Net UDP commands
 from any host app that already speaks the protocol (game tools, anti-cheats
 with KMBox support, etc.), translates each command into the Streamcheats
 firmware's 9-byte binary serial protocol, and forwards the result to the
-Teensy over a configured COM port. The Teensy injects the resulting HID
-mouse events into the target PC; the host app on the input PC continues to
-see normal KMBox Net replies, so it has no idea anything has been swapped
-out.
+Teensy over a USB-CDC COM port that the translator auto-discovers — no
+COM number to configure, plug-and-play across reboots and reconnects.
+The Teensy injects the resulting HID mouse events into the target PC;
+the host app on the input PC continues to see normal KMBox Net replies,
+so it has no idea anything has been swapped out.
 
 ```
 host app  --UDP (KMBox Net)-->  THIS TRANSLATOR  --serial (9-byte binary)-->  Teensy proxy
@@ -25,18 +26,28 @@ cargo build --release
 
 On the **first run** the binary writes a default `config.json` next to
 itself (whatever the process's current working directory is) and exits
-with a message asking you to edit it. The minimum you must set before
-the next run is:
+with a message asking you to edit it. The only field you must set
+before the next run is:
 
 * `listen_addr` — the local IP to bind the UDP listener on. `0.0.0.0`
   accepts traffic from any interface.
-* `com_port` — the Windows COM-port identifier of the Teensy (e.g. `COM7`).
 
-If you already have a `config.json` with one of these set to a bad value
-(e.g. an unparseable IP, an empty COM name), the translator prints a
-specific error naming the field and exits without touching the file —
-your other edits are preserved. Only an unreadable / unparseable file
-gets discarded and replaced with a fresh default.
+The COM port is **auto-discovered**: at startup (and again after every
+disconnect) the translator scans every available serial port in
+parallel and watches for the firmware's banner lines (`S: ...`,
+`I: ...`, `V: ...`, `E: ...`, `M: ...`, `SYN:...`). The first port
+that matches becomes the active session; unplugging the Teensy makes
+the supervisor rescan automatically, and the UDP side keeps replying
+to host apps the entire time so they don't stall.
+
+If you already have a `config.json` with `listen_addr` set to a bad
+value (e.g. an unparseable IP), the translator prints a specific error
+naming the field and exits without touching the file — your other
+edits are preserved. Only an unreadable / unparseable file gets
+discarded and replaced with a fresh default.
+
+Stale `com_port` / `baud_rate` keys from older config files are
+ignored silently so you can drop in this version without hand-editing.
 
 If your shell path contains the space in `KMBox Net Translator`, quote
 it according to your shell's rules:
@@ -53,10 +64,12 @@ The file lives in the working directory and uses these fields:
 |-----------------------|--------|----------|--------------|----------------------------------------------------|------------------|
 | `listen_addr`         | string | yes      | (none)       | Must parse as an IPv4 or IPv6 address.             | `"0.0.0.0"`      |
 | `udp_port`            | u16    | no       | `8888`       | `1..=65535` (zero is rejected).                    | `8888`           |
-| `com_port`            | string | yes      | (none)       | Non-empty after trimming.                          | `"COM7"`         |
-| `baud_rate`           | u32    | no       | `115200`     | Must be > 0. The Teensy firmware is fixed at 115200. | `115200`       |
 | `device_mac`          | string | no       | `"01FBC068"` | Exactly 8 hex characters. Host app must send this value in every packet's header. | `"01FBC068"` |
 | `enable_timing_logs`  | bool   | no       | `false`      | Adds per-packet latency suffixes to every IN/OUT log line. Diagnostic only. | `true`         |
+
+The serial port and baud rate are no longer configurable — the
+translator auto-discovers a Teensy on any port and the baud rate is
+hardcoded to 115200 (the firmware is fixed at that rate).
 
 A working example lives at `config.example.json` next to the source.
 
@@ -75,7 +88,9 @@ prefixes so the direction of each event is unambiguous:
 Annotated example (with `enable_timing_logs: false`, the default):
 
 ```
-2026-05-19T14:22:01.041Z  INFO Listening on 0.0.0.0:8888, forwarding to COM7 @ 115200, mac=01FBC068
+2026-05-19T14:22:00.012Z  INFO Listening on 0.0.0.0:8888, mac=01FBC068
+2026-05-19T14:22:00.013Z  INFO Scanning available COM ports for firmware...
+2026-05-19T14:22:01.041Z  INFO Found device on COM7                                        # auto-discovery match
 2026-05-19T14:22:03.118Z  INFO IN (KMBOX NET): cmd=connect (reset button mask)            # host app handshake; button state zeroed
 2026-05-19T14:22:03.224Z  INFO IN (KMBOX NET): cmd=mouse_move x=12 y=-3 mask=0x00          # decoded UDP packet
 2026-05-19T14:22:03.224Z  INFO OUT (COM7): 08 00 0C FD 00 0C 00 FD FF                      # the 9 bytes we wrote to serial
@@ -84,6 +99,25 @@ Annotated example (with `enable_timing_logs: false`, the default):
 2026-05-19T14:22:05.625Z  INFO OUT (COM7): 03 00 00 00 00 00 00 00 00
 2026-05-19T14:22:05.626Z  INFO IN (COM7): I: V: 5.17                                       # firmware version reply
 ```
+
+When no device is attached, the supervisor logs:
+
+```
+INFO Scanning available COM ports for firmware...
+INFO No device found, will try again in 10 seconds
+```
+
+…and keeps the UDP socket bound, so host apps can connect, send
+commands, and receive replies even while no Teensy is plugged in
+(outbound serial packets are silently dropped during that window).
+Unplugging an attached Teensy mid-session prints:
+
+```
+ERROR serial write failed on COM7 (9 bytes): ... — ending session
+INFO  Device on COM7 disconnected — rescanning
+```
+
+…and the supervisor goes straight back into discovery.
 
 With `enable_timing_logs: true`, every `IN (KMBOX NET):` line gets a
 `parse=Nµs` suffix and every `OUT (COMx):` line gets a
@@ -119,7 +153,7 @@ implement them — those docs are the canonical reference. The headlines:
   [`src/streamcheats/packet.rs`](src/streamcheats/packet.rs).
 * **Outgoing (Streamcheats serial — device settings)** — fixed 9 bytes
   with a `0x03` length prefix instead of `0x08`. Byte 1 is the
-  [`DeviceSettings`](src/streamcheats/device_settings.rs) ID (0–17,
+  [`DeviceSettings`](src/streamcheats/device_settings.rs) ID (0–11,
   mirroring the firmware's `FirmwareSettings::updateSettings` switch),
   bytes 2–3 are the signed `i16` value LE, the rest are zero. Currently
   emitted only as the 2.5 s heartbeat
@@ -179,7 +213,7 @@ requires `pyserial` (`pip install pyserial`).
 
 ```
 src/
-  main.rs                  # entrypoint, UDP loop, serial reader+writer+heartbeat threads, log formatting
+  main.rs                  # entrypoint, UDP loop, supervisor + heartbeat threads, log formatting
   kmbox_net/
     mod.rs                 # re-exports the items most call sites need
     schema.rs              # wire-format types (Header, SoftMouse) + CMD_* table
@@ -188,6 +222,10 @@ src/
     mod.rs                 # re-exports
     packet.rs              # 9-byte mouse-HID serial packet builder + button bitmask constants
     device_settings.rs     # firmware setting IDs (DeviceSettings enum) + 3-byte settings packet builder
+    discovery.rs           # parallel COM-port auto-discovery (matches firmware banner prefixes)
+    writer.rs              # serial writer thread (per-session; exits on write error)
+    reader.rs              # serial reader thread (per-session)
+    heartbeat.rs           # permanent heartbeat thread, idles when no device is attached
   util/
     mod.rs                 # re-exports
     settings.rs            # config.json load / validate / default-rewrite (three-way LoadOutcome)
@@ -196,15 +234,26 @@ src/
 
 ## Threading model
 
-Five thread types are in flight at runtime:
+The UDP socket, the `Translator`, the heartbeat, and the supervisor are
+**permanent** threads — they live for the entire process. The serial
+reader and writer are **per-session** — spawned each time the
+supervisor discovers a Teensy and torn down on disconnect.
 
-| Thread | Owns | Responsibility |
-|---|---|---|
-| **Main** | the UDP socket, the `Translator` | `recv_from` loop, header parse + MAC check, dispatch via `Translator::handle_packet`, send UDP reply |
-| **Writer** | a clone of `Arc<SerialPort>` | drains the mpsc channel and calls `write_all` on the serial port; logs `OUT (COMx): …` |
-| **Reader** | a clone of `Arc<SerialPort>` | blocks in `read()` on the same port (concurrent with the writer; serial2 supports this), buffers by `\n`, logs `IN (COMx): …` |
-| **Heartbeat** | `Sender<SerialEnvelope>` clone | every 2.5 s sends a 3-byte `FIRMWARE_VERSION` request via the mpsc channel so the USB-serial chip / driver pipeline never goes idle long enough to cool down |
-| **Worker** | `Sender<SerialEnvelope>` clone, snapshot of button mask | spawned per `cmd_mouse_automove` / `cmd_bezier_move`, short-lived, emits delta packets at `STEP_MS = 4 ms` cadence |
+| Thread | Lifetime | Owns | Responsibility |
+|---|---|---|---|
+| **Main** | permanent | the UDP socket, the `Translator` | `recv_from` loop, header parse + MAC check, dispatch via `Translator::handle_packet`, send UDP reply |
+| **Supervisor** | permanent | the discovery loop, per-session join handles | scans every available COM port in parallel; on match, configures the port and spawns writer+reader; on writer exit, joins reader and rescans |
+| **Heartbeat** | permanent | a clone of the `SerialTxHolder` | every 2.5 s, if the holder is `Some`, sends a `FIRMWARE_VERSION` request; otherwise no-ops |
+| **Writer** | per-session | a clone of `Arc<SerialPort>` | drains the mpsc channel and calls `write_all`; logs `OUT (COMx): …`; **exits on write error** (this is the "device unplugged" signal the supervisor watches for) |
+| **Reader** | per-session | a clone of `Arc<SerialPort>` | concurrent `read()` (serial2 supports this), buffers by `\n`, logs `IN (COMx): …`; exits on read error or per-session running flag |
+| **Worker** | short-lived | `SerialTxHolder` clone, snapshot of button mask | spawned per `cmd_mouse_automove` / `cmd_bezier_move`, emits delta packets at `STEP_MS = 4 ms` cadence |
+
+The translator's serial sender lives in a `SerialTxHolder`
+(`Arc<Mutex<Option<Sender<SerialEnvelope>>>>`). The supervisor swaps
+it: `Some(tx)` while a session is active, `None` otherwise. While
+`None`, the translator silently drops outbound serial packets but
+still returns the UDP reply — so host apps continue to see a healthy
+translator even with no Teensy attached.
 
 The button mask is the only shared mutable state; it lives in
 `Arc<Mutex<u8>>` and is locked briefly per per-button-command (main
@@ -235,7 +284,7 @@ pyserial does by default.
 cargo test --release
 ```
 
-Currently runs **24 tests** covering:
+Currently runs **34 tests** covering:
 
 * `kmbox_net::parser` — header decode (little-endian), reply
   construction (byte-for-byte echo of the request header), `SoftMouse`
@@ -250,9 +299,16 @@ Currently runs **24 tests** covering:
   `i16::MIN` values pack as expected, and every `DeviceSettings`
   variant's discriminant matches the firmware's switch ID.
 * `util::settings` — MAC parsing (accept lowercase, reject wrong length
-  and non-hex), `listen_addr` / `com_port` requiredness, defaulting of
-  `udp_port` / `baud_rate` / `device_mac` when omitted, and that
-  `enable_timing_logs` can be opted into via the config file.
+  and non-hex), `listen_addr` requiredness, defaulting of `udp_port` /
+  `device_mac` when omitted, that `enable_timing_logs` can be opted
+  into via the config file, and that stale `com_port` / `baud_rate`
+  keys in legacy configs are silently ignored.
+* `streamcheats::discovery` — firmware-prefix matcher: each of the six
+  known prefixes (`S: `, `I: `, `V: `, `E: `, `M: `, `SYN:`) matches
+  when embedded in noise, unknown letters don't match, `I:hello`
+  (missing space) doesn't match, partial lines without a `\n`
+  terminator don't match, CRLF works, and `SYN:` matches with digits
+  directly following.
 
 ## Not yet implemented
 

@@ -19,17 +19,11 @@ const unsigned long BUTTON_DOUBLE_TAP_TO_PASSTHROUGH_DURATION_MS = 350;
 extern bool logPerformanceMetrics; // Configurable setting to enable or disable logging on serial events
 extern bool logAPerformanceMetric; // Enables itself when serial events are available
 
-/* BELOW ARE OPERATION SETTINGS LIKE MOUSE LOCKOUT AND HARDWARE SPINBOT */
+/* BELOW ARE OPERATION SETTINGS LIKE MOUSE LOCKOUT */
 extern int enableSensReduction; // 0 = Disabled, 1 = Enabled
 extern int sensReductionDurationMilliseconds;
 extern int sensReductionAmmountX; // 100 = full movement (no reduction), 0 = full lockout (full reduction)
 extern int sensReductionAmmountY; // 100 = full movement (no reduction), 0 = full lockout (full reduction)
-extern int enableSpinning; // 0=Disabled, 1=Enabled
-extern int spinAmountPerRotation;
-extern int spinNumberOfRotations;
-extern int spinDelayBetweenRotationsMilliseconds;
-extern bool spinLockoutMouseUntilCompletion;
-extern int spinBeforeAfterMouseEvent; // 0=Before, 1=After, 2=Both
 extern int disablePassthroughForMMB; //0 = False, 1 = True
 extern int disablePassthroughForRMB; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration
 extern int disablePassthroughForLMB; //0 = False, 1 = True, 2 = Only if MMB has been pressed within duration, 3 = Only pass through if double tapped (and or held) within duration

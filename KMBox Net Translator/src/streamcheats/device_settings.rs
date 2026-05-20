@@ -22,7 +22,7 @@
 
 use super::packet::PACKET_LEN;
 
-/// One of the 18 setting IDs the firmware recognises.
+/// One of the 12 setting IDs the firmware recognises.
 ///
 /// The enum's `#[repr(u8)]` discriminant *is* the wire byte the firmware
 /// switches on, so adding a new variant means picking exactly the same
@@ -60,41 +60,23 @@ pub enum DeviceSettings {
     /// [`Self::SensReductionAmountX`] re: firmware spelling.)
     SensReductionAmountY = 5,
 
-    /// ID 6. Bool. Spin-bot master switch.
-    EnableSpinning = 6,
+    /// ID 6. Bool. Block middle-mouse-button passthrough to the host PC.
+    DisablePassthroughForMmb = 6,
 
-    /// ID 7. Spin step size in HID units per rotation.
-    SpinAmountPerRotation = 7,
+    /// ID 7. Bool. Block right-mouse-button passthrough.
+    DisablePassthroughForRmb = 7,
 
-    /// ID 8. Total number of rotations the spin executes when triggered.
-    SpinNumberOfRotations = 8,
+    /// ID 8. Bool. Block left-mouse-button passthrough.
+    DisablePassthroughForLmb = 8,
 
-    /// ID 9. Delay between consecutive rotations, in milliseconds.
-    SpinDelayBetweenRotationsMilliseconds = 9,
+    /// ID 9. Bool. Block side-button-1 (MB4) passthrough.
+    DisablePassthroughForMb4 = 9,
 
-    /// ID 10. Bool. While a spin is in progress, suppress real mouse input.
-    SpinLockoutMouseUntilCompletion = 10,
+    /// ID 10. Bool. Block side-button-2 (MB5) passthrough.
+    DisablePassthroughForMb5 = 10,
 
-    /// ID 11. Bool. Run the spin before or after the triggering mouse event.
-    SpinBeforeAfterMouseEvent = 11,
-
-    /// ID 12. Bool. Block middle-mouse-button passthrough to the host PC.
-    DisablePassthroughForMmb = 12,
-
-    /// ID 13. Bool. Block right-mouse-button passthrough.
-    DisablePassthroughForRmb = 13,
-
-    /// ID 14. Bool. Block left-mouse-button passthrough.
-    DisablePassthroughForLmb = 14,
-
-    /// ID 15. Bool. Block side-button-1 (MB4) passthrough.
-    DisablePassthroughForMb4 = 15,
-
-    /// ID 16. Bool. Block side-button-2 (MB5) passthrough.
-    DisablePassthroughForMb5 = 16,
-
-    /// ID 17. Bool. Toggle the firmware's `SYN:` / `M:` delta-logging stream.
-    EnableDeltaLogging = 17,
+    /// ID 11. Bool. Toggle the firmware's `SYN:` / `M:` delta-logging stream.
+    EnableDeltaLogging = 11,
 }
 
 /// Wire length-prefix byte that routes the firmware to its settings handler.
@@ -161,11 +143,11 @@ mod tests {
     #[test]
     fn max_and_min_i16_values() {
         // i16::MAX = 0x7FFF → [FF, 7F]
-        let p = build_settings_packet(DeviceSettings::SpinAmountPerRotation, i16::MAX);
+        let p = build_settings_packet(DeviceSettings::SensReductionAmountX, i16::MAX);
         assert_eq!(&p[2..4], &[0xFF, 0x7F]);
 
         // i16::MIN = 0x8000 → [00, 80]
-        let p = build_settings_packet(DeviceSettings::SpinAmountPerRotation, i16::MIN);
+        let p = build_settings_packet(DeviceSettings::SensReductionAmountX, i16::MIN);
         assert_eq!(&p[2..4], &[0x00, 0x80]);
     }
 
@@ -179,17 +161,11 @@ mod tests {
         assert_eq!(DeviceSettings::SensReductionDurationMilliseconds as u8, 3);
         assert_eq!(DeviceSettings::SensReductionAmountX as u8, 4);
         assert_eq!(DeviceSettings::SensReductionAmountY as u8, 5);
-        assert_eq!(DeviceSettings::EnableSpinning as u8, 6);
-        assert_eq!(DeviceSettings::SpinAmountPerRotation as u8, 7);
-        assert_eq!(DeviceSettings::SpinNumberOfRotations as u8, 8);
-        assert_eq!(DeviceSettings::SpinDelayBetweenRotationsMilliseconds as u8, 9);
-        assert_eq!(DeviceSettings::SpinLockoutMouseUntilCompletion as u8, 10);
-        assert_eq!(DeviceSettings::SpinBeforeAfterMouseEvent as u8, 11);
-        assert_eq!(DeviceSettings::DisablePassthroughForMmb as u8, 12);
-        assert_eq!(DeviceSettings::DisablePassthroughForRmb as u8, 13);
-        assert_eq!(DeviceSettings::DisablePassthroughForLmb as u8, 14);
-        assert_eq!(DeviceSettings::DisablePassthroughForMb4 as u8, 15);
-        assert_eq!(DeviceSettings::DisablePassthroughForMb5 as u8, 16);
-        assert_eq!(DeviceSettings::EnableDeltaLogging as u8, 17);
+        assert_eq!(DeviceSettings::DisablePassthroughForMmb as u8, 6);
+        assert_eq!(DeviceSettings::DisablePassthroughForRmb as u8, 7);
+        assert_eq!(DeviceSettings::DisablePassthroughForLmb as u8, 8);
+        assert_eq!(DeviceSettings::DisablePassthroughForMb4 as u8, 9);
+        assert_eq!(DeviceSettings::DisablePassthroughForMb5 as u8, 10);
+        assert_eq!(DeviceSettings::EnableDeltaLogging as u8, 11);
     }
 }

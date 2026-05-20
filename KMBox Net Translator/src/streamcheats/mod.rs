@@ -26,6 +26,7 @@
 //! Python's `sensReduction` flag.
 
 pub mod device_settings;
+pub mod discovery;
 pub mod format;
 pub mod heartbeat;
 pub mod packet;

@@ -99,7 +99,6 @@ In `process()`, after movement blending:
 5. sanitizeSignFlips()         — cap direction reversals
 6. clampValueSpikes()          — enforce smooth output
 7. recordOutput()              — store for next frame's comparison
-8. updateSpinBot()             — existing (unchanged)
 ```
 
 ## Constants
