@@ -4,9 +4,9 @@
 //! Listens for KMBox Net UDP commands on a configurable address/port,
 //! translates each one into the Streamcheats firmware's 9-byte binary
 //! serial protocol, and forwards the resulting packets to a Teensy 4.1
-//! over a configured COM port. The Teensy injects HID mouse events into
-//! the target PC; this process is invisible to the host app, which
-//! continues to see normal KMBox Net replies.
+//! over an auto-discovered USB-CDC COM port. The Teensy injects HID
+//! mouse events into the target PC; this process is invisible to the
+//! host app, which continues to see normal KMBox Net replies.
 //!
 //! ```text
 //! host app  --UDP (KMBox Net)-->  THIS TRANSLATOR  --serial (9-byte binary)-->  Teensy proxy
@@ -18,8 +18,9 @@
 //!   ([`kmbox_net::schema`]) and decoders ([`kmbox_net::parser`]).
 //! * [`streamcheats`] — outgoing Streamcheats firmware protocol AND the
 //!   threads that own the serial port. Packet builders
-//!   ([`streamcheats::packet`], [`streamcheats::device_settings`]) plus
-//!   the serial [`streamcheats::writer`], [`streamcheats::reader`], and
+//!   ([`streamcheats::packet`], [`streamcheats::device_settings`]),
+//!   the [`streamcheats::discovery`] auto-finder, plus the serial
+//!   [`streamcheats::writer`], [`streamcheats::reader`], and
 //!   [`streamcheats::heartbeat`] threads. Log render helpers live in
 //!   [`streamcheats::format`].
 //! * [`util`] — device-agnostic glue: persisted [`util::settings`]
@@ -29,27 +30,47 @@
 //!
 //! # Threading model
 //!
-//! Five thread types are in flight at runtime:
+//! The UDP socket, the [`Translator`], and the heartbeat thread are
+//! **permanent** — they exist for the entire program lifetime regardless
+//! of whether a Teensy is currently plugged in. The serial reader and
+//! writer are **per-session** — they're spawned each time the supervisor
+//! discovers a device and torn down when that device disconnects.
+//!
+//! At runtime the threads are:
 //!
 //! * **Main** — owns the UDP socket and the [`Translator`]; runs
 //!   `recv_from` in a loop, parses headers, drops on MAC mismatch,
 //!   dispatches via `Translator::handle_packet`, and sends the reply.
-//! * **Writer** (`serial_writer_loop`) — drains the mpsc channel and
-//!   calls `write_all` on the serial port.
-//! * **Reader** (`serial_reader_loop`) — concurrently reads from the
-//!   same port (`serial2` supports concurrent read+write on `&self`),
-//!   buffers by `\n`, and emits `IN (COMx):` lines.
-//! * **Heartbeat** (`heartbeat_loop`) — every [`HEARTBEAT_INTERVAL`]
-//!   pushes a benign settings packet through the mpsc channel so the
-//!   USB-serial chip never goes idle.
+//!   This thread keeps running across disconnect/reconnect cycles.
+//! * **Supervisor** — owns the discovery loop. While running, it
+//!   alternates between calling [`streamcheats::discovery::discover_device`]
+//!   and spawning a writer + reader pair around the port it finds.
+//!   On writer exit (device unplugged) it joins both threads, clears
+//!   the translator's serial sender, and rescans.
+//! * **Writer** (`serial_writer_loop`) — per-session. Drains the mpsc
+//!   channel and `write_all`s to the port. Returns after 3 consecutive
+//!   *heartbeat* write failures (~7.5 s of port silence), having first
+//!   cleared the [`SerialTxHolder`] and drained any in-flight envelopes
+//!   so the next session starts clean. Non-heartbeat write failures
+//!   are logged and the packet dropped, but never count toward the
+//!   disconnect threshold — only heartbeats decide session liveness.
+//! * **Reader** (`serial_reader_loop`) — per-session. Concurrent read
+//!   on the same `Arc<SerialPort>` (serial2 supports `&self` on both
+//!   directions), buffers by `\n`, emits `IN (COMx):` lines.
+//! * **Heartbeat** (`heartbeat_loop`) — permanent. Every
+//!   [`HEARTBEAT_INTERVAL`] checks the swappable sender holder and
+//!   pushes a benign settings packet through it if a session is
+//!   currently active.
 //! * **Interpolation workers** — short-lived, spawned per
 //!   `cmd_mouse_automove` / `cmd_bezier_move`; emit delta packets at
 //!   `STEP_MS = 4 ms` cadence and then exit.
 //!
-//! The serial port is wrapped in an `Arc<serial2::SerialPort>` and
-//! shared by the writer and reader threads — no `try_clone` of OS
-//! handles needed. The button mask is the only other shared mutable
-//! state, held in `Arc<Mutex<u8>>`.
+//! The serial sender lives in a [`SerialTxHolder`] (an
+//! `Arc<Mutex<Option<Sender<SerialEnvelope>>>>`) that's shared between
+//! the translator, the heartbeat, and the supervisor. When the holder
+//! is `None`, the translator silently drops outbound serial packets but
+//! still returns the UDP reply, so host apps don't stall waiting on a
+//! translator whose downstream device has gone away.
 //!
 //! # Log channels
 //!
@@ -69,6 +90,7 @@
 //! `q` mpsc-queue wait, `w` the `write_all` syscall duration.
 //!
 //! [`HEARTBEAT_INTERVAL`]: crate::streamcheats::heartbeat::HEARTBEAT_INTERVAL
+//! [`SerialTxHolder`]: crate::util::translator::SerialTxHolder
 
 mod kmbox_net;
 mod streamcheats;
@@ -79,16 +101,28 @@ use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+use crate::streamcheats::discovery::discover_device;
 use crate::util::settings::{load_or_create, LoadOutcome, Settings};
-use crate::util::translator::{SerialEnvelope, Translator};
+use crate::util::translator::{SerialEnvelope, SerialTxHolder, Translator};
+
+/// How long [`discover_device`] listens on each port per pass before
+/// declaring nothing matched. The firmware sends `I:` info lines roughly
+/// once per second and `S:` startup banner immediately on connect, so 5 s
+/// is comfortable headroom without making the user wait long when no
+/// device is attached.
+const DISCOVERY_PROBE_SECS: u64 = 5;
+
+/// Backoff between unsuccessful discovery passes. Polled in 100 ms
+/// increments so Ctrl+C is responsive even mid-sleep.
+const DISCOVERY_BACKOFF: Duration = Duration::from_secs(10);
 
 /// Initialise `tracing_subscriber` with an `info`-level default filter and
 /// enable ANSI escape-sequence processing on Windows consoles so colour
@@ -127,7 +161,7 @@ fn main() -> ExitCode {
             match reason {
                 None => {
                     println!(
-                        "Created default config.json — please edit listen_addr and com_port, then re-run."
+                        "Created default config.json — please edit listen_addr, then re-run."
                     );
                 }
                 Some(r) => {
@@ -136,7 +170,7 @@ fn main() -> ExitCode {
                         r
                     );
                     println!(
-                        "Wrote fresh default to {} — please edit listen_addr and com_port, then re-run.",
+                        "Wrote fresh default to {} — please edit listen_addr, then re-run.",
                         path.display()
                     );
                 }
@@ -166,54 +200,144 @@ fn main() -> ExitCode {
     }
 }
 
-/// Main service loop: opens the serial port, binds the UDP socket, spawns
-/// the serial reader and writer threads, and dispatches every incoming
-/// UDP datagram through a [`Translator`]. Returns when the Ctrl+C handler
-/// flips the shared `running` flag.
-fn run(settings: Settings) -> Result<()> {
-    // Open serial first — fail fast if it's wrong.
-    let mut serial = serial2::SerialPort::open(&settings.com_port, settings.baud_rate)
-        .with_context(|| {
-            format!(
-                "opening serial port {} @ {}",
-                settings.com_port, settings.baud_rate
-            )
-        })?;
+/// Sleep for `total`, but wake every 100 ms to check `running`. Returns
+/// `true` if the sleep completed normally, `false` if `running` flipped
+/// to `false` mid-sleep (so the caller can break out of its outer loop).
+fn interruptible_sleep(total: Duration, running: &Arc<AtomicBool>) -> bool {
+    let deadline = Instant::now() + total;
+    while running.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        thread::sleep((deadline - now).min(Duration::from_millis(100)));
+    }
+    false
+}
 
-    // 2 second READ timeout matches the Python reference
-    // (`serial.Serial(..., timeout=2)`). Bounds the reader thread's
-    // blocking `read()` calls so shutdown is responsive.
-    serial
-        .set_read_timeout(Duration::from_secs(2))
+/// Configure a freshly-opened port the way every session expects:
+/// 2 s read timeout, zero write timeout, DTR+RTS asserted. Matches the
+/// pyserial defaults (`timeout=2`, `write_timeout=None` →
+/// `WriteTotalTimeoutConstant=0` = block until physically out) and keeps
+/// USB-serial chips (FT232H, CH340) from entering low-power states.
+fn configure_session_port(port: &mut serial2::SerialPort, port_name: &str) -> Result<()> {
+    port.set_read_timeout(Duration::from_secs(2))
         .context("setting serial read timeout")?;
-
-    // ZERO write timeout is what pyserial uses by default
-    // (`write_timeout=None` → COMMTIMEOUTS WriteTotalTimeoutConstant = 0
-    // = no write timeout, blocks until the bytes are physically out).
-    // For a 9-byte packet at 115200 baud that's ~780 µs.
-    serial
-        .set_write_timeout(Duration::ZERO)
+    port.set_write_timeout(Duration::ZERO)
         .context("setting serial write timeout")?;
-
-    // Match pyserial's default open behaviour: assert DTR and RTS. USB
-    // serial chips (FT232H, CH340) treat DTR low as "host has gone"
-    // and may enter low-power states. pyserial's DCB sets
-    // fDtrControl / fRtsControl = ENABLE; serial2 leaves them at the
-    // driver default. Forcing them HIGH keeps the chip alive.
-    if let Err(e) = serial.set_dtr(true) {
-        warn!("could not assert DTR on {}: {}", settings.com_port, e);
+    if let Err(e) = port.set_dtr(true) {
+        warn!("could not assert DTR on {}: {}", port_name, e);
     }
-    if let Err(e) = serial.set_rts(true) {
-        warn!("could not assert RTS on {}: {}", settings.com_port, e);
+    if let Err(e) = port.set_rts(true) {
+        warn!("could not assert RTS on {}: {}", port_name, e);
     }
+    Ok(())
+}
 
-    // serial2 read/write take &self, so we can share one handle across
-    // the writer and reader threads via Arc — no try_clone (separate OS
-    // handles) needed.
-    let serial = Arc::new(serial);
-    let writer_serial = serial.clone();
-    let reader_serial = serial.clone();
+/// Supervisor loop: alternates between discovery (find a Teensy) and
+/// session (spawn writer + reader around it) until the shared `running`
+/// flag flips. When `discover_device` returns `None`, sleep
+/// [`DISCOVERY_BACKOFF`] then try again. When it returns `Some`,
+/// configure the port, publish the writer's sender to the holder so the
+/// translator and heartbeat start forwarding, wait for the writer to
+/// exit (either on disconnect or shutdown), then tear down: clear the
+/// holder, signal the reader to stop, join both threads, drop the port.
+fn supervisor_loop(
+    holder: SerialTxHolder,
+    running: Arc<AtomicBool>,
+    enable_timing: bool,
+) {
+    info!("Scanning available COM ports for firmware...");
+    while running.load(Ordering::SeqCst) {
+        match discover_device(DISCOVERY_PROBE_SECS) {
+            None => {
+                info!("No device found, will try again in 10 seconds");
+                if !interruptible_sleep(DISCOVERY_BACKOFF, &running) {
+                    break;
+                }
+                continue;
+            }
+            Some((port_name, mut port)) => {
+                info!("Found device on {}", port_name);
+                if let Err(e) = configure_session_port(&mut port, &port_name) {
+                    error!("could not configure {}: {} — rescanning", port_name, e);
+                    continue;
+                }
+                let port = Arc::new(port);
+                let writer_port = port.clone();
+                let reader_port = port.clone();
 
+                // Per-session running flag for the reader. Flips when
+                // the writer has exited (the disconnect signal) OR when
+                // the global `running` flag flips for shutdown.
+                let session_running = Arc::new(AtomicBool::new(true));
+
+                let (tx, rx) = mpsc::channel::<SerialEnvelope>();
+                // Publish the sender so the translator and heartbeat
+                // start delivering packets. Done BEFORE spawning the
+                // writer so we don't race against the first inbound
+                // UDP datagram during port handoff.
+                *holder.lock().unwrap() = Some(tx);
+
+                let writer_running = running.clone();
+                let writer_port_name = port_name.clone();
+                let writer_holder = holder.clone();
+                let writer_thread = thread::spawn(move || {
+                    crate::streamcheats::writer::serial_writer_loop(
+                        &writer_port,
+                        &writer_port_name,
+                        rx,
+                        writer_holder,
+                        writer_running,
+                        enable_timing,
+                    );
+                });
+
+                let reader_running = session_running.clone();
+                let reader_port_name = port_name.clone();
+                let reader_thread = thread::spawn(move || {
+                    crate::streamcheats::reader::serial_reader_loop(
+                        &reader_port,
+                        &reader_port_name,
+                        reader_running,
+                    );
+                });
+
+                // Writer exits on 3 consecutive heartbeat failures
+                // (device unplugged, ~7.5 s) or on global shutdown. On
+                // the disconnect path it has already run the SOP —
+                // cleared the holder and drained the channel — so the
+                // line below is a belt-and-braces no-op there. On
+                // graceful shutdown the writer leaves the holder alone,
+                // and this line is the one that clears it.
+                let _ = writer_thread.join();
+                *holder.lock().unwrap() = None;
+
+                // Signal the reader to stop and join it. The reader
+                // may also have exited already on its own (read error
+                // when the device went away); either way the join
+                // resolves quickly.
+                session_running.store(false, Ordering::SeqCst);
+                let _ = reader_thread.join();
+
+                // Drop the Arc<SerialPort> by letting it fall out of
+                // scope — both threads have joined so the writer/reader
+                // clones are gone; this last one closes the handle.
+                drop(port);
+
+                if running.load(Ordering::SeqCst) {
+                    info!("Device on {} disconnected — rescanning", port_name);
+                }
+            }
+        }
+    }
+}
+
+/// Main service loop: binds the UDP socket, builds the permanent
+/// [`Translator`], spawns the supervisor + heartbeat threads, and
+/// dispatches every incoming UDP datagram through the translator.
+/// Returns when the Ctrl+C handler flips the shared `running` flag.
+fn run(settings: Settings) -> Result<()> {
     let bind: SocketAddr = SocketAddr::new(settings.listen_addr, settings.udp_port);
     let socket = UdpSocket::bind(bind)
         .with_context(|| format!("binding UDP socket at {}", bind))?;
@@ -222,18 +346,9 @@ fn run(settings: Settings) -> Result<()> {
         .context("setting UDP read timeout")?;
 
     info!(
-        "Listening on {}:{}, forwarding to {} @ {}, mac={}",
-        settings.listen_addr,
-        settings.udp_port,
-        settings.com_port,
-        settings.baud_rate,
-        settings.device_mac_str
+        "Listening on {}:{}, mac={}",
+        settings.listen_addr, settings.udp_port, settings.device_mac_str
     );
-
-    // mpsc channel: translator + workers -> serial writer thread.
-    // Carries (Instant, packet) envelopes so the writer can compute
-    // per-packet latency at log time.
-    let (serial_tx, serial_rx) = mpsc::channel::<SerialEnvelope>();
 
     let running = Arc::new(AtomicBool::new(true));
     {
@@ -244,39 +359,31 @@ fn run(settings: Settings) -> Result<()> {
         .context("installing Ctrl+C handler")?;
     }
 
-    // Spawn serial writer.
-    let writer_running = running.clone();
-    let writer_port = settings.com_port.clone();
-    let writer_timing = settings.enable_timing_logs;
-    let writer_thread = thread::spawn(move || {
-        crate::streamcheats::writer::serial_writer_loop(
-            &writer_serial,
-            &writer_port,
-            serial_rx,
-            writer_running,
-            writer_timing,
-        );
-    });
+    // Swappable serial sender — populated by the supervisor whenever a
+    // session is active, cleared on disconnect. The translator and
+    // heartbeat both hold clones; while `None`, the translator drops
+    // outbound packets silently and the heartbeat skips its tick.
+    let serial_tx_holder: SerialTxHolder = Arc::new(Mutex::new(None));
 
-    // Spawn serial reader — logs every line the firmware emits.
-    let reader_running = running.clone();
-    let reader_port = settings.com_port.clone();
-    let reader_thread = thread::spawn(move || {
-        crate::streamcheats::reader::serial_reader_loop(&reader_serial, &reader_port, reader_running);
-    });
-
-    // Spawn heartbeat keepalive — emits a benign packet every
-    // HEARTBEAT_INTERVAL so the USB-serial chip never goes cold.
+    // Heartbeat is permanent — it lives across all sessions and
+    // automatically idles when no session is active.
     let heartbeat_running = running.clone();
-    let heartbeat_tx = serial_tx.clone();
+    let heartbeat_holder = serial_tx_holder.clone();
     let heartbeat_thread = thread::spawn(move || {
-        crate::streamcheats::heartbeat::heartbeat_loop(heartbeat_tx, heartbeat_running);
+        crate::streamcheats::heartbeat::heartbeat_loop(heartbeat_holder, heartbeat_running);
+    });
+
+    // Supervisor owns the discovery + per-session writer/reader threads.
+    let supervisor_running = running.clone();
+    let supervisor_holder = serial_tx_holder.clone();
+    let supervisor_thread = thread::spawn(move || {
+        supervisor_loop(supervisor_holder, supervisor_running, settings.enable_timing_logs);
     });
 
     let translator = Translator::new(
         settings.device_mac,
         settings.enable_timing_logs,
-        serial_tx,
+        serial_tx_holder.clone(),
     );
 
     let mut buf = [0u8; 2048];
@@ -302,9 +409,11 @@ fn run(settings: Settings) -> Result<()> {
     }
 
     info!("shutdown requested — closing serial and exiting");
+    // Clear the holder so any final translator sends are no-ops, then
+    // wait for the long-lived threads to wind down.
+    *serial_tx_holder.lock().unwrap() = None;
     drop(translator);
     let _ = heartbeat_thread.join();
-    let _ = writer_thread.join();
-    let _ = reader_thread.join();
+    let _ = supervisor_thread.join();
     Ok(())
 }

@@ -14,24 +14,21 @@ pub const CONFIG_FILENAME: &str = "config.json";
 /// UDP port used when `config.json` omits `udp_port`. Matches the vendor
 /// SDK's default of 8888.
 pub const DEFAULT_UDP_PORT: u16 = 8888;
-/// Serial baud rate used when `config.json` omits `baud_rate`. The Teensy
-/// firmware is fixed at 115200.
-pub const DEFAULT_BAUD: u32 = 115200;
 /// Default 8-hex-char device identifier used when `config.json` omits
 /// `device_mac`. Host apps must send packets stamped with this value or
 /// they will be dropped on MAC mismatch.
 pub const DEFAULT_MAC: &str = "01FBC068";
 
+/// Raw on-disk schema. Unknown fields are tolerated silently — earlier
+/// versions of the translator carried `com_port` and `baud_rate` keys
+/// and we don't want stale configs to error out (the supervisor now
+/// auto-discovers any Teensy on any COM port at the hardcoded 115200).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RawSettings {
     #[serde(default)]
     pub listen_addr: String,
     #[serde(default)]
     pub udp_port: Option<u16>,
-    #[serde(default)]
-    pub com_port: String,
-    #[serde(default)]
-    pub baud_rate: Option<u32>,
     #[serde(default)]
     pub device_mac: Option<String>,
     #[serde(default)]
@@ -46,10 +43,6 @@ pub struct Settings {
     pub listen_addr: IpAddr,
     /// UDP port to bind on. Defaults to [`DEFAULT_UDP_PORT`] if unset.
     pub udp_port: u16,
-    /// OS serial-port identifier (e.g. `COM7` on Windows).
-    pub com_port: String,
-    /// Serial baud rate. Defaults to [`DEFAULT_BAUD`] if unset.
-    pub baud_rate: u32,
     /// Device identifier as a `u32`, parsed from the config's 8-hex-char string.
     /// Incoming packets must carry this value in `Header::mac` or they
     /// are silently dropped.
@@ -65,7 +58,7 @@ pub struct Settings {
 }
 
 fn default_json() -> &'static str {
-    "{\n  \"listen_addr\": \"\",\n  \"udp_port\": 8888,\n  \"com_port\": \"\",\n  \"baud_rate\": 115200,\n  \"device_mac\": \"01FBC068\",\n  \"enable_timing_logs\": false\n}\n"
+    "{\n  \"listen_addr\": \"\",\n  \"udp_port\": 8888,\n  \"device_mac\": \"01FBC068\",\n  \"enable_timing_logs\": false\n}\n"
 }
 
 fn parse_mac(s: &str) -> Result<u32> {
@@ -95,17 +88,6 @@ fn validate(raw: RawSettings) -> Result<Settings> {
         None => DEFAULT_UDP_PORT,
     };
 
-    if raw.com_port.trim().is_empty() {
-        bail!("com_port is required and must be non-empty");
-    }
-    let com_port = raw.com_port.trim().to_string();
-
-    let baud_rate = match raw.baud_rate {
-        Some(0) => bail!("baud_rate must be > 0"),
-        Some(b) => b,
-        None => DEFAULT_BAUD,
-    };
-
     let mac_str = raw
         .device_mac
         .clone()
@@ -115,8 +97,6 @@ fn validate(raw: RawSettings) -> Result<Settings> {
     Ok(Settings {
         listen_addr,
         udp_port,
-        com_port,
-        baud_rate,
         device_mac,
         device_mac_str: mac_str.to_uppercase(),
         enable_timing_logs: raw.enable_timing_logs.unwrap_or(false),
@@ -227,22 +207,10 @@ mod tests {
     }
 
     #[test]
-    fn validate_requires_listen_and_com() {
+    fn validate_requires_listen_addr() {
         let raw = RawSettings {
             listen_addr: "".into(),
             udp_port: None,
-            com_port: "COM7".into(),
-            baud_rate: None,
-            device_mac: None,
-            enable_timing_logs: None,
-        };
-        assert!(validate(raw).is_err());
-
-        let raw = RawSettings {
-            listen_addr: "0.0.0.0".into(),
-            udp_port: None,
-            com_port: "".into(),
-            baud_rate: None,
             device_mac: None,
             enable_timing_logs: None,
         };
@@ -254,14 +222,11 @@ mod tests {
         let raw = RawSettings {
             listen_addr: "127.0.0.1".into(),
             udp_port: None,
-            com_port: "COM3".into(),
-            baud_rate: None,
             device_mac: None,
             enable_timing_logs: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.udp_port, DEFAULT_UDP_PORT);
-        assert_eq!(s.baud_rate, DEFAULT_BAUD);
         assert_eq!(s.device_mac, 0x01FBC068);
         // enable_timing_logs defaults to false so users get clean logs
         // unless they opt in.
@@ -273,12 +238,30 @@ mod tests {
         let raw = RawSettings {
             listen_addr: "127.0.0.1".into(),
             udp_port: None,
-            com_port: "COM3".into(),
-            baud_rate: None,
             device_mac: None,
             enable_timing_logs: Some(true),
         };
         let s = validate(raw).unwrap();
         assert!(s.enable_timing_logs);
+    }
+
+    #[test]
+    fn stale_com_port_and_baud_rate_keys_are_ignored() {
+        // Old configs from before auto-discovery may still carry these
+        // keys. They must parse cleanly (serde_json is permissive by
+        // default — no `deny_unknown_fields`) so users don't have to
+        // hand-edit their config when upgrading.
+        let text = r#"{
+            "listen_addr": "0.0.0.0",
+            "udp_port": 8888,
+            "com_port": "COM3",
+            "baud_rate": 115200,
+            "device_mac": "01FBC068",
+            "enable_timing_logs": false
+        }"#;
+        let raw: RawSettings = serde_json::from_str(text).expect("stale keys must not error");
+        let s = validate(raw).unwrap();
+        assert_eq!(s.udp_port, 8888);
+        assert_eq!(s.device_mac, 0x01FBC068);
     }
 }

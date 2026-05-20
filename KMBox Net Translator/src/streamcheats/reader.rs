@@ -5,8 +5,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
 use tracing::warn;
 
@@ -16,6 +14,11 @@ use super::format::flush_line;
 /// logs every complete line as `IN (<port>): <text>`. Non-printable bytes
 /// are rendered as `\xHH` so binary noise stays readable. A 4 KiB
 /// safety cap forces a flush if the firmware ever omits a newline.
+///
+/// Exits when the per-session `running` flag flips to `false` OR when
+/// `read` returns a non-recoverable error (which on Windows USB-CDC is
+/// the usual "device unplugged" path). Either way the supervisor joins
+/// this thread, drops the port, and goes back to scanning.
 pub(crate) fn serial_reader_loop(
     serial: &serial2::SerialPort,
     port_name: &str,
@@ -48,9 +51,13 @@ pub(crate) fn serial_reader_loop(
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(e) => {
-                warn!("serial read error on {}: {}", port_name, e);
-                // Brief pause to avoid hot-spinning on a broken port.
-                thread::sleep(Duration::from_millis(100));
+                // Anything else (BrokenPipe, NotConnected, Os{...}) is
+                // almost certainly "the user unplugged the Teensy".
+                // Don't hot-spin retrying on a dead handle — bail and
+                // let the supervisor's session-teardown path reclaim
+                // us.
+                warn!("serial read error on {}: {} — ending session", port_name, e);
+                break;
             }
         }
     }
