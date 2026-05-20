@@ -9,7 +9,8 @@
 //! A packet is a fixed 16-byte [`Header`] followed by a command-specific
 //! body (currently always a 56-byte [`SoftMouse`] — keyboard packets are
 //! acknowledged with the reply header but the body is not decoded). The
-//! reply is just the request header with `indexpts` incremented by one.
+//! reply is a byte-for-byte echo of the request header; strict host apps
+//! reject any modification (see [`Header::reply`]).
 //!
 //! Reference implementation: <https://github.com/kvmaibox/kmboxnet>.
 

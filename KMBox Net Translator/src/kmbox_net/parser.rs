@@ -26,15 +26,20 @@ impl Header {
         })
     }
 
-    /// Build the reply header: same `mac`, echo `rand`, `indexpts + 1`
-    /// (wrapping), same `cmd`. The wrapping addition matches the vendor
-    /// SDK; host apps treat the index as a free-running counter, so an
-    /// overflow from `u32::MAX` -> 0 is legal.
+    /// Build the reply header: a byte-for-byte echo of the request header.
+    ///
+    /// The vendor SDK's `NetRxReturnHandle` enforces `rx.cmd == tx.cmd` AND
+    /// `rx.indexpts == tx.indexpts` — i.e. the reply must echo every field
+    /// unchanged. The official client further overwrites `ret = 0` after
+    /// the checks, masking any mismatch from its own callers, but other
+    /// host apps (including stricter community implementations) honour the
+    /// check and refuse to connect when `indexpts` differs. Echoing the
+    /// whole header is the only form that satisfies all known clients.
     pub fn reply(&self) -> [u8; HEADER_LEN] {
         let mut out = [0u8; HEADER_LEN];
         LittleEndian::write_u32(&mut out[0..4], self.mac);
         LittleEndian::write_u32(&mut out[4..8], self.rand);
-        LittleEndian::write_u32(&mut out[8..12], self.indexpts.wrapping_add(1));
+        LittleEndian::write_u32(&mut out[8..12], self.indexpts);
         LittleEndian::write_u32(&mut out[12..16], self.cmd);
         out
     }
@@ -93,7 +98,11 @@ mod tests {
     }
 
     #[test]
-    fn header_reply_increments_index_and_keeps_other_fields() {
+    fn header_reply_is_byte_for_byte_echo() {
+        // The vendor SDK's NetRxReturnHandle rejects the reply unless
+        // `rx.indexpts == tx.indexpts` AND `rx.cmd == tx.cmd`. The safest
+        // — and only universally-accepted — reply is a verbatim echo of
+        // every field in the header.
         let h = Header {
             mac: 0x01FBC068,
             rand: 0xAABBCCDD,
@@ -103,7 +112,7 @@ mod tests {
         let r = h.reply();
         assert_eq!(LittleEndian::read_u32(&r[0..4]), 0x01FBC068);
         assert_eq!(LittleEndian::read_u32(&r[4..8]), 0xAABBCCDD);
-        assert_eq!(LittleEndian::read_u32(&r[8..12]), 43);
+        assert_eq!(LittleEndian::read_u32(&r[8..12]), 42);
         assert_eq!(LittleEndian::read_u32(&r[12..16]), CMD_CONNECT);
     }
 

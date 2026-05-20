@@ -73,7 +73,7 @@ pub const CMD_TRACE_ENABLE: u32 = 0xBBCDDDAC;
 /// |-------:|-----:|------------|------------------------------------------------------|
 /// |    0   |   4  | `mac`      | Device MAC last-4-bytes identifier; must match config. |
 /// |    4   |   4  | `rand`     | Per-packet nonce; echoed back unchanged in the reply. |
-/// |    8   |   4  | `indexpts` | Monotonic packet index; reply is `indexpts + 1`.     |
+/// |    8   |   4  | `indexpts` | Monotonic packet index; reply must echo it verbatim.  |
 /// |   12   |   4  | `cmd`      | One of the `CMD_*` codes.                            |
 #[derive(Debug, Clone, Copy)]
 pub struct Header {
@@ -83,8 +83,10 @@ pub struct Header {
     /// Per-packet nonce supplied by the host app. Echoed unchanged in the
     /// reply so the host can correlate request/response.
     pub rand: u32,
-    /// Monotonic packet index supplied by the host app. The reply carries
-    /// `indexpts.wrapping_add(1)`, matching the vendor SDK.
+    /// Monotonic packet index supplied by the host app. The reply must
+    /// echo this value unchanged — strict host apps reject the
+    /// connection on a mismatch (the vendor SDK's `NetRxReturnHandle`
+    /// flags `err_net_pts` when `rx.indexpts != tx.indexpts`).
     pub indexpts: u32,
     /// Command code. See the `CMD_*` constants in this module.
     pub cmd: u32,
