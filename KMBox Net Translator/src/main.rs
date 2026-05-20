@@ -23,6 +23,10 @@
 //! * [`util`] — runtime glue: persisted [`util::settings`] loader and the
 //!   [`util::translator::Translator`] state machine that holds the
 //!   cumulative button mask and dispatches each incoming command.
+//! * [`heartbeat`] — heartbeat keepalive thread + its constants.
+//! * [`writer`] — serial writer thread (mpsc → `write_all`).
+//! * [`reader`] — serial reader thread (read → `IN (COMx)` lines).
+//! * [`mod@format`] — small render helpers shared by writer + reader.
 //!
 //! # Threading model
 //!
@@ -64,41 +68,32 @@
 //! lines also carry a `parse=Nµs` suffix and the `OUT (COMx)` lines
 //! carry `(lat=X.YYms q=A.BBms w=C.DDms)` — `lat` total origin → wire,
 //! `q` mpsc-queue wait, `w` the `write_all` syscall duration.
+//!
+//! [`HEARTBEAT_INTERVAL`]: crate::heartbeat::HEARTBEAT_INTERVAL
 
 mod kmbox_net;
 mod streamcheats;
 mod util;
+mod heartbeat;
+mod writer;
+mod reader;
+mod format;
 
 use std::env;
 use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::streamcheats::{build_settings_packet, DeviceSettings, PACKET_LEN};
 use crate::util::settings::{load_or_create, LoadOutcome, Settings};
 use crate::util::translator::{SerialEnvelope, Translator};
-
-/// Heartbeat interval — matches `FirmwareInterface.py`'s 2.5 s. The
-/// hardware works at this cadence in Python; if it doesn't in Rust the
-/// fix isn't to spam the chip with a faster heartbeat, it's to find
-/// what's different about the write path.
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(2500);
-
-/// 9-byte heartbeat packet — a [`DeviceSettings::FirmwareVersion`] read
-/// with value `0`. Triggers the firmware's `V: x.xx` reply line on its
-/// serial output and has no HID side-effect. Byte-for-byte identical to
-/// Python's `create_settings_report("FIRMWARE_VERSION", 0, 0)`. Pinned
-/// in `streamcheats::device_settings::tests::heartbeat_packet_is_firmware_version_zero`.
-const HEARTBEAT_PACKET: [u8; PACKET_LEN] =
-    build_settings_packet(DeviceSettings::FirmwareVersion, 0);
 
 /// Initialise `tracing_subscriber` with an `info`-level default filter and
 /// enable ANSI escape-sequence processing on Windows consoles so colour
@@ -259,7 +254,7 @@ fn run(settings: Settings) -> Result<()> {
     let writer_port = settings.com_port.clone();
     let writer_timing = settings.enable_timing_logs;
     let writer_thread = thread::spawn(move || {
-        serial_writer_loop(
+        crate::writer::serial_writer_loop(
             &writer_serial,
             &writer_port,
             serial_rx,
@@ -272,7 +267,7 @@ fn run(settings: Settings) -> Result<()> {
     let reader_running = running.clone();
     let reader_port = settings.com_port.clone();
     let reader_thread = thread::spawn(move || {
-        serial_reader_loop(&reader_serial, &reader_port, reader_running);
+        crate::reader::serial_reader_loop(&reader_serial, &reader_port, reader_running);
     });
 
     // Spawn heartbeat keepalive — emits a benign packet every
@@ -280,7 +275,7 @@ fn run(settings: Settings) -> Result<()> {
     let heartbeat_running = running.clone();
     let heartbeat_tx = serial_tx.clone();
     let heartbeat_thread = thread::spawn(move || {
-        heartbeat_loop(heartbeat_tx, heartbeat_running);
+        crate::heartbeat::heartbeat_loop(heartbeat_tx, heartbeat_running);
     });
 
     let translator = Translator::new(
@@ -317,170 +312,4 @@ fn run(settings: Settings) -> Result<()> {
     let _ = writer_thread.join();
     let _ = reader_thread.join();
     Ok(())
-}
-
-/// Heartbeat loop: every [`HEARTBEAT_INTERVAL`] sends a single
-/// [`HEARTBEAT_PACKET`] through the same mpsc channel the translator
-/// and interpolation workers use. Matches `FirmwareInterface.py`'s
-/// `_send_heartbeat` so the USB-serial chip / driver pipeline stays
-/// out of any idle low-power state.
-///
-/// Polls in 100 ms ticks rather than sleeping for the full interval so
-/// Ctrl+C shutdown is honoured within ~100 ms instead of up to 2.5 s.
-fn heartbeat_loop(tx: Sender<SerialEnvelope>, running: Arc<AtomicBool>) {
-    let mut next_at = Instant::now() + HEARTBEAT_INTERVAL;
-    while running.load(Ordering::SeqCst) {
-        let now = Instant::now();
-        if now >= next_at {
-            info!("Sending heartbeat (firmware version request)");
-            if tx.send((Instant::now(), HEARTBEAT_PACKET)).is_err() {
-                // Writer thread has exited — nothing more to do.
-                break;
-            }
-            next_at = now + HEARTBEAT_INTERVAL;
-        } else {
-            let remaining = next_at.saturating_duration_since(now);
-            thread::sleep(remaining.min(Duration::from_millis(100)));
-        }
-    }
-}
-
-/// Writer loop: pulls envelopes (origin instant + 9-byte packet) off the
-/// mpsc channel and writes each packet to the serial port. Logs successful
-/// writes as `OUT (<port>): <hex>` with an optional timing suffix
-/// (`lat=X.Yms q=A.Bms w=C.Dms`) when `enable_timing` is `true`. The lat
-/// component measures the full origin → wire delay; q is queue wait
-/// before this thread dequeued; w is the `write_all` call duration.
-///
-/// Polls the receiver with a 50 ms timeout so the thread stays responsive
-/// to a shutdown request without busy-spinning. We do NOT call `flush()`
-/// per packet — `write_all` already blocks until the bytes are out of
-/// the OS buffer; explicitly flushing on top of that just adds latency
-/// for no benefit (pyserial doesn't flush either).
-fn serial_writer_loop(
-    serial: &serial2::SerialPort,
-    port_name: &str,
-    rx: Receiver<SerialEnvelope>,
-    running: Arc<AtomicBool>,
-    enable_timing: bool,
-) {
-    while running.load(Ordering::SeqCst) {
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok((origin, pkt)) => {
-                let dequeued = Instant::now();
-                match serial.write_all(&pkt) {
-                    Ok(()) => {
-                        let written = Instant::now();
-                        if enable_timing {
-                            let lat_ms = written.duration_since(origin).as_secs_f64() * 1000.0;
-                            let q_ms = dequeued.duration_since(origin).as_secs_f64() * 1000.0;
-                            let w_ms = written.duration_since(dequeued).as_secs_f64() * 1000.0;
-                            info!(
-                                "OUT ({}): {} (lat={:.2}ms q={:.2}ms w={:.2}ms)",
-                                port_name,
-                                hex_bytes(&pkt),
-                                lat_ms,
-                                q_ms,
-                                w_ms
-                            );
-                        } else {
-                            info!("OUT ({}): {}", port_name, hex_bytes(&pkt));
-                        }
-                    }
-                    Err(e) => {
-                        warn!("serial write failed ({} bytes): {}", pkt.len(), e);
-                    }
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    // One flush on shutdown so any tail bytes leave the hardware FIFO.
-    let _ = serial.flush();
-}
-
-/// Reader loop: collects bytes from the firmware, splits on newline, and
-/// logs every complete line as `IN (<port>): <text>`. Non-printable bytes
-/// are rendered as `\xHH` so binary noise stays readable. A 4 KiB
-/// safety cap forces a flush if the firmware ever omits a newline.
-fn serial_reader_loop(
-    serial: &serial2::SerialPort,
-    port_name: &str,
-    running: Arc<AtomicBool>,
-) {
-    let mut buf = [0u8; 256];
-    let mut line: Vec<u8> = Vec::with_capacity(256);
-
-    while running.load(Ordering::SeqCst) {
-        match serial.read(&mut buf) {
-            Ok(0) => {}
-            Ok(n) => {
-                for &b in &buf[..n] {
-                    if b == b'\n' {
-                        flush_line(port_name, &line);
-                        line.clear();
-                    } else if b == b'\r' {
-                        // swallow — handled together with the following LF
-                    } else {
-                        line.push(b);
-                        // Guard against runaway buffer if the firmware
-                        // never sends a newline.
-                        if line.len() > 4096 {
-                            flush_line(port_name, &line);
-                            line.clear();
-                        }
-                    }
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => {
-                warn!("serial read error on {}: {}", port_name, e);
-                // Brief pause to avoid hot-spinning on a broken port.
-                thread::sleep(Duration::from_millis(100));
-            }
-        }
-    }
-
-    // Flush any partial trailing line on shutdown.
-    if !line.is_empty() {
-        flush_line(port_name, &line);
-    }
-}
-
-/// Emit a single firmware line as `IN (<port>): <rendered>`. All-NUL
-/// lines (a common transient when the FTDI driver is settling) are
-/// discarded so they don't pollute the log.
-fn flush_line(port_name: &str, line: &[u8]) {
-    if line.iter().all(|&b| b == 0) {
-        return; // ignore all-NUL noise
-    }
-    info!("IN ({}): {}", port_name, render_line(line));
-}
-
-/// Render a byte slice as text, escaping non-printable bytes as `\xHH`.
-fn render_line(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len());
-    for &b in bytes {
-        if (0x20..=0x7E).contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("\\x{:02X}", b));
-        }
-    }
-    out
-}
-
-/// Render a byte slice as space-separated uppercase hex (e.g. `08 01 00 ...`).
-/// Used to log outbound Streamcheats packets.
-fn hex_bytes(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 {
-            s.push(' ');
-        }
-        s.push_str(&format!("{:02X}", b));
-    }
-    s
 }
