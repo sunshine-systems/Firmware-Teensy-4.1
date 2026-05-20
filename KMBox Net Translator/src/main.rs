@@ -44,7 +44,7 @@ use std::env;
 use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -53,8 +53,24 @@ use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+use crate::streamcheats::PACKET_LEN;
 use crate::util::settings::{load_or_create, LoadOutcome, Settings};
 use crate::util::translator::{SerialEnvelope, Translator};
+
+/// Heartbeat interval. Mirrors `FirmwareInterface.py`'s
+/// `heartbeat_interval = 2.5` (seconds). Emitting a benign packet on this
+/// cadence keeps the FTDI / CH340 chip and the Windows COM-port driver
+/// out of any idle low-power state, so the next real translation packet
+/// doesn't pay the 85–415 ms cold-path wakeup latency.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(2500);
+
+/// 9-byte heartbeat packet: length prefix `0x03` routes the firmware
+/// to its settings handler, `setting_id=0` is `FIRMWARE_VERSION` (read
+/// only — triggers a `V: x.xx` reply, no HID side-effect), and the
+/// remaining bytes are zero-padded. Byte-for-byte identical to Python's
+/// `create_settings_report("FIRMWARE_VERSION", 0, 0)`.
+const HEARTBEAT_PACKET: [u8; PACKET_LEN] =
+    [0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
 /// Initialise `tracing_subscriber` with an `info`-level default filter and
 /// enable ANSI escape-sequence processing on Windows consoles so colour
@@ -208,6 +224,14 @@ fn run(settings: Settings) -> Result<()> {
         serial_reader_loop(&mut *serial_reader, &reader_port, reader_running);
     });
 
+    // Spawn heartbeat keepalive — emits a benign packet every
+    // HEARTBEAT_INTERVAL so the USB-serial chip never goes cold.
+    let heartbeat_running = running.clone();
+    let heartbeat_tx = serial_tx.clone();
+    let heartbeat_thread = thread::spawn(move || {
+        heartbeat_loop(heartbeat_tx, heartbeat_running);
+    });
+
     let translator = Translator::new(
         settings.device_mac,
         settings.enable_timing_logs,
@@ -238,9 +262,36 @@ fn run(settings: Settings) -> Result<()> {
 
     info!("shutdown requested — closing serial and exiting");
     drop(translator);
+    let _ = heartbeat_thread.join();
     let _ = writer_thread.join();
     let _ = reader_thread.join();
     Ok(())
+}
+
+/// Heartbeat loop: every [`HEARTBEAT_INTERVAL`] sends a single
+/// [`HEARTBEAT_PACKET`] through the same mpsc channel the translator and
+/// interpolation workers use. Matches `FirmwareInterface.py`'s
+/// `_send_heartbeat` and is the reason Python tooling doesn't experience
+/// the 85–415 ms cold-path wakeup the Rust translator hit before this.
+///
+/// Polls in 100 ms ticks rather than sleeping for the full interval so
+/// Ctrl+C shutdown is honoured within ~100 ms instead of up to 2.5 s.
+fn heartbeat_loop(tx: Sender<SerialEnvelope>, running: Arc<AtomicBool>) {
+    let mut next_at = Instant::now() + HEARTBEAT_INTERVAL;
+    while running.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        if now >= next_at {
+            info!("Sending heartbeat (firmware version request)");
+            if tx.send((Instant::now(), HEARTBEAT_PACKET)).is_err() {
+                // Writer thread has exited — nothing more to do.
+                break;
+            }
+            next_at = now + HEARTBEAT_INTERVAL;
+        } else {
+            let remaining = next_at.saturating_duration_since(now);
+            thread::sleep(remaining.min(Duration::from_millis(100)));
+        }
+    }
 }
 
 /// Writer loop: pulls envelopes (origin instant + 9-byte packet) off the
