@@ -14,19 +14,18 @@
 //!
 //! # Module layout
 //!
-//! * [`kmbox_net`] — incoming wire format (16-byte LE header + body) and
-//!   parsing. Start in [`kmbox_net::schema`] for the type and command
-//!   tables, [`kmbox_net::parser`] for the decoders.
-//! * [`streamcheats`] — outgoing 9-byte mouse packet builder for the
-//!   Teensy firmware. The byte-by-byte layout lives at the top of
-//!   [`streamcheats::packet`].
-//! * [`util`] — runtime glue: persisted [`util::settings`] loader and the
-//!   [`util::translator::Translator`] state machine that holds the
-//!   cumulative button mask and dispatches each incoming command.
-//! * [`heartbeat`] — heartbeat keepalive thread + its constants.
-//! * [`writer`] — serial writer thread (mpsc → `write_all`).
-//! * [`reader`] — serial reader thread (read → `IN (COMx)` lines).
-//! * [`mod@format`] — small render helpers shared by writer + reader.
+//! * [`kmbox_net`] — incoming KMBox Net UDP protocol: wire types
+//!   ([`kmbox_net::schema`]) and decoders ([`kmbox_net::parser`]).
+//! * [`streamcheats`] — outgoing Streamcheats firmware protocol AND the
+//!   threads that own the serial port. Packet builders
+//!   ([`streamcheats::packet`], [`streamcheats::device_settings`]) plus
+//!   the serial [`streamcheats::writer`], [`streamcheats::reader`], and
+//!   [`streamcheats::heartbeat`] threads. Log render helpers live in
+//!   [`streamcheats::format`].
+//! * [`util`] — device-agnostic glue: persisted [`util::settings`]
+//!   loader and the [`util::translator::Translator`] state machine that
+//!   holds the cumulative button mask and dispatches each incoming
+//!   command.
 //!
 //! # Threading model
 //!
@@ -69,15 +68,11 @@
 //! carry `(lat=X.YYms q=A.BBms w=C.DDms)` — `lat` total origin → wire,
 //! `q` mpsc-queue wait, `w` the `write_all` syscall duration.
 //!
-//! [`HEARTBEAT_INTERVAL`]: crate::heartbeat::HEARTBEAT_INTERVAL
+//! [`HEARTBEAT_INTERVAL`]: crate::streamcheats::heartbeat::HEARTBEAT_INTERVAL
 
 mod kmbox_net;
 mod streamcheats;
 mod util;
-mod heartbeat;
-mod writer;
-mod reader;
-mod format;
 
 use std::env;
 use std::net::{SocketAddr, UdpSocket};
@@ -254,7 +249,7 @@ fn run(settings: Settings) -> Result<()> {
     let writer_port = settings.com_port.clone();
     let writer_timing = settings.enable_timing_logs;
     let writer_thread = thread::spawn(move || {
-        crate::writer::serial_writer_loop(
+        crate::streamcheats::writer::serial_writer_loop(
             &writer_serial,
             &writer_port,
             serial_rx,
@@ -267,7 +262,7 @@ fn run(settings: Settings) -> Result<()> {
     let reader_running = running.clone();
     let reader_port = settings.com_port.clone();
     let reader_thread = thread::spawn(move || {
-        crate::reader::serial_reader_loop(&reader_serial, &reader_port, reader_running);
+        crate::streamcheats::reader::serial_reader_loop(&reader_serial, &reader_port, reader_running);
     });
 
     // Spawn heartbeat keepalive — emits a benign packet every
@@ -275,7 +270,7 @@ fn run(settings: Settings) -> Result<()> {
     let heartbeat_running = running.clone();
     let heartbeat_tx = serial_tx.clone();
     let heartbeat_thread = thread::spawn(move || {
-        crate::heartbeat::heartbeat_loop(heartbeat_tx, heartbeat_running);
+        crate::streamcheats::heartbeat::heartbeat_loop(heartbeat_tx, heartbeat_running);
     });
 
     let translator = Translator::new(

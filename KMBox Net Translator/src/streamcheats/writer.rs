@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 
-use crate::format::hex_bytes;
+use super::format::hex_bytes;
 use crate::util::translator::SerialEnvelope;
 
 /// Writer loop: pulls envelopes (origin instant + 9-byte packet) off the

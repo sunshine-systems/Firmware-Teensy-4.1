@@ -1,8 +1,8 @@
 //! Small log-formatting helpers shared by the [`reader`] and [`writer`]
 //! threads.
 //!
-//! [`reader`]: crate::reader
-//! [`writer`]: crate::writer
+//! [`reader`]: super::reader
+//! [`writer`]: super::writer
 
 use tracing::info;
 

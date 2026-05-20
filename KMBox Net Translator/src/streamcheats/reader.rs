@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tracing::warn;
 
-use crate::format::flush_line;
+use super::format::flush_line;
 
 /// Reader loop: collects bytes from the firmware, splits on newline, and
 /// logs every complete line as `IN (<port>): <text>`. Non-printable bytes

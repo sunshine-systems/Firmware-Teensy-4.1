@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use tracing::info;
 
-use crate::streamcheats::{build_settings_packet, DeviceSettings, PACKET_LEN};
+use super::{build_settings_packet, DeviceSettings, PACKET_LEN};
 use crate::util::translator::SerialEnvelope;
 
 /// Heartbeat interval — matches `FirmwareInterface.py`'s 2.5 s. The
