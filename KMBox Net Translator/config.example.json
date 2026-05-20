@@ -3,5 +3,6 @@
   "udp_port": 8888,
   "com_port": "COM7",
   "baud_rate": 115200,
-  "device_mac": "01FBC068"
+  "device_mac": "01FBC068",
+  "enable_timing_logs": false
 }

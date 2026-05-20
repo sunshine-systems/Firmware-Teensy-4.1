@@ -47,15 +47,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::streamcheats::PACKET_LEN;
 use crate::util::settings::{load_or_create, LoadOutcome, Settings};
-use crate::util::translator::Translator;
+use crate::util::translator::{SerialEnvelope, Translator};
 
 /// Initialise `tracing_subscriber` with an `info`-level default filter and
 /// enable ANSI escape-sequence processing on Windows consoles so colour
@@ -175,7 +174,9 @@ fn run(settings: Settings) -> Result<()> {
     );
 
     // mpsc channel: translator + workers -> serial writer thread.
-    let (serial_tx, serial_rx) = mpsc::channel::<[u8; PACKET_LEN]>();
+    // Carries (Instant, packet) envelopes so the writer can compute
+    // per-packet latency at log time.
+    let (serial_tx, serial_rx) = mpsc::channel::<SerialEnvelope>();
 
     let running = Arc::new(AtomicBool::new(true));
     {
@@ -189,8 +190,15 @@ fn run(settings: Settings) -> Result<()> {
     // Spawn serial writer.
     let writer_running = running.clone();
     let writer_port = settings.com_port.clone();
+    let writer_timing = settings.enable_timing_logs;
     let writer_thread = thread::spawn(move || {
-        serial_writer_loop(&mut *serial, &writer_port, serial_rx, writer_running);
+        serial_writer_loop(
+            &mut *serial,
+            &writer_port,
+            serial_rx,
+            writer_running,
+            writer_timing,
+        );
     });
 
     // Spawn serial reader — logs every line the firmware emits.
@@ -200,7 +208,11 @@ fn run(settings: Settings) -> Result<()> {
         serial_reader_loop(&mut *serial_reader, &reader_port, reader_running);
     });
 
-    let translator = Translator::new(settings.device_mac, serial_tx);
+    let translator = Translator::new(
+        settings.device_mac,
+        settings.enable_timing_logs,
+        serial_tx,
+    );
 
     let mut buf = [0u8; 2048];
     while running.load(Ordering::SeqCst) {
@@ -231,16 +243,22 @@ fn run(settings: Settings) -> Result<()> {
     Ok(())
 }
 
-/// Writer loop: pulls 9-byte packets off the mpsc channel and writes each
-/// to the serial port. Logs successful writes as `OUT (<port>): <hex>`.
+/// Writer loop: pulls envelopes (origin instant + 9-byte packet) off the
+/// mpsc channel and writes each packet to the serial port. Logs successful
+/// writes as `OUT (<port>): <hex>` with an optional timing suffix
+/// (`lat=X.Yms q=A.Bms w=C.Dms`) when `enable_timing` is `true`. The lat
+/// component measures the full origin → wire delay; q is queue wait
+/// before this thread dequeued; w is the `write_all` call duration.
+///
 /// Polls the receiver with a 50 ms timeout so the thread stays responsive
 /// to a shutdown request without busy-spinning. See the in-body comment
 /// for why we deliberately do NOT call `flush()` per packet on Windows.
 fn serial_writer_loop(
     serial: &mut dyn serialport::SerialPort,
     port_name: &str,
-    rx: Receiver<[u8; PACKET_LEN]>,
+    rx: Receiver<SerialEnvelope>,
     running: Arc<AtomicBool>,
+    enable_timing: bool,
 ) {
     // Short poll so the thread stays responsive to shutdown. We do NOT
     // call `serial.flush()` per packet on Windows: serialport-rs's flush
@@ -253,10 +271,26 @@ fn serial_writer_loop(
     // FTDI default), well within mouse-input requirements.
     while running.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(pkt) => {
+            Ok((origin, pkt)) => {
+                let dequeued = Instant::now();
                 match serial.write_all(&pkt) {
                     Ok(()) => {
-                        info!("OUT ({}): {}", port_name, hex_bytes(&pkt));
+                        let written = Instant::now();
+                        if enable_timing {
+                            let lat_ms = written.duration_since(origin).as_secs_f64() * 1000.0;
+                            let q_ms = dequeued.duration_since(origin).as_secs_f64() * 1000.0;
+                            let w_ms = written.duration_since(dequeued).as_secs_f64() * 1000.0;
+                            info!(
+                                "OUT ({}): {} (lat={:.2}ms q={:.2}ms w={:.2}ms)",
+                                port_name,
+                                hex_bytes(&pkt),
+                                lat_ms,
+                                q_ms,
+                                w_ms
+                            );
+                        } else {
+                            info!("OUT ({}): {}", port_name, hex_bytes(&pkt));
+                        }
                     }
                     Err(e) => {
                         warn!("serial write failed ({} bytes): {}", pkt.len(), e);

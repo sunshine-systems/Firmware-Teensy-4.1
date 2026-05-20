@@ -49,13 +49,14 @@ it according to your shell's rules:
 
 The file lives in the working directory and uses these fields:
 
-| Field         | Type   | Required | Default      | Validation                                         | Example          |
-|---------------|--------|----------|--------------|----------------------------------------------------|------------------|
-| `listen_addr` | string | yes      | (none)       | Must parse as an IPv4 or IPv6 address.             | `"0.0.0.0"`      |
-| `udp_port`    | u16    | no       | `8888`       | `1..=65535` (zero is rejected).                    | `8888`           |
-| `com_port`    | string | yes      | (none)       | Non-empty after trimming.                          | `"COM7"`         |
-| `baud_rate`   | u32    | no       | `115200`     | Must be > 0. The Teensy firmware is fixed at 115200. | `115200`       |
-| `device_mac`  | string | no       | `"01FBC068"` | Exactly 8 hex characters. Host app must send this value in every packet's header. | `"01FBC068"` |
+| Field                 | Type   | Required | Default      | Validation                                         | Example          |
+|-----------------------|--------|----------|--------------|----------------------------------------------------|------------------|
+| `listen_addr`         | string | yes      | (none)       | Must parse as an IPv4 or IPv6 address.             | `"0.0.0.0"`      |
+| `udp_port`            | u16    | no       | `8888`       | `1..=65535` (zero is rejected).                    | `8888`           |
+| `com_port`            | string | yes      | (none)       | Non-empty after trimming.                          | `"COM7"`         |
+| `baud_rate`           | u32    | no       | `115200`     | Must be > 0. The Teensy firmware is fixed at 115200. | `115200`       |
+| `device_mac`          | string | no       | `"01FBC068"` | Exactly 8 hex characters. Host app must send this value in every packet's header. | `"01FBC068"` |
+| `enable_timing_logs`  | bool   | no       | `false`      | Adds per-packet latency suffixes to every IN/OUT log line. Diagnostic only. | `true`         |
 
 A working example lives at `config.example.json` next to the source.
 

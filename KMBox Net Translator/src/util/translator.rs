@@ -23,6 +23,17 @@ use crate::streamcheats::{
 /// One outgoing Streamcheats packet bound for the serial worker.
 pub type SerialPacket = [u8; PACKET_LEN];
 
+/// What the translator hands to the serial writer thread: the packet plus
+/// the `Instant` at which we want latency to be measured against. For
+/// directly-translated commands (mouse_move, button toggles, wheel) the
+/// origin is `Instant::now()` at the start of `handle_packet`, i.e. very
+/// close to when the UDP datagram arrived — `latency` then approximates
+/// end-to-end host-app → wire delay. For interpolation worker packets
+/// the origin is `Instant::now()` at the worker's send moment so the
+/// latency reflects channel + write cost only, not the intentional
+/// `duration_ms` the host asked for.
+pub type SerialEnvelope = (Instant, SerialPacket);
+
 /// Wall-clock step interval (milliseconds) used by the interpolation
 /// workers. Each tick emits one delta packet. 4 ms ≈ 250 Hz, which keeps
 /// motion smooth without saturating the serial pipe.
@@ -38,8 +49,9 @@ const STEP_MS: u64 = 4;
 /// re-transmits the full state.
 pub struct Translator {
     expected_mac: u32,
+    enable_timing: bool,
     button_mask: Arc<Mutex<u8>>,
-    serial_tx: Sender<SerialPacket>,
+    serial_tx: Sender<SerialEnvelope>,
 }
 
 impl Translator {
@@ -48,14 +60,35 @@ impl Translator {
     /// * `expected_mac` — the 4-byte device identifier read from
     ///   `config.json`. Packets whose [`Header::mac`](crate::kmbox_net::Header::mac)
     ///   does not equal this value are silently dropped.
+    /// * `enable_timing` — when `true`, each `IN (KMBOX NET): cmd=...`
+    ///   line gets a `parse=Nµs` suffix showing how long the
+    ///   header-parse → dispatch → channel-send leg took.
     /// * `serial_tx` — sender half of the mpsc channel the main serial
     ///   writer thread reads from. The translator and every interpolation
-    ///   worker it spawns share clones of this sender.
-    pub fn new(expected_mac: u32, serial_tx: Sender<SerialPacket>) -> Self {
+    ///   worker it spawns share clones of this sender. The channel carries
+    ///   [`SerialEnvelope`]s (packet + origin instant) so the writer can
+    ///   compute per-packet latency at log time.
+    pub fn new(
+        expected_mac: u32,
+        enable_timing: bool,
+        serial_tx: Sender<SerialEnvelope>,
+    ) -> Self {
         Self {
             expected_mac,
+            enable_timing,
             button_mask: Arc::new(Mutex::new(0)),
             serial_tx,
+        }
+    }
+
+    /// Returns ` parse=Nµs` (with a leading space) when timing logs are
+    /// enabled, or an empty string when they're off. Used as a suffix on
+    /// every `IN (KMBOX NET):` log line.
+    fn parse_suffix(&self, recv_at: Instant) -> String {
+        if self.enable_timing {
+            format!(" parse={}µs", recv_at.elapsed().as_micros())
+        } else {
+            String::new()
         }
     }
 
@@ -67,6 +100,12 @@ impl Translator {
     /// the serial worker, mutating the cumulative button mask, spawning
     /// interpolation worker threads — happen before the reply is built.
     pub fn handle_packet(&self, datagram: &[u8]) -> Option<[u8; HEADER_LEN]> {
+        // Capture as close to recv_from as we reasonably can — the only
+        // intermediate work is the call indirection. This timestamp
+        // propagates into the channel envelope so the writer thread can
+        // compute end-to-end latency for the OUT log line.
+        let recv_at = Instant::now();
+
         let header = match Header::parse(datagram) {
             Ok(h) => h,
             Err(e) => {
@@ -84,45 +123,48 @@ impl Translator {
         }
 
         let body = &datagram[HEADER_LEN..];
-        self.dispatch(&header, body);
+        self.dispatch(&header, body, recv_at);
         Some(header.reply())
     }
 
-    fn dispatch(&self, header: &Header, body: &[u8]) {
+    fn dispatch(&self, header: &Header, body: &[u8], recv_at: Instant) {
         match header.cmd {
             CMD_CONNECT => {
                 *self.button_mask.lock().unwrap() = 0;
-                info!("IN (KMBOX NET): cmd=connect (reset button mask)");
+                info!(
+                    "IN (KMBOX NET): cmd=connect (reset button mask){}",
+                    self.parse_suffix(recv_at)
+                );
             }
             CMD_MOUSE_MOVE => {
                 if let Some(m) = self.parse_mouse(body, header.cmd) {
                     let mask = *self.button_mask.lock().unwrap();
                     info!(
-                        "IN (KMBOX NET): cmd=mouse_move x={} y={} mask=0x{:02X}",
-                        m.x, m.y, mask
+                        "IN (KMBOX NET): cmd=mouse_move x={} y={} mask=0x{:02X}{}",
+                        m.x, m.y, mask, self.parse_suffix(recv_at)
                     );
-                    self.send_packet(streamcheats::build_packet(mask, m.x, m.y, 0));
+                    self.send_packet(streamcheats::build_packet(mask, m.x, m.y, 0), recv_at);
                 }
             }
-            CMD_MOUSE_LEFT => self.handle_button_cmd(body, header.cmd, BTN_LEFT, "left"),
-            CMD_MOUSE_RIGHT => self.handle_button_cmd(body, header.cmd, BTN_RIGHT, "right"),
-            CMD_MOUSE_MIDDLE => self.handle_button_cmd(body, header.cmd, BTN_MIDDLE, "middle"),
+            CMD_MOUSE_LEFT => self.handle_button_cmd(body, header.cmd, BTN_LEFT, "left", recv_at),
+            CMD_MOUSE_RIGHT => self.handle_button_cmd(body, header.cmd, BTN_RIGHT, "right", recv_at),
+            CMD_MOUSE_MIDDLE => self.handle_button_cmd(body, header.cmd, BTN_MIDDLE, "middle", recv_at),
             CMD_MOUSE_WHEEL => {
                 if let Some(m) = self.parse_mouse(body, header.cmd) {
                     let mask = *self.button_mask.lock().unwrap();
                     info!(
-                        "IN (KMBOX NET): cmd=mouse_wheel wheel={} mask=0x{:02X}",
-                        m.wheel, mask
+                        "IN (KMBOX NET): cmd=mouse_wheel wheel={} mask=0x{:02X}{}",
+                        m.wheel, mask, self.parse_suffix(recv_at)
                     );
-                    self.send_packet(streamcheats::build_packet(mask, 0, 0, m.wheel));
+                    self.send_packet(streamcheats::build_packet(mask, 0, 0, m.wheel), recv_at);
                 }
             }
             CMD_MOUSE_AUTOMOVE => {
                 if let Some(m) = self.parse_mouse(body, header.cmd) {
                     let duration_ms = m.point[0].max(0) as u64;
                     info!(
-                        "IN (KMBOX NET): cmd=mouse_automove x={} y={} ms={} (interpolation worker)",
-                        m.x, m.y, duration_ms
+                        "IN (KMBOX NET): cmd=mouse_automove x={} y={} ms={} (worker){}",
+                        m.x, m.y, duration_ms, self.parse_suffix(recv_at)
                     );
                     self.spawn_automove(m.x, m.y, duration_ms);
                 }
@@ -135,8 +177,8 @@ impl Translator {
                     let x2 = m.point[3];
                     let y2 = m.point[4];
                     info!(
-                        "IN (KMBOX NET): cmd=bezier_move x={} y={} ms={} ctl=({},{})({},{}) (interpolation worker)",
-                        m.x, m.y, duration_ms, x1, y1, x2, y2
+                        "IN (KMBOX NET): cmd=bezier_move x={} y={} ms={} ctl=({},{})({},{}) (worker){}",
+                        m.x, m.y, duration_ms, x1, y1, x2, y2, self.parse_suffix(recv_at)
                     );
                     self.spawn_bezier(m.x, m.y, duration_ms, x1, y1, x2, y2);
                 }
@@ -167,7 +209,14 @@ impl Translator {
         }
     }
 
-    fn handle_button_cmd(&self, body: &[u8], cmd: u32, bit: u8, label: &str) {
+    fn handle_button_cmd(
+        &self,
+        body: &[u8],
+        cmd: u32,
+        bit: u8,
+        label: &str,
+        recv_at: Instant,
+    ) {
         let Some(m) = self.parse_mouse(body, cmd) else {
             return;
         };
@@ -188,14 +237,14 @@ impl Translator {
             *g
         };
         info!(
-            "IN (KMBOX NET): cmd=mouse_{} state={} mask=0x{:02X}",
-            label, pressed as u8, mask
+            "IN (KMBOX NET): cmd=mouse_{} state={} mask=0x{:02X}{}",
+            label, pressed as u8, mask, self.parse_suffix(recv_at)
         );
-        self.send_packet(streamcheats::build_packet(mask, 0, 0, 0));
+        self.send_packet(streamcheats::build_packet(mask, 0, 0, 0), recv_at);
     }
 
-    fn send_packet(&self, pkt: SerialPacket) {
-        if let Err(e) = self.serial_tx.send(pkt) {
+    fn send_packet(&self, pkt: SerialPacket, origin: Instant) {
+        if let Err(e) = self.serial_tx.send((origin, pkt)) {
             warn!("serial channel send failed: {}", e);
         }
     }
@@ -246,7 +295,7 @@ fn interp_linear(
     target_y: i32,
     duration_ms: u64,
     mask: Arc<Mutex<u8>>,
-    tx: Sender<SerialPacket>,
+    tx: Sender<SerialEnvelope>,
 ) {
     let dur_ms = duration_ms.max(STEP_MS);
     let steps = ((dur_ms + STEP_MS - 1) / STEP_MS).max(1) as i64;
@@ -271,7 +320,10 @@ fn interp_linear(
 
         let current_mask = *mask.lock().unwrap();
         let pkt = streamcheats::build_packet(current_mask, dx, dy, 0);
-        if tx.send(pkt).is_err() {
+        // Origin = send moment, not worker start. We want the writer to
+        // log channel + write latency per step, not the deliberate
+        // duration_ms-paced gap from the original UDP arrival.
+        if tx.send((Instant::now(), pkt)).is_err() {
             return;
         }
 
@@ -294,7 +346,7 @@ fn interp_bezier(
     x2: i32,
     y2: i32,
     mask: Arc<Mutex<u8>>,
-    tx: Sender<SerialPacket>,
+    tx: Sender<SerialEnvelope>,
 ) {
     let dur_ms = duration_ms.max(STEP_MS);
     let steps = ((dur_ms + STEP_MS - 1) / STEP_MS).max(1) as u64;
@@ -326,7 +378,10 @@ fn interp_bezier(
 
         let current_mask = *mask.lock().unwrap();
         let pkt = streamcheats::build_packet(current_mask, dx, dy, 0);
-        if tx.send(pkt).is_err() {
+        // Origin = send moment, not worker start. We want the writer to
+        // log channel + write latency per step, not the deliberate
+        // duration_ms-paced gap from the original UDP arrival.
+        if tx.send((Instant::now(), pkt)).is_err() {
             return;
         }
 

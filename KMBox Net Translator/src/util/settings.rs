@@ -34,6 +34,8 @@ struct RawSettings {
     pub baud_rate: Option<u32>,
     #[serde(default)]
     pub device_mac: Option<String>,
+    #[serde(default)]
+    pub enable_timing_logs: Option<bool>,
 }
 
 /// Validated runtime configuration. Produced by [`load_or_create`] on a
@@ -55,10 +57,15 @@ pub struct Settings {
     /// Original uppercase hex string form of `device_mac`, kept around so
     /// the startup banner can log it verbatim without re-formatting.
     pub device_mac_str: String,
+    /// When `true`, every IN/OUT log line gets a timing suffix
+    /// (`parse=Nµs` on IN, `lat=X.Yms q=A.Bms w=C.Dms` on OUT) so you can
+    /// trace where lag is coming from. Off by default — it's purely
+    /// diagnostic. Defaults to `false` if unset.
+    pub enable_timing_logs: bool,
 }
 
 fn default_json() -> &'static str {
-    "{\n  \"listen_addr\": \"\",\n  \"udp_port\": 8888,\n  \"com_port\": \"\",\n  \"baud_rate\": 115200,\n  \"device_mac\": \"01FBC068\"\n}\n"
+    "{\n  \"listen_addr\": \"\",\n  \"udp_port\": 8888,\n  \"com_port\": \"\",\n  \"baud_rate\": 115200,\n  \"device_mac\": \"01FBC068\",\n  \"enable_timing_logs\": false\n}\n"
 }
 
 fn parse_mac(s: &str) -> Result<u32> {
@@ -112,6 +119,7 @@ fn validate(raw: RawSettings) -> Result<Settings> {
         baud_rate,
         device_mac,
         device_mac_str: mac_str.to_uppercase(),
+        enable_timing_logs: raw.enable_timing_logs.unwrap_or(false),
     })
 }
 
@@ -226,6 +234,7 @@ mod tests {
             com_port: "COM7".into(),
             baud_rate: None,
             device_mac: None,
+            enable_timing_logs: None,
         };
         assert!(validate(raw).is_err());
 
@@ -235,6 +244,7 @@ mod tests {
             com_port: "".into(),
             baud_rate: None,
             device_mac: None,
+            enable_timing_logs: None,
         };
         assert!(validate(raw).is_err());
     }
@@ -247,10 +257,28 @@ mod tests {
             com_port: "COM3".into(),
             baud_rate: None,
             device_mac: None,
+            enable_timing_logs: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.udp_port, DEFAULT_UDP_PORT);
         assert_eq!(s.baud_rate, DEFAULT_BAUD);
         assert_eq!(s.device_mac, 0x01FBC068);
+        // enable_timing_logs defaults to false so users get clean logs
+        // unless they opt in.
+        assert!(!s.enable_timing_logs);
+    }
+
+    #[test]
+    fn enable_timing_logs_can_be_opted_in() {
+        let raw = RawSettings {
+            listen_addr: "127.0.0.1".into(),
+            udp_port: None,
+            com_port: "COM3".into(),
+            baud_rate: None,
+            device_mac: None,
+            enable_timing_logs: Some(true),
+        };
+        let s = validate(raw).unwrap();
+        assert!(s.enable_timing_logs);
     }
 }
