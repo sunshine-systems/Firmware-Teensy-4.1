@@ -9,7 +9,12 @@ name = "kmbox_net_translator"
 path = "src/main.rs"
 
 [dependencies]
-serialport = "4"
+# serial2 (instead of serialport-rs) — properly uses overlapped IO on
+# Windows and exposes separate read/write timeouts. The old serialport
+# crate's write() called WriteFile with a NULL lpOverlapped on a handle
+# opened with FILE_FLAG_OVERLAPPED, which caused 500-630ms cold-path
+# write latencies on FTDI/CH340 hardware.
+serial2 = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

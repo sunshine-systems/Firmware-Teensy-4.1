@@ -57,13 +57,11 @@ use crate::streamcheats::PACKET_LEN;
 use crate::util::settings::{load_or_create, LoadOutcome, Settings};
 use crate::util::translator::{SerialEnvelope, Translator};
 
-/// Heartbeat interval. `FirmwareInterface.py` uses 2.5 s, but in
-/// observation the FT232H / CH340 chip would still cold-down between
-/// 2.5 s heartbeats under serialport-rs on Windows (heartbeat writes
-/// themselves taking 460–961 ms). Shortening to 500 ms keeps the chip
-/// continuously warm. Cost: 18 extra bytes/s over the serial link
-/// — well under 0.02 % of the 115 200 bit/s budget.
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
+/// Heartbeat interval — matches `FirmwareInterface.py`'s 2.5 s. The
+/// hardware works at this cadence in Python; if it doesn't in Rust the
+/// fix isn't to spam the chip with a faster heartbeat, it's to find
+/// what's different about the write path.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(2500);
 
 /// 9-byte heartbeat packet: length prefix `0x03` routes the firmware
 /// to its settings handler, `setting_id=0` is `FIRMWARE_VERSION` (read
@@ -155,12 +153,7 @@ fn main() -> ExitCode {
 /// flips the shared `running` flag.
 fn run(settings: Settings) -> Result<()> {
     // Open serial first — fail fast if it's wrong.
-    // 2 second timeout matches the Python reference (sunbox_interface's
-    // ArduinoInterface uses `serial.Serial(..., timeout=2)`). It only
-    // bounds reads — writes still complete as fast as the OS will allow.
-    let mut serial = serialport::new(&settings.com_port, settings.baud_rate)
-        .timeout(Duration::from_secs(2))
-        .open()
+    let mut serial = serial2::SerialPort::open(&settings.com_port, settings.baud_rate)
         .with_context(|| {
             format!(
                 "opening serial port {} @ {}",
@@ -168,25 +161,39 @@ fn run(settings: Settings) -> Result<()> {
             )
         })?;
 
-    // Match pyserial's default open behaviour: assert DTR and RTS. Most
-    // USB-serial chips (FT232H, CH340) interpret DTR low as "host is
-    // gone" and enter a low-power state — which makes the first write
-    // after any idle period take 100s of ms while the chip wakes up.
-    // pyserial sets fDtrControl/fRtsControl = ENABLE in its DCB by
-    // default; serialport-rs leaves them at whatever Windows defaults
-    // to. Forcing them HIGH here removes that difference.
-    if let Err(e) = serial.write_data_terminal_ready(true) {
+    // 2 second READ timeout matches the Python reference
+    // (`serial.Serial(..., timeout=2)`). Bounds the reader thread's
+    // blocking `read()` calls so shutdown is responsive.
+    serial
+        .set_read_timeout(Duration::from_secs(2))
+        .context("setting serial read timeout")?;
+
+    // ZERO write timeout is what pyserial uses by default
+    // (`write_timeout=None` → COMMTIMEOUTS WriteTotalTimeoutConstant = 0
+    // = no write timeout, blocks until the bytes are physically out).
+    // For a 9-byte packet at 115200 baud that's ~780 µs.
+    serial
+        .set_write_timeout(Duration::ZERO)
+        .context("setting serial write timeout")?;
+
+    // Match pyserial's default open behaviour: assert DTR and RTS. USB
+    // serial chips (FT232H, CH340) treat DTR low as "host has gone"
+    // and may enter low-power states. pyserial's DCB sets
+    // fDtrControl / fRtsControl = ENABLE; serial2 leaves them at the
+    // driver default. Forcing them HIGH keeps the chip alive.
+    if let Err(e) = serial.set_dtr(true) {
         warn!("could not assert DTR on {}: {}", settings.com_port, e);
     }
-    if let Err(e) = serial.write_request_to_send(true) {
+    if let Err(e) = serial.set_rts(true) {
         warn!("could not assert RTS on {}: {}", settings.com_port, e);
     }
 
-    // Clone the handle so a reader thread can pull bytes from the firmware
-    // independently of the writer thread.
-    let mut serial_reader = serial
-        .try_clone()
-        .with_context(|| format!("cloning serial port handle for {}", settings.com_port))?;
+    // serial2 read/write take &self, so we can share one handle across
+    // the writer and reader threads via Arc — no try_clone (separate OS
+    // handles) needed.
+    let serial = Arc::new(serial);
+    let writer_serial = serial.clone();
+    let reader_serial = serial.clone();
 
     let bind: SocketAddr = SocketAddr::new(settings.listen_addr, settings.udp_port);
     let socket = UdpSocket::bind(bind)
@@ -224,7 +231,7 @@ fn run(settings: Settings) -> Result<()> {
     let writer_timing = settings.enable_timing_logs;
     let writer_thread = thread::spawn(move || {
         serial_writer_loop(
-            &mut *serial,
+            &writer_serial,
             &writer_port,
             serial_rx,
             writer_running,
@@ -236,7 +243,7 @@ fn run(settings: Settings) -> Result<()> {
     let reader_running = running.clone();
     let reader_port = settings.com_port.clone();
     let reader_thread = thread::spawn(move || {
-        serial_reader_loop(&mut *serial_reader, &reader_port, reader_running);
+        serial_reader_loop(&reader_serial, &reader_port, reader_running);
     });
 
     // Spawn heartbeat keepalive — emits a benign packet every
@@ -317,24 +324,17 @@ fn heartbeat_loop(tx: Sender<SerialEnvelope>, running: Arc<AtomicBool>) {
 /// before this thread dequeued; w is the `write_all` call duration.
 ///
 /// Polls the receiver with a 50 ms timeout so the thread stays responsive
-/// to a shutdown request without busy-spinning. See the in-body comment
-/// for why we deliberately do NOT call `flush()` per packet on Windows.
+/// to a shutdown request without busy-spinning. We do NOT call `flush()`
+/// per packet — `write_all` already blocks until the bytes are out of
+/// the OS buffer; explicitly flushing on top of that just adds latency
+/// for no benefit (pyserial doesn't flush either).
 fn serial_writer_loop(
-    serial: &mut dyn serialport::SerialPort,
+    serial: &serial2::SerialPort,
     port_name: &str,
     rx: Receiver<SerialEnvelope>,
     running: Arc<AtomicBool>,
     enable_timing: bool,
 ) {
-    // Short poll so the thread stays responsive to shutdown. We do NOT
-    // call `serial.flush()` per packet on Windows: serialport-rs's flush
-    // maps to `FlushFileBuffers`, which waits for the USB-serial chip's
-    // hardware TX FIFO to drain to the wire — that adds ~400-500 ms per
-    // 9-byte packet on FT232H/CH340. pyserial's `flush()` on Windows only
-    // drains the OS write buffer (a different syscall), so "matching
-    // Python" by flushing here would actually be slower than Python.
-    // The OS driver pushes bytes out on its own latency timer (~16 ms
-    // FTDI default), well within mouse-input requirements.
     while running.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok((origin, pkt)) => {
@@ -376,7 +376,7 @@ fn serial_writer_loop(
 /// are rendered as `\xHH` so binary noise stays readable. A 4 KiB
 /// safety cap forces a flush if the firmware ever omits a newline.
 fn serial_reader_loop(
-    serial: &mut dyn serialport::SerialPort,
+    serial: &serial2::SerialPort,
     port_name: &str,
     running: Arc<AtomicBool>,
 ) {
