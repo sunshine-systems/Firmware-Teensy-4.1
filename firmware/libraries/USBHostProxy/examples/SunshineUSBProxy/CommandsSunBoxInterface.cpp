@@ -32,27 +32,27 @@ void FirmwareSettings::updateSettings(const uint8_t* data) {
             sensReductionAmmountY = settingValue;
             printSettingChange("sensReductionAmmountY", String(sensReductionAmmountY));
             break;
-        case 12:
+        case 6:
             disablePassthroughForMMB = settingValue;
             printSettingChange("disablePassthroughForMMB", String(disablePassthroughForMMB));
             break;
-        case 13:
+        case 7:
             disablePassthroughForRMB = settingValue;
             printSettingChange("disablePassthroughForRMB", String(disablePassthroughForRMB));
             break;
-        case 14:
+        case 8:
             disablePassthroughForLMB = settingValue;
             printSettingChange("disablePassthroughForLMB", String(disablePassthroughForLMB));
             break;
-        case 15:
+        case 9:
             disablePassthroughForMB4 = settingValue;
             printSettingChange("disablePassthroughForMB4", String(disablePassthroughForMB4));
             break;
-        case 16:
+        case 10:
             disablePassthroughForMB5 = settingValue;
             printSettingChange("disablePassthroughForMB5", String(disablePassthroughForMB5));
             break;
-        case 17:
+        case 11:
             enableDeltaLogging = settingValue;
             printSettingChange("enableDeltaLogging", String(enableDeltaLogging));
             break;

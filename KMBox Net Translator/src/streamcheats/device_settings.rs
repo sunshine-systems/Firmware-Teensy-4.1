@@ -60,23 +60,23 @@ pub enum DeviceSettings {
     /// [`Self::SensReductionAmountX`] re: firmware spelling.)
     SensReductionAmountY = 5,
 
-    /// ID 12. Bool. Block middle-mouse-button passthrough to the host PC.
-    DisablePassthroughForMmb = 12,
+    /// ID 6. Bool. Block middle-mouse-button passthrough to the host PC.
+    DisablePassthroughForMmb = 6,
 
-    /// ID 13. Bool. Block right-mouse-button passthrough.
-    DisablePassthroughForRmb = 13,
+    /// ID 7. Bool. Block right-mouse-button passthrough.
+    DisablePassthroughForRmb = 7,
 
-    /// ID 14. Bool. Block left-mouse-button passthrough.
-    DisablePassthroughForLmb = 14,
+    /// ID 8. Bool. Block left-mouse-button passthrough.
+    DisablePassthroughForLmb = 8,
 
-    /// ID 15. Bool. Block side-button-1 (MB4) passthrough.
-    DisablePassthroughForMb4 = 15,
+    /// ID 9. Bool. Block side-button-1 (MB4) passthrough.
+    DisablePassthroughForMb4 = 9,
 
-    /// ID 16. Bool. Block side-button-2 (MB5) passthrough.
-    DisablePassthroughForMb5 = 16,
+    /// ID 10. Bool. Block side-button-2 (MB5) passthrough.
+    DisablePassthroughForMb5 = 10,
 
-    /// ID 17. Bool. Toggle the firmware's `SYN:` / `M:` delta-logging stream.
-    EnableDeltaLogging = 17,
+    /// ID 11. Bool. Toggle the firmware's `SYN:` / `M:` delta-logging stream.
+    EnableDeltaLogging = 11,
 }
 
 /// Wire length-prefix byte that routes the firmware to its settings handler.
@@ -161,11 +161,11 @@ mod tests {
         assert_eq!(DeviceSettings::SensReductionDurationMilliseconds as u8, 3);
         assert_eq!(DeviceSettings::SensReductionAmountX as u8, 4);
         assert_eq!(DeviceSettings::SensReductionAmountY as u8, 5);
-        assert_eq!(DeviceSettings::DisablePassthroughForMmb as u8, 12);
-        assert_eq!(DeviceSettings::DisablePassthroughForRmb as u8, 13);
-        assert_eq!(DeviceSettings::DisablePassthroughForLmb as u8, 14);
-        assert_eq!(DeviceSettings::DisablePassthroughForMb4 as u8, 15);
-        assert_eq!(DeviceSettings::DisablePassthroughForMb5 as u8, 16);
-        assert_eq!(DeviceSettings::EnableDeltaLogging as u8, 17);
+        assert_eq!(DeviceSettings::DisablePassthroughForMmb as u8, 6);
+        assert_eq!(DeviceSettings::DisablePassthroughForRmb as u8, 7);
+        assert_eq!(DeviceSettings::DisablePassthroughForLmb as u8, 8);
+        assert_eq!(DeviceSettings::DisablePassthroughForMb4 as u8, 9);
+        assert_eq!(DeviceSettings::DisablePassthroughForMb5 as u8, 10);
+        assert_eq!(DeviceSettings::EnableDeltaLogging as u8, 11);
     }
 }
