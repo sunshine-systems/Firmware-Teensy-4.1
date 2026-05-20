@@ -1,0 +1,7 @@
+{
+  "listen_addr": "0.0.0.0",
+  "udp_port": 8888,
+  "com_port": "COM7",
+  "baud_rate": 115200,
+  "device_mac": "01FBC068"
+}

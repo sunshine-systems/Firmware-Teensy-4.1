@@ -1,0 +1,26 @@
+[package]
+name = "kmbox_net_translator"
+version = "0.1.0"
+edition = "2021"
+description = "Translates KMBox Net UDP commands into Sunshine binary serial packets for the Teensy USB Host Proxy firmware."
+
+[[bin]]
+name = "kmbox_net_translator"
+path = "src/main.rs"
+
+[dependencies]
+serialport = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+byteorder = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ctrlc = "3"
+
+[target.'cfg(windows)'.dependencies]
+enable-ansi-support = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
