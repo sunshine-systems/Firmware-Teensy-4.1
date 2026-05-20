@@ -153,7 +153,7 @@ implement them — those docs are the canonical reference. The headlines:
   [`src/streamcheats/packet.rs`](src/streamcheats/packet.rs).
 * **Outgoing (Streamcheats serial — device settings)** — fixed 9 bytes
   with a `0x03` length prefix instead of `0x08`. Byte 1 is the
-  [`DeviceSettings`](src/streamcheats/device_settings.rs) ID (0–17,
+  [`DeviceSettings`](src/streamcheats/device_settings.rs) ID (0–11,
   mirroring the firmware's `FirmwareSettings::updateSettings` switch),
   bytes 2–3 are the signed `i16` value LE, the rest are zero. Currently
   emitted only as the 2.5 s heartbeat
