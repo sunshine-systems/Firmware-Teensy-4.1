@@ -1,0 +1,64 @@
+{
+  "name": "kmbox-net-translator-electron",
+  "version": "0.6.0",
+  "private": true,
+  "description": "Electron shell for KMBox Net Translator (wraps Rust daemon + Next.js UI)",
+  "author": "Sunshine Systems",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-winstaller"
+    ]
+  },
+  "build": {
+    "appId": "com.sunshinesystems.kmboxnettranslator",
+    "productName": "KMBox Net Translator",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "services/**",
+      "assets/**",
+      "package.json",
+      "!node_modules/electron/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/target/release/kmbox_net_translator.exe",
+        "to": "kmbox_net_translator.exe"
+      },
+      {
+        "from": "../backend/config.example.json",
+        "to": "config.json"
+      },
+      {
+        "from": "../frontend/out",
+        "to": "frontend"
+      }
+    ],
+    "win": {
+      "icon": "assets/streamcheats_app_icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "KMBox Net Translator ${version}.exe"
+    }
+  }
+}
