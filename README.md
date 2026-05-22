@@ -36,7 +36,6 @@ PHY configuration, EEPROM layout, verified devices, troubleshooting — see
 │   ├── libraries/
 │   │   └── USBHostProxy/             *** The actual project ***
 │   └── platform.txt                  Build/upload recipes
-├── KMBox Net Translator/             PC-side Rust UDP -> serial bridge
 ├── deploy.bat                        Interactive deploy / backup / restore
 ├── CLAUDE.md                         Full library reference
 ├── README.md                         You are here
@@ -85,58 +84,18 @@ Repo files themselves (`.git/`, `CLAUDE.md`, `README.md`, `firmware/`,
 `deploy.bat`, `.gitattributes`, `.gitignore`, `teensy_core_backup.zip`) are
 never touched.
 
-## KMBox Net Translator
+## KMBox Net Translator (moved)
 
-`KMBox Net Translator/` is a small PC-side Rust program that lets host
-applications which speak the **KMBox Net** UDP protocol drive this firmware.
-The firmware itself does not implement KMBox Net; it speaks the compact
-9-byte Sunshine binary protocol over serial. The translator bridges the gap.
+The KMBox Net Translator that previously lived in this repo has moved
+to its own home: https://github.com/sunshine-systems/streamcheats-core
+
+It is a PC-side bridge that lets host applications which speak the
+**KMBox Net** UDP protocol drive this firmware (which speaks the compact
+9-byte Sunshine binary protocol over serial).
 
 ```
 host app  --UDP (KMBox Net)-->  translator  --serial (Sunshine 9-byte)-->  Teensy  --USB HID-->  PC
 ```
-
-See [`KMBox Net Translator/README.md`](./KMBox%20Net%20Translator/README.md)
-for build, config (`config.json`), and logging details.
-
-### Why UDP rather than KMBox B+ text over serial
-
-The serial link to the Teensy (Serial4 @ 115200 baud) is a finite pipe, and
-the firmware already uses it for other things — debug/log output (channel
-gated via `SunBoxLogger`, see
-[`firmware/libraries/USBHostProxy/README.md`](firmware/libraries/USBHostProxy/README.md#sunboxlogger))
-and delta logging from the movement sanitization pipeline
-([`firmware/libraries/USBHostProxy/examples/SunshineUSBProxy/MOVEMENT_SANITIZATION.md`](firmware/libraries/USBHostProxy/examples/SunshineUSBProxy/MOVEMENT_SANITIZATION.md)).
-
-That pipe is not cheap. From the dev guide:
-
-> Serial4 logging at 115200 baud adds ~4.3ms per 50-char message. Logging in
-> the enumeration hot path caused a 50ms regression.
-> — [`firmware/libraries/USBHostProxy/usb-proxy-dev-guide.md`](firmware/libraries/USBHostProxy/usb-proxy-dev-guide.md) (Lessons Learned #11)
-
-At ~11.5 KB/s wire bandwidth, every byte costs ~87 µs. A single KMBox B+
-text command like `km.move(123,-45)\r\n` is typically 15–20 bytes — well over
-1 ms of serial time per command, before the firmware has even parsed it. At
-mouse-grade update rates that is the dominant source of pressure on the link
-and starves out diagnostic logging.
-
-The Sunshine binary protocol the firmware speaks natively is **9 bytes per
-frame**, fixed-width, no parsing — roughly an order of magnitude less serial
-traffic for the same information. Moving the KMBox Net command volume off
-the serial line entirely (UDP on the PC side, binary on the wire) keeps the
-serial pipe free for logging and for the firmware's own delta stream.
-
-Run from the same folder so it finds/writes `config.json`:
-
-```
-cd "KMBox Net Translator"
-cargo build --release
-target\release\kmbox_net_translator.exe
-```
-
-On first run with no `config.json` present, the translator writes a default
-config and exits with a message telling you to edit `listen_addr` and
-`com_port`.
 
 ## Contact
 
