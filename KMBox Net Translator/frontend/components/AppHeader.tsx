@@ -33,10 +33,18 @@ export default function AppHeader({ version }: AppHeaderProps) {
         padding: "var(--kx-sp-5) var(--kx-sp-7)",
       }}
     >
-      {/* Brand mark: a tiny SVG glyph + wordmark. The glyph reads as
-          "host ↔ device" — two endpoints linked across a bridge. */}
+      {/* Brand mark: the project logo + wordmark. The logo is the real
+          streamcheats_app_icon (shared with the Electron splash + tray
+          .ico) served as a static asset from `public/`. Single source
+          of truth on disk; no inline duplication. */}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--kx-sp-3)" }}>
-        <BrandGlyph />
+        <img
+          src="/logo.svg"
+          alt="KMBox Net Translator"
+          width={34}
+          height={34}
+          style={{ flex: "0 0 auto", display: "block" }}
+        />
         <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
           <span
             style={{
@@ -127,42 +135,3 @@ function TabLink({
   );
 }
 
-function BrandGlyph() {
-  return (
-    <svg
-      width="34"
-      height="34"
-      viewBox="0 0 34 34"
-      fill="none"
-      aria-hidden="true"
-      style={{ flex: "0 0 auto" }}
-    >
-      {/* Two endpoints connected by a sharp arrow — the "translator". */}
-      <rect
-        x="1"
-        y="1"
-        width="32"
-        height="32"
-        rx="6"
-        stroke="var(--kx-border-strong)"
-        strokeWidth="1"
-        fill="var(--kx-surface)"
-      />
-      <circle cx="9" cy="17" r="3" fill="var(--kx-accent)" />
-      <circle cx="25" cy="17" r="3" fill="none" stroke="var(--kx-accent)" strokeWidth="1.5" />
-      <path
-        d="M12 17 L22 17"
-        stroke="var(--kx-accent)"
-        strokeWidth="1.5"
-        strokeLinecap="square"
-      />
-      <path
-        d="M19 13 L23 17 L19 21"
-        stroke="var(--kx-accent)"
-        strokeWidth="1.5"
-        strokeLinejoin="miter"
-        fill="none"
-      />
-    </svg>
-  );
-}
