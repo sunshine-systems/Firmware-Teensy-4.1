@@ -16,3 +16,6 @@
 # and upstream lifecycles, must never enter our history.
 /KMBox Net Translator/tests/unibot-kmbox/
 /KMBox Net Translator/tests/vendor-demos/
+
+# Mirrored Anthropic skill content — refetch from upstream rather than commit.
+/KMBox Net Translator/docs/frontend-design-skill/
