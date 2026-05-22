@@ -11,3 +11,8 @@
 
 # IDE
 /.vscode/
+
+# Third-party test clients pulled in by tests/ — they have their own licenses
+# and upstream lifecycles, must never enter our history.
+/KMBox Net Translator/tests/unibot-kmbox/
+/KMBox Net Translator/tests/vendor-demos/
