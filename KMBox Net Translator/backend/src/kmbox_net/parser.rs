@@ -4,6 +4,11 @@ use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 
 use super::schema::{Header, SoftMouse, HEADER_LEN, SOFT_MOUSE_LEN};
+// Re-export of `MonitorRequest` not needed at this layer — the decoder
+// is `MonitorRequest::from_header` and lives in `schema.rs`; this `use`
+// is only here so the test below can reference it without descending.
+#[cfg(test)]
+use super::schema::{MonitorRequest, CMD_MONITOR, MONITOR_RAND_MAGIC};
 
 impl Header {
     /// Decode the leading 16 bytes of `bytes` as a [`Header`]. Returns an
@@ -130,6 +135,39 @@ mod tests {
         assert_eq!(m.y, -3);
         assert_eq!(m.wheel, 0);
         assert_eq!(m.point, [0; 10]);
+    }
+
+    #[test]
+    fn parses_cmd_monitor_target_port_from_rand() {
+        // The vendor SDK encodes the requested echo port in the low 16
+        // bits of `head.rand` with the magic 0xAA55 in the upper 16 bits.
+        // (kmboxNet.cpp:1583: `tx.head.rand = port | 0xaa55 << 16;`)
+        let mut buf = [0u8; HEADER_LEN];
+        LittleEndian::write_u32(&mut buf[0..4], 0x01FBC068);
+        // port = 0x1234, magic in upper half
+        LittleEndian::write_u32(&mut buf[4..8], 0x1234 | (MONITOR_RAND_MAGIC as u32) << 16);
+        LittleEndian::write_u32(&mut buf[8..12], 42);
+        LittleEndian::write_u32(&mut buf[12..16], CMD_MONITOR);
+
+        let h = Header::parse(&buf).unwrap();
+        assert_eq!(h.cmd, CMD_MONITOR);
+        let req = MonitorRequest::from_header(&h);
+        assert_eq!(req.target_port, 0x1234);
+        assert_eq!(req.mode_flags, MONITOR_RAND_MAGIC as u16);
+    }
+
+    #[test]
+    fn parses_cmd_monitor_unsubscribe_when_port_is_zero() {
+        // `kmNet_monitor(0)` zeroes head.rand entirely (kmboxNet.cpp:1585);
+        // our decoder must surface `target_port == 0` so the subscriber
+        // knows this is an unsubscribe rather than "subscribe to port 0".
+        let mut buf = [0u8; HEADER_LEN];
+        LittleEndian::write_u32(&mut buf[4..8], 0);
+        LittleEndian::write_u32(&mut buf[12..16], CMD_MONITOR);
+        let h = Header::parse(&buf).unwrap();
+        let req = MonitorRequest::from_header(&h);
+        assert_eq!(req.target_port, 0);
+        assert_eq!(req.mode_flags, 0);
     }
 
     #[test]

@@ -28,13 +28,32 @@ use byteorder::{ByteOrder, LittleEndian};
 // reads byte [1] of the 9-byte packet as a standard HID mouse button
 // bitmask, so changing these values would desync the host PC's view of
 // which button is pressed.
+//
+// The translator dispatch path no longer references these by name (it
+// passes the payload's `button` byte through verbatim, see
+// `translator::update_mask_from_payload`), but they remain part of the
+// public surface as named values for tests, docs, and any future caller
+// that needs to compose a mask programmatically.
 
 /// Bitmask for the primary (left) mouse button — bit 0.
+#[allow(dead_code)]
 pub const BTN_LEFT: u8 = 0x01;
 /// Bitmask for the secondary (right) mouse button — bit 1.
+#[allow(dead_code)]
 pub const BTN_RIGHT: u8 = 0x02;
 /// Bitmask for the middle/wheel mouse button — bit 2.
+#[allow(dead_code)]
 pub const BTN_MIDDLE: u8 = 0x04;
+/// Bitmask for the first side (back/thumb) mouse button — bit 3. Standard
+/// HID layout; matches the bit the vendor SDK's `kmNet_mouse_side1`
+/// RMWs into `softmouse.button`.
+#[allow(dead_code)]
+pub const BTN_SIDE1: u8 = 0x08;
+/// Bitmask for the second side (forward/thumb) mouse button — bit 4.
+/// Standard HID layout; matches the bit the vendor SDK's
+/// `kmNet_mouse_side2` RMWs into `softmouse.button`.
+#[allow(dead_code)]
+pub const BTN_SIDE2: u8 = 0x10;
 
 /// Length in bytes of every Streamcheats serial packet (1 length prefix
 /// + 8 payload bytes).

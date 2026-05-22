@@ -33,6 +33,19 @@ struct RawSettings {
     pub device_mac: Option<String>,
     #[serde(default)]
     pub enable_timing_logs: Option<bool>,
+    /// Optional platform-aware data directory for logs + future state.
+    /// `None` or an empty string falls back to
+    /// `dirs::data_local_dir()/"KMBox Net Translator"` (i.e.
+    /// `%LOCALAPPDATA%\KMBox Net Translator` on Windows).
+    #[serde(default)]
+    pub data_dir: Option<String>,
+    /// On by default. When `true` (or absent), [`crate::init_logging`]
+    /// adds a daily-rotating non-blocking file appender at
+    /// `<data_dir>/logs/`. Hot-path threads never block on disk because
+    /// the appender is wrapped in `tracing_appender::non_blocking` in
+    /// lossy mode — see `init_logging` for the contract.
+    #[serde(default)]
+    pub enable_file_logging: Option<bool>,
 }
 
 /// Validated runtime configuration. Produced by [`load_or_create`] on a
@@ -55,10 +68,41 @@ pub struct Settings {
     /// trace where lag is coming from. Off by default — it's purely
     /// diagnostic. Defaults to `false` if unset.
     pub enable_timing_logs: bool,
+    /// Resolved data directory. Used as the parent of the `logs/` folder
+    /// when [`Self::enable_file_logging`] is on. Falls back to
+    /// `%LOCALAPPDATA%\KMBox Net Translator` on Windows (or the
+    /// `dirs::data_local_dir()` equivalent on other platforms) when the
+    /// user leaves `data_dir` blank in `config.json`.
+    pub data_dir: PathBuf,
+    /// Flag for the daily-rotating file logger. `true` by default — the
+    /// logger uses `tracing_appender::non_blocking` in lossy mode so the
+    /// serial writer / reader / UDP / heartbeat threads never block on
+    /// disk. Users who want zero on-disk files can set this to `false`
+    /// in `config.json`.
+    pub enable_file_logging: bool,
 }
 
 fn default_json() -> &'static str {
-    "{\n  \"listen_addr\": \"\",\n  \"udp_port\": 8888,\n  \"device_mac\": \"01FBC068\",\n  \"enable_timing_logs\": false\n}\n"
+    "{\n  \"listen_addr\": \"127.0.0.1\",\n  \"udp_port\": 8888,\n  \"device_mac\": \"01FBC068\",\n  \"enable_timing_logs\": false,\n  \"data_dir\": \"\",\n  \"enable_file_logging\": true\n}\n"
+}
+
+/// Resolve the effective data directory. An explicit non-empty
+/// `data_dir` from the config wins; otherwise we fall back to
+/// `dirs::data_local_dir()` joined with `"KMBox Net Translator"`.
+/// Returns an error only if the platform doesn't expose a local data
+/// dir AND the user didn't provide one — vanishingly rare on the
+/// supported targets but worth surfacing rather than panicking.
+fn resolve_data_dir(raw: Option<&str>) -> Result<PathBuf> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(p) => Ok(PathBuf::from(p)),
+        None => dirs::data_local_dir()
+            .map(|d| d.join("KMBox Net Translator"))
+            .ok_or_else(|| {
+                anyhow!(
+                    "could not determine a default data_dir for this platform; set `data_dir` in config.json"
+                )
+            }),
+    }
 }
 
 fn parse_mac(s: &str) -> Result<u32> {
@@ -94,12 +138,20 @@ fn validate(raw: RawSettings) -> Result<Settings> {
         .unwrap_or_else(|| DEFAULT_MAC.to_string());
     let device_mac = parse_mac(&mac_str)?;
 
+    let data_dir = resolve_data_dir(raw.data_dir.as_deref())?;
+
     Ok(Settings {
         listen_addr,
         udp_port,
         device_mac,
         device_mac_str: mac_str.to_uppercase(),
         enable_timing_logs: raw.enable_timing_logs.unwrap_or(false),
+        data_dir,
+        // Default ON: hot-path threads use the lossy `non_blocking`
+        // writer so file logging adds no synchronous I/O on the critical
+        // serial/UDP paths. Users opt OUT via an explicit `false` in
+        // config.json if they want zero on-disk files.
+        enable_file_logging: raw.enable_file_logging.unwrap_or(true),
     })
 }
 
@@ -213,6 +265,8 @@ mod tests {
             udp_port: None,
             device_mac: None,
             enable_timing_logs: None,
+            data_dir: None,
+            enable_file_logging: None,
         };
         assert!(validate(raw).is_err());
     }
@@ -224,6 +278,8 @@ mod tests {
             udp_port: None,
             device_mac: None,
             enable_timing_logs: None,
+            data_dir: None,
+            enable_file_logging: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.udp_port, DEFAULT_UDP_PORT);
@@ -240,9 +296,61 @@ mod tests {
             udp_port: None,
             device_mac: None,
             enable_timing_logs: Some(true),
+            data_dir: None,
+            enable_file_logging: None,
         };
         let s = validate(raw).unwrap();
         assert!(s.enable_timing_logs);
+    }
+
+    #[test]
+    fn file_logging_defaults_on_and_data_dir_falls_back() {
+        // Empty data_dir + missing enable_file_logging must resolve to
+        // a non-empty platform default and a `true` flag — file logging
+        // is on by default and uses a non-blocking lossy appender, so
+        // there is no latency cost on the serial / UDP hot paths.
+        let raw = RawSettings {
+            listen_addr: "127.0.0.1".into(),
+            udp_port: None,
+            device_mac: None,
+            enable_timing_logs: None,
+            data_dir: None,
+            enable_file_logging: None,
+        };
+        let s = validate(raw).unwrap();
+        assert!(s.enable_file_logging);
+        assert!(!s.data_dir.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn file_logging_can_be_opted_out() {
+        // Users who really want zero on-disk files can still set
+        // `enable_file_logging: false` in config.json.
+        let raw = RawSettings {
+            listen_addr: "127.0.0.1".into(),
+            udp_port: None,
+            device_mac: None,
+            enable_timing_logs: None,
+            data_dir: None,
+            enable_file_logging: Some(false),
+        };
+        let s = validate(raw).unwrap();
+        assert!(!s.enable_file_logging);
+    }
+
+    #[test]
+    fn explicit_data_dir_is_honoured() {
+        let raw = RawSettings {
+            listen_addr: "127.0.0.1".into(),
+            udp_port: None,
+            device_mac: None,
+            enable_timing_logs: None,
+            data_dir: Some("C:/tmp/kmbox-test".into()),
+            enable_file_logging: Some(true),
+        };
+        let s = validate(raw).unwrap();
+        assert_eq!(s.data_dir, PathBuf::from("C:/tmp/kmbox-test"));
+        assert!(s.enable_file_logging);
     }
 
     #[test]

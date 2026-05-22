@@ -25,13 +25,29 @@
 //! intentional difference that byte 4 carries wheel data instead of
 //! Python's `sensReduction` flag.
 
+pub mod device;
 pub mod device_settings;
 pub mod discovery;
 pub mod format;
 pub mod heartbeat;
+pub mod mask;
 pub mod packet;
 pub mod reader;
+pub mod state;
 pub mod writer;
 
 pub use device_settings::{build_settings_packet, DeviceSettings};
-pub use packet::{build_packet, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, PACKET_LEN};
+// Re-export BTN_* even though the translator no longer references them by
+// name — they document the standard HID button-bit layout and remain
+// available to tests, future call sites, and downstream consumers.
+#[allow(unused_imports)]
+pub use packet::{build_packet, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE1, BTN_SIDE2, PACKET_LEN};
+
+// Device-state machine + event bus. Re-exported at the streamcheats
+// level so downstream subscribers (the future `kmbox_net::monitor`
+// emitter) can `use crate::streamcheats::{DeviceController, ...}`
+// without descending into the submodule path.
+pub use device::DeviceController;
+pub use mask::MaskController;
+#[allow(unused_imports)]
+pub use state::{DeviceState, EventBus, StateChange};

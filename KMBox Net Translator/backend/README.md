@@ -1,4 +1,10 @@
-# KMBox Net Translator
+# KMBox Net Translator — backend daemon
+
+> **For the project-wide overview** (Electron shell, Next.js frontend,
+> portable-build instructions, layout map) see the top-level
+> [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md).
+> This document covers the **Rust daemon only** — config file, log
+> format, supported commands, threading.
 
 A Windows PC-side bridge between third-party KMBox Net host apps and the
 Teensy 4.1 USB Host Proxy firmware. It listens for KMBox Net UDP commands

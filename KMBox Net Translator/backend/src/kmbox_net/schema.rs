@@ -12,12 +12,58 @@ pub const HEADER_LEN: usize = 16;
 /// control points). `4*4 + 10*4 = 56`.
 pub const SOFT_MOUSE_LEN: usize = 4 * 4 + 4 * 10; // 16 + 40 = 56
 
+/// Wire size of `standard_mouse_report_t` — the struct the vendor SDK
+/// pushes back to a monitor subscriber's listening port. Layout (LE, no
+/// padding): `report_id u8, buttons u8, x i16, y i16, wheel i16`.
+///
+/// Source: `c++_demo/NetConfig/kmboxNet.h` `standard_mouse_report_t` and
+/// `c++_demo/NetConfig/kmboxNet.cpp` lines 1530-1531 of `ThreadListenProcess`
+/// (the buffer layout written by the box: `hw_mouse` then `hw_keyboard`).
+pub const MONITOR_MOUSE_REPORT_LEN: usize = 1 + 1 + 2 + 2 + 2; // 8
+
+/// Wire size of `standard_keyboard_report_t` — pushed immediately after
+/// `standard_mouse_report_t` in the same UDP datagram by the vendor SDK's
+/// `ThreadListenProcess` (lines 1530-1531). Layout: `report_id u8, mod u8,
+/// keys [u8; 10]`. The translator carries no keyboard state, so its
+/// monitor encoder always zero-fills this section — but it must still
+/// be present so the receiver's `memcpy(&hw_keyboard, &buff[8], 12)` lands
+/// on valid bytes.
+pub const MONITOR_KEYBOARD_REPORT_LEN: usize = 1 + 1 + 10; // 12
+
+/// Total wire size of one monitor-echo UDP datagram. Mouse report
+/// immediately followed by keyboard report; no header, no padding.
+pub const MONITOR_PACKET_LEN: usize = MONITOR_MOUSE_REPORT_LEN + MONITOR_KEYBOARD_REPORT_LEN; // 20
+
+/// Magic upper-half of the `cmd_monitor` header's `rand` field. The
+/// vendor SDK sets `tx.head.rand = port | (0xaa55 << 16)` when
+/// subscribing, where the low 16 bits carry the target UDP port and the
+/// upper 16 bits carry this magic. Source: `kmboxNet.cpp` line 1583.
+///
+/// Kept on the public surface so tests and any future strict-mode
+/// validator can assert against it; the runtime `MonitorRequest`
+/// decoder accepts whatever upper-half value comes in (carries it
+/// through as `mode_flags`) so a host app using a slightly different
+/// magic still works.
+#[allow(dead_code)]
+pub const MONITOR_RAND_MAGIC: u32 = 0xAA55;
+
 // ------------------------------------------------------------------
 // Command codes (from official SDK headers)
 //
 // These literal `u32` values come straight from `kmbox_net.h` in the
 // upstream vendor SDK (see <https://github.com/kvmaibox/kmboxnet>) and
 // must NOT be changed — host apps send them verbatim.
+//
+// Encrypted variants (`kmNet_enc_*`) do NOT have distinct opcodes:
+// `kmboxNet.cpp` sets `tx.head.cmd` to the same `cmd_*` value as the
+// plaintext call and only differs in calling `my_encrypt()` on the
+// body before sending. There is also no per-packet encryption flag in
+// the header (`tx.head.rand` is random in both paths). Result: we
+// cannot recognise an encrypted packet by opcode alone — encrypted
+// bodies will hit the regular mouse / keyboard arms and parse as
+// garbage. The translator does NOT implement encryption (we don't
+// have the `my_encrypt` scheme), so host apps MUST be configured to
+// disable encryption when talking to this translator.
 // ------------------------------------------------------------------
 
 /// Initial handshake. Host apps send this once on startup; we use it to
@@ -33,14 +79,29 @@ pub const CMD_MOUSE_RIGHT: u32 = 0x238D8212;
 pub const CMD_MOUSE_MIDDLE: u32 = 0x97A3AE8D;
 /// Mouse wheel delta. Body's `wheel` is the signed scroll delta.
 pub const CMD_MOUSE_WHEEL: u32 = 0xFFEEAD38;
+// NOTE: there is intentionally no `CMD_MOUSE_SIDE1` / `CMD_MOUSE_SIDE2` here.
+// The vendor SDK's `kmNet_mouse_side1` / `kmNet_mouse_side2`
+// (`c++_demo/NetConfig/kmboxNet.cpp` lines 364 and 415) do NOT use distinct
+// opcodes — they both set `tx.head.cmd = cmd_mouse_right` and RMW bits 0x08
+// or 0x10 into `softmouse.button` (the SDK's persistent global) before
+// sending. The translator therefore handles side buttons automatically by
+// trusting `payload.button` for every mouse opcode; no dedicated arm needed.
 /// Linearly-interpolated move from current position to `(x, y)` over
 /// `point[0]` milliseconds. Translator spawns a worker thread.
 pub const CMD_MOUSE_AUTOMOVE: u32 = 0xAEDE7346;
 /// Cubic-bezier interpolated move. `point[0]` is duration_ms;
 /// `point[1..=4]` are control-point coordinates `(x1, y1, x2, y2)`.
 pub const CMD_BAZER_MOVE: u32 = 0xA238455A;
-/// Full keyboard state report. Currently acknowledged but not decoded
-/// or forwarded — the body is dropped on the floor.
+/// Full keyboard state report. Acknowledged with a loud
+/// `NOT OPERATIONAL` warn line; the body is dropped on the floor (the
+/// translator carries no keyboard state and the Teensy proxy has no
+/// keyboard pass-through). Same opcode used by `kmNet.keydown`,
+/// `kmNet.keyup`, `kmNet.keypress`, and their `enc_*` variants
+/// (`kmboxNet.cpp` — `kmNet_enc_keydown` / `kmNet_enc_keyup` both set
+/// `tx.head.cmd = cmd_keyboard_all`).
+///
+/// Source: `c++_demo/NetConfig/kmboxNet.h` line 13 (verified via
+/// `https://raw.githubusercontent.com/kvmaibox/kmboxnet/main/c%2B%2B_demo/NetConfig/kmboxNet.h`).
 pub const CMD_KEYBOARD_ALL: u32 = 0x123C2C2F;
 /// Firmware reboot request. Ack-only on the translator side.
 pub const CMD_REBOOT: u32 = 0xAA8855AA;
@@ -120,6 +181,40 @@ pub struct SoftMouse {
     /// bezier control-point coordinates in `[1..=4]`. The remaining slots
     /// are reserved by the vendor SDK and ignored here.
     pub point: [i32; 10],
+}
+
+/// Decoded contents of a `cmd_monitor` UDP packet.
+///
+/// The vendor SDK encodes the host's request entirely inside
+/// [`Header::rand`]: the low 16 bits are the target UDP port the box
+/// should push echo packets to, and the upper 16 bits are the magic
+/// [`MONITOR_RAND_MAGIC`] (`0xAA55`). A `target_port == 0` means
+/// "unsubscribe" (the SDK clears its `monitor_port` global in that case).
+///
+/// Source: `c++_demo/NetConfig/kmboxNet.cpp` lines 1574-1591 (`kmNet_monitor`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonitorRequest {
+    /// UDP port on the host's IP that the box should send echo packets
+    /// to. Zero means "stop monitoring" (the SDK's `kmNet_monitor(0)`
+    /// idiom).
+    pub target_port: u16,
+    /// Upper 16 bits of `rand`. Always `0xAA55` in the vendor SDK; kept
+    /// as a `u16` here rather than asserted so a non-conforming client
+    /// is reported faithfully in the log line instead of silently
+    /// rewritten.
+    pub mode_flags: u16,
+}
+
+impl MonitorRequest {
+    /// Extract the monitor request from an already-parsed [`Header`].
+    /// `cmd_monitor` carries no body — every parameter rides in
+    /// `header.rand`. See [`MonitorRequest`] for the field layout.
+    pub fn from_header(header: &Header) -> Self {
+        Self {
+            target_port: (header.rand & 0xFFFF) as u16,
+            mode_flags: ((header.rand >> 16) & 0xFFFF) as u16,
+        }
+    }
 }
 
 /// Map a `cmd` code to its short snake_case label (e.g. `mouse_move`).
