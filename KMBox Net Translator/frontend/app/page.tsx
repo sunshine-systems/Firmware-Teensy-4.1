@@ -13,7 +13,7 @@ import StatusRail from "../components/StatusRail";
 import { useHealthDetail } from "../lib/hooks/useHealthDetail";
 
 export default function Home() {
-  // Bubble version up to the header so the wordmark shows "v0.6.0" not
+  // Bubble version up to the header so the wordmark shows "v0.6.2" not
   // a hardcoded number. Cheap — the hook is already mounted in the rail
   // too but the cost is one extra subscription, no extra polling.
   const detail = useHealthDetail();

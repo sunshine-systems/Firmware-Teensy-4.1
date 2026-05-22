@@ -1,6 +1,6 @@
 {
   "name": "kmbox-net-translator-electron",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "private": true,
   "description": "Electron shell for KMBox Net Translator (wraps Rust daemon + Next.js UI)",
   "author": "Sunshine Systems",
