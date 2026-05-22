@@ -16,6 +16,7 @@ const http = require('http');
 const { BrowserWindow } = require('electron');
 
 const httpPort = require('./http-port');
+const windowPrefs = require('./window-prefs');
 
 let logger = null;
 try {
@@ -111,9 +112,43 @@ async function resolveStartTarget({
  *   - opts.refreshTray()   (fn called on show/hide/close)
  */
 async function createWindow(opts) {
+  // Lazy-require `screen` because it is only available after the app
+  // `ready` event. createWindow() is called from the ready flow, so
+  // this is safe — but keeping it lazy avoids accidentally pulling
+  // `screen` at module-load time if this file is ever required earlier.
+  const { screen } = require('electron');
+
+  // Pick the display to spawn on: prefer the last one the user
+  // dragged the window to (persisted in window-prefs.json by id).
+  // If that display is gone (monitor unplugged, id reshuffled), fall
+  // back to the primary. This is the only place we read the pref.
+  let targetDisplay = screen.getPrimaryDisplay();
+  const savedPrefs = windowPrefs.load();
+  if (savedPrefs && typeof savedPrefs.displayId === 'number') {
+    const match = screen.getAllDisplays().find((d) => d.id === savedPrefs.displayId);
+    if (match) {
+      targetDisplay = match;
+    } else {
+      logLine('info', `prefs: saved displayId ${savedPrefs.displayId} not present, using primary`);
+    }
+  }
+  const workArea = targetDisplay.workArea;
+  // 24px breathing room top and bottom (total 48). workArea already
+  // excludes the Windows taskbar, so the bottom 24 is between the
+  // window and the taskbar, not the screen edge.
+  const winWidth = Math.floor(workArea.width * 0.38);
+  const winHeight = workArea.height - 48;
+  const winX = workArea.x + workArea.width - winWidth;
+  const winY = workArea.y + 24;
+
   const win = new BrowserWindow({
-    width: 1100,
-    height: 720,
+    width: winWidth,
+    height: winHeight,
+    x: winX,
+    y: winY,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     autoHideMenuBar: true,
     show: false,
     icon: opts.icon,
@@ -168,6 +203,39 @@ async function createWindow(opts) {
     logLine(level >= 3 ? 'error' : 'warn', `renderer-console[${tag}] ${sourceId}:${line} ${message}`);
   });
 
+  // Register ready-to-show BEFORE loadURL. If we register it after
+  // `await win.loadURL(...)` resolves, the event may have already
+  // fired (loadURL resolves on did-finish-load, which is typically
+  // after ready-to-show) and our handler will never run — leaving
+  // the window invisible on cold start. The tray "Show" still
+  // worked because toggleWindow() calls win.show()/win.focus()
+  // directly.
+  let shown = false;
+  const showAndFocus = (reason) => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    // Give the splash (if any) a chance to start its fadeout BEFORE
+    // the main window grabs focus, so the visual handoff looks
+    // intentional rather than a hard pop. The callback is optional;
+    // when absent (e.g. tray "Show") we behave exactly as before.
+    if (typeof opts.onReadyToShow === 'function') {
+      try {
+        opts.onReadyToShow(reason);
+      } catch (err) {
+        logLine('warn', `onReadyToShow threw: ${err && err.message}`);
+      }
+    }
+    win.show();
+    win.focus();
+    // Windows occasionally drops a freshly-launched portable .exe
+    // into the background. Nudge it to the foreground without
+    // pinning always-on-top.
+    win.moveTop();
+    opts.refreshTray();
+    logLine('info', `show: ${reason}`);
+  };
+  win.once('ready-to-show', () => showAndFocus('ready-to-show'));
+
   const target = opts.target;
   // target is always { kind: 'url' | 'data', value: string } now —
   // the legacy file:// `kind: 'file'` branch is gone because the
@@ -175,10 +243,11 @@ async function createWindow(opts) {
   await win.loadURL(target.value);
   logLine('info', `loaded ${target.kind}: ${target.value.slice(0, 80)}`);
 
-  win.once('ready-to-show', () => {
-    win.show();
-    opts.refreshTray();
-  });
+  // Belt-and-braces: if ready-to-show hasn't fired yet (rare race),
+  // showAndFocus will fire on the listener above; if it already
+  // fired and we somehow missed it, this guarantees the window
+  // appears.
+  showAndFocus('post-loadURL');
 
   // Only auto-open DevTools in an explicit dev environment AND when not
   // packaged. Packaged builds never auto-open — users can still hit
@@ -198,6 +267,33 @@ async function createWindow(opts) {
 
   win.on('show', opts.refreshTray);
   win.on('hide', opts.refreshTray);
+
+  // Persist the display the window currently lives on. We use the
+  // window's center point (not its top-left) so a window straddling
+  // two monitors is attributed to whichever one holds the majority.
+  // `moved` fires once after a drag ends on Windows — not during —
+  // which is exactly the cadence we want; no debounce needed.
+  function persistCurrentDisplay(reason) {
+    try {
+      const bounds = win.getBounds();
+      const center = {
+        x: bounds.x + Math.floor(bounds.width / 2),
+        y: bounds.y + Math.floor(bounds.height / 2),
+      };
+      const display = screen.getDisplayNearestPoint(center);
+      if (display && typeof display.id === 'number') {
+        windowPrefs.save({ displayId: display.id });
+        logLine('info', `prefs: saved displayId=${display.id} (${reason})`);
+      }
+    } catch (err) {
+      logLine('warn', `prefs: persist failed (${reason}): ${err && err.message}`);
+    }
+  }
+  win.on('moved', () => persistCurrentDisplay('moved'));
+  // Belt-and-braces: also save right before close-to-tray hides the
+  // window. This is a SEPARATE listener from the close-to-tray
+  // handler above; both run, neither prevents the other.
+  win.on('close', () => persistCurrentDisplay('close'));
 
   return win;
 }

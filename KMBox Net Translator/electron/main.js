@@ -14,6 +14,7 @@ const bugReport = require('./services/bug-report');
 const healthCheck = require('./services/health-check');
 const logger = require('./services/logger');
 const singleInstance = require('./services/single-instance');
+const splash = require('./services/splash');
 const trayService = require('./services/tray');
 const windowService = require('./services/window');
 
@@ -122,6 +123,12 @@ app.whenReady().then(async () => {
       `resourcesPath=${process.resourcesPath} userData=${app.getPath('userData')}`
   );
 
+  // Show the splash IMMEDIATELY — before spawning the daemon, before
+  // resolving the start target, before creating the main window. The
+  // splash is owned by services/splash.js; main.js only drives the
+  // status text and tears it down when the main window is ready.
+  splash.createSplash({ icon: APP_ICON });
+
   // In packaged mode the binary AND the bundled config.json both live
   // under process.resourcesPath, so spawn the daemon there explicitly
   // (its cwd determines where it looks for config.json). In dev, leaving
@@ -146,6 +153,7 @@ app.whenReady().then(async () => {
     ? FRONTEND_DIR_DEV
     : null;
 
+  splash.setStatus('starting daemon…');
   backend.spawnIfNeeded({
     packagedPath: BACKEND_BIN_PACKAGED,
     releasePath: BACKEND_BIN_RELEASE,
@@ -166,6 +174,7 @@ app.whenReady().then(async () => {
     },
   });
 
+  splash.setStatus('connecting to daemon…');
   const target = await windowService.resolveStartTarget({
     isPackaged: IS_PACKAGED,
     isDev: IS_DEV,
@@ -173,6 +182,7 @@ app.whenReady().then(async () => {
   });
   logger.info(`[main] resolved start target kind=${target.kind} value=${String(target.value).slice(0, 120)}`);
 
+  splash.setStatus('loading UI…');
   mainWindow = await windowService.createWindow({
     icon: APP_ICON,
     preload: PRELOAD,
@@ -181,6 +191,14 @@ app.whenReady().then(async () => {
     isPackaged: IS_PACKAGED,
     isQuitting: () => isQuitting,
     refreshTray: () => trayHandle && trayHandle.refresh(),
+    onReadyToShow: () => {
+      // Hand the screen over to the main window with a brief CSS
+      // fadeout on the splash. The 320ms timeout matches the
+      // fadeout keyframe duration in splash.html.
+      splash.setStatus('ready');
+      splash.beginClose();
+      setTimeout(() => splash.destroy(), 320);
+    },
   });
 });
 
