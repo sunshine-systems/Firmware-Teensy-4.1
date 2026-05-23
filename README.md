@@ -5,6 +5,15 @@ Teensy sits between a physical mouse and the host PC and presents a bit-for-bit
 clone of the mouse — same VID/PID, descriptors, polling rate (up to 8 kHz), and
 USB speed (Low / Full / High).
 
+## Requirements
+
+For official builds, this Teensy core is controlled by the **StreamCheats Core**
+application — used to test, debug, control, and flash firmware to the device.
+See: https://github.com/sunshine-systems/streamcheats-core
+
+If you are doing a DIY or unofficial build (fixing bugs, adding device support,
+or other modifications), continue with the guide below.
+
 ## Start here
 
 The actual project lives at:
@@ -83,19 +92,6 @@ select **Tools → Board → Teensy 4.1**, and upload.
 Repo files themselves (`.git/`, `CLAUDE.md`, `README.md`, `firmware/`,
 `deploy.bat`, `.gitattributes`, `.gitignore`, `teensy_core_backup.zip`) are
 never touched.
-
-## KMBox Net Translator (moved)
-
-The KMBox Net Translator that previously lived in this repo has moved
-to its own home: https://github.com/sunshine-systems/streamcheats-core
-
-It is a PC-side bridge that lets host applications which speak the
-**KMBox Net** UDP protocol drive this firmware (which speaks the compact
-9-byte Sunshine binary protocol over serial).
-
-```
-host app  --UDP (KMBox Net)-->  translator  --serial (Sunshine 9-byte)-->  Teensy  --USB HID-->  PC
-```
 
 ## Contact
 
