@@ -3,11 +3,19 @@ name: Release (bump firmware version)
 on:
   workflow_dispatch:
     inputs:
-      bump_type:
-        description: 'Which part of the version to bump'
-        required: true
-        default: 'minor'
+      release_type:
+        description: 'Release type (official cuts a tagged release, dev tags current main as v<current>-dev prerelease)'
         type: choice
+        required: true
+        default: official
+        options:
+          - official
+          - dev
+      bump_type:
+        description: 'Version bump (official only; ignored for dev)'
+        type: choice
+        required: true
+        default: minor
         options:
           - minor
           - major
@@ -58,36 +66,52 @@ jobs:
           echo "Current version: $current_version"
           echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
 
-      - name: Compute new version
+      - name: Compute new version and tag
         id: next
         shell: bash
         run: |
           set -euo pipefail
 
           current="${{ steps.current.outputs.current_version }}"
+          release_type="${{ github.event.inputs.release_type }}"
           bump="${{ github.event.inputs.bump_type }}"
 
           major="${current%.*}"
           minor="${current#*.}"
 
-          case "$bump" in
-            minor)
-              new_minor=$((minor + 1))
-              new_version="${major}.${new_minor}"
+          case "$release_type" in
+            official)
+              case "$bump" in
+                minor)
+                  new_minor=$((minor + 1))
+                  new_version="${major}.${new_minor}"
+                  ;;
+                major)
+                  new_major=$((major + 1))
+                  new_version="${new_major}.0"
+                  ;;
+                *)
+                  echo "ERROR: Unknown bump type '$bump'" >&2
+                  exit 1
+                  ;;
+              esac
+              new_tag="v${new_version}"
               ;;
-            major)
-              new_major=$((major + 1))
-              new_version="${new_major}.0"
+            dev)
+              new_version="$current"
+              new_tag="v${current}-dev"
               ;;
             *)
-              echo "ERROR: Unknown bump type '$bump'" >&2
+              echo "ERROR: Unknown release type '$release_type'" >&2
               exit 1
               ;;
           esac
 
+          echo "Release type: $release_type"
           echo "New version: $new_version"
+          echo "New tag:     $new_tag"
           echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
-          echo "new_tag=v$new_version" >> "$GITHUB_OUTPUT"
+          echo "new_tag=$new_tag" >> "$GITHUB_OUTPUT"
 
       - name: Ensure tag does not already exist
         shell: bash
@@ -111,30 +135,6 @@ jobs:
 
           echo "Tag $new_tag is available."
 
-      - name: Patch Config.h
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          current="${{ steps.current.outputs.current_version }}"
-          new_version="${{ steps.next.outputs.new_version }}"
-
-          # Escape dots in the old value for the sed regex
-          escaped_current=$(printf '%s' "$current" | sed -e 's/[.]/\\./g')
-
-          # Anchored replace: '#define FIRMWARE_VERSION <old>' -> '#define FIRMWARE_VERSION <new>'
-          sed -i -E "s|^(#define[[:space:]]+FIRMWARE_VERSION[[:space:]]+)${escaped_current}([[:space:]]*)$|\1${new_version}\2|" "$CONFIG_FILE"
-
-          if git diff --quiet -- "$CONFIG_FILE"; then
-            echo "ERROR: sed produced no change in $CONFIG_FILE — parse/replace mismatch." >&2
-            echo "----- Current matching lines: -----" >&2
-            grep -nE '^#define[[:space:]]+FIRMWARE_VERSION' "$CONFIG_FILE" >&2 || true
-            exit 1
-          fi
-
-          echo "----- Diff for $CONFIG_FILE: -----"
-          git --no-pager diff -- "$CONFIG_FILE"
-
       - name: Configure git user
         shell: bash
         run: |
@@ -142,22 +142,57 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit, tag, and push
+      - name: Patch, commit, tag, and push
         shell: bash
         run: |
           set -euo pipefail
 
+          release_type="${{ github.event.inputs.release_type }}"
+          current="${{ steps.current.outputs.current_version }}"
           new_version="${{ steps.next.outputs.new_version }}"
           new_tag="${{ steps.next.outputs.new_tag }}"
           branch="${GITHUB_REF#refs/heads/}"
 
-          git add -- "$CONFIG_FILE"
-          git commit -m "Version: bump to ${new_version}"
+          if [ "$release_type" = "official" ]; then
+            # Escape dots in the old value for the sed regex
+            escaped_current=$(printf '%s' "$current" | sed -e 's/[.]/\\./g')
 
-          git tag -a "$new_tag" -m "Release ${new_tag}"
+            # Anchored replace: '#define FIRMWARE_VERSION <old>' -> '#define FIRMWARE_VERSION <new>'
+            sed -i -E "s|^(#define[[:space:]]+FIRMWARE_VERSION[[:space:]]+)${escaped_current}([[:space:]]*)$|\1${new_version}\2|" "$CONFIG_FILE"
 
-          git push origin "HEAD:${branch}"
-          git push origin "refs/tags/${new_tag}"
+            if git diff --quiet -- "$CONFIG_FILE"; then
+              echo "ERROR: sed produced no change in $CONFIG_FILE — parse/replace mismatch." >&2
+              echo "----- Current matching lines: -----" >&2
+              grep -nE '^#define[[:space:]]+FIRMWARE_VERSION' "$CONFIG_FILE" >&2 || true
+              exit 1
+            fi
+
+            echo "----- Diff for $CONFIG_FILE: -----"
+            git --no-pager diff -- "$CONFIG_FILE"
+
+            git add -- "$CONFIG_FILE"
+            git commit -m "Version: bump to ${new_version}"
+            git tag -a "$new_tag" -m "Release ${new_tag}"
+            git push origin "HEAD:${branch}"
+            git push origin "refs/tags/${new_tag}"
+          else
+            # dev: no Config.h edit, no source commit; just tag current main.
+            git tag -a "$new_tag" -m "Pre-release ${new_tag}"
+            git push origin "refs/tags/${new_tag}"
+          fi
+
+      - name: Dispatch build workflow at new tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.next.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          # GITHUB_TOKEN pushes don't fire other workflows, so explicitly
+          # dispatch build-teensy.yml at the new tag. The dispatched run sees
+          # github.ref=refs/tags/<TAG>, so the build's rename + release-upload
+          # logic behaves identically to a real tag push.
+          echo "Dispatching build-teensy.yml at ref ${TAG}"
+          gh workflow run build-teensy.yml --ref "${TAG}" --repo "${GITHUB_REPOSITORY}"
 
       - name: Workflow summary
         if: always()
@@ -165,19 +200,31 @@ jobs:
         run: |
           set -euo pipefail
 
+          release_type="${{ github.event.inputs.release_type }}"
           old="${{ steps.current.outputs.current_version }}"
           new="${{ steps.next.outputs.new_version }}"
           tag="${{ steps.next.outputs.new_tag }}"
 
+          if [ "$release_type" = "dev" ]; then
+            kind="prerelease (dev)"
+            hex_note="\`streamcheats_teensy-4.1_rel-${new:-unknown}-dev.hex\` attached to a GitHub **Pre-release**"
+            bump_cell="n/a (dev)"
+          else
+            kind="release (official)"
+            hex_note="\`streamcheats_teensy-4.1_rel-${new:-unknown}.hex\` attached to a GitHub Release"
+            bump_cell="\`${{ github.event.inputs.bump_type }}\`"
+          fi
+
           {
-            echo "## Firmware release bump"
+            echo "## Firmware release"
             echo ""
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Bump type | \`${{ github.event.inputs.bump_type }}\` |"
+            echo "| Release type | \`${release_type}\` ($kind) |"
+            echo "| Bump type | ${bump_cell} |"
             echo "| Old version | \`${old:-unknown}\` |"
             echo "| New version | \`${new:-unknown}\` |"
             echo "| Tag created | \`${tag:-unknown}\` |"
             echo ""
-            echo "The \`Build SunshineUSBProxy Firmware\` workflow is triggered by tags matching \`v*\`, so it will pick up \`${tag:-unknown}\` and publish the hex to a GitHub Release."
+            echo "The \`Build SunshineUSBProxy Firmware\` workflow is triggered by tags matching \`v*\`, so it will pick up \`${tag:-unknown}\` and produce: ${hex_note}."
           } >> "$GITHUB_STEP_SUMMARY"

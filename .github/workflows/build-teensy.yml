@@ -96,11 +96,13 @@ jobs:
           fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG_VER="${GITHUB_REF_NAME#v}"
-            if [[ "$TAG_VER" != "$VERSION" ]]; then
-              echo "Tag $GITHUB_REF_NAME does not match FIRMWARE_VERSION $VERSION — refusing to release"
+            # Tag may be vX.Y (official) or vX.Y-dev (prerelease). Strip -dev for the base compare.
+            TAG_BASE="${TAG_VER%-dev}"
+            if [[ "$TAG_BASE" != "$VERSION" ]]; then
+              echo "Tag $GITHUB_REF_NAME base ($TAG_BASE) does not match FIRMWARE_VERSION $VERSION — refusing to release"
               exit 1
             fi
-            OUT="streamcheats_teensy-4.1_rel-${VERSION}.hex"
+            OUT="streamcheats_teensy-4.1_rel-${TAG_VER}.hex"
           else
             SHORT_SHA=$(git rev-parse --short HEAD)
             OUT="streamcheats_teensy-4.1_rel-${VERSION}-${SHORT_SHA}.hex"
@@ -123,3 +125,4 @@ jobs:
         with:
           files: ${{ steps.rename.outputs.hex_path }}
           fail_on_unmatched_files: true
+          prerelease: ${{ endsWith(github.ref_name, '-dev') }}
