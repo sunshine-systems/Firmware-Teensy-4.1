@@ -96,8 +96,15 @@ jobs:
           fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG_VER="${GITHUB_REF_NAME#v}"
-            # Tag may be vX.Y (official) or vX.Y-dev (prerelease). Strip -dev for the base compare.
-            TAG_BASE="${TAG_VER%-dev}"
+            # Accepted tag formats:
+            #   official:  vX.Y                 (e.g. v5.18)
+            #   dev:       vX.Y-dev-<shorthash> (e.g. v5.18-dev-e5f9b9b)
+            if [[ "$TAG_VER" =~ ^([0-9]+\.[0-9]+)(-dev-[0-9a-f]+)?$ ]]; then
+              TAG_BASE="${BASH_REMATCH[1]}"
+            else
+              echo "Unsupported tag format: $GITHUB_REF_NAME (expected vX.Y or vX.Y-dev-<sha>)"
+              exit 1
+            fi
             if [[ "$TAG_BASE" != "$VERSION" ]]; then
               echo "Tag $GITHUB_REF_NAME base ($TAG_BASE) does not match FIRMWARE_VERSION $VERSION — refusing to release"
               exit 1
@@ -125,4 +132,4 @@ jobs:
         with:
           files: ${{ steps.rename.outputs.hex_path }}
           fail_on_unmatched_files: true
-          prerelease: ${{ endsWith(github.ref_name, '-dev') }}
+          prerelease: ${{ contains(github.ref_name, '-dev') }}

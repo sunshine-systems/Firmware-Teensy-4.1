@@ -100,7 +100,8 @@ jobs:
               ;;
             dev)
               new_version="$current"
-              new_tag="v${current}-dev"
+              SHORT_SHA=$(git rev-parse --short HEAD)
+              new_tag="v${current}-dev-${SHORT_SHA}"
               ;;
             *)
               echo "ERROR: Unknown release type '$release_type'" >&2
