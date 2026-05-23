@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 /* Define the version */
-#define FIRMWARE_VERSION 5.18
+#define FIRMWARE_VERSION 5.19
 
 /* Settings for logging via Serial4 */
 #define DEBUG_MODE false // Set to 'false' when you don't want to print debug info.
