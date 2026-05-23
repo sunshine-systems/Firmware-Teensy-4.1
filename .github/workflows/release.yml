@@ -1,0 +1,183 @@
+name: Release (bump firmware version)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Which part of the version to bump'
+        required: true
+        default: 'minor'
+        type: choice
+        options:
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+env:
+  CONFIG_FILE: firmware/libraries/USBHostProxy/examples/SunshineUSBProxy/Config.h
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Parse current FIRMWARE_VERSION
+        id: current
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "ERROR: Config file not found at $CONFIG_FILE" >&2
+            exit 1
+          fi
+
+          # Extract the value that follows '#define FIRMWARE_VERSION '
+          current_version=$(grep -E '^#define[[:space:]]+FIRMWARE_VERSION[[:space:]]+' "$CONFIG_FILE" \
+            | head -n1 \
+            | sed -E 's/^#define[[:space:]]+FIRMWARE_VERSION[[:space:]]+([0-9]+\.[0-9]+).*$/\1/')
+
+          if [ -z "$current_version" ]; then
+            echo "ERROR: Could not parse FIRMWARE_VERSION from $CONFIG_FILE" >&2
+            exit 1
+          fi
+
+          if ! [[ "$current_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Parsed version '$current_version' does not match MAJOR.MINOR format" >&2
+            exit 1
+          fi
+
+          echo "Current version: $current_version"
+          echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
+
+      - name: Compute new version
+        id: next
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current="${{ steps.current.outputs.current_version }}"
+          bump="${{ github.event.inputs.bump_type }}"
+
+          major="${current%.*}"
+          minor="${current#*.}"
+
+          case "$bump" in
+            minor)
+              new_minor=$((minor + 1))
+              new_version="${major}.${new_minor}"
+              ;;
+            major)
+              new_major=$((major + 1))
+              new_version="${new_major}.0"
+              ;;
+            *)
+              echo "ERROR: Unknown bump type '$bump'" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "New version: $new_version"
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "new_tag=v$new_version" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag does not already exist
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          new_tag="${{ steps.next.outputs.new_tag }}"
+
+          # Fetch tags from remote so we have an up-to-date view
+          git fetch --tags --force
+
+          if git rev-parse -q --verify "refs/tags/$new_tag" >/dev/null; then
+            echo "ERROR: Tag $new_tag already exists locally" >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$new_tag" >/dev/null 2>&1; then
+            echo "ERROR: Tag $new_tag already exists on remote" >&2
+            exit 1
+          fi
+
+          echo "Tag $new_tag is available."
+
+      - name: Patch Config.h
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current="${{ steps.current.outputs.current_version }}"
+          new_version="${{ steps.next.outputs.new_version }}"
+
+          # Escape dots in the old value for the sed regex
+          escaped_current=$(printf '%s' "$current" | sed -e 's/[.]/\\./g')
+
+          # Anchored replace: '#define FIRMWARE_VERSION <old>' -> '#define FIRMWARE_VERSION <new>'
+          sed -i -E "s|^(#define[[:space:]]+FIRMWARE_VERSION[[:space:]]+)${escaped_current}([[:space:]]*)$|\1${new_version}\2|" "$CONFIG_FILE"
+
+          if git diff --quiet -- "$CONFIG_FILE"; then
+            echo "ERROR: sed produced no change in $CONFIG_FILE — parse/replace mismatch." >&2
+            echo "----- Current matching lines: -----" >&2
+            grep -nE '^#define[[:space:]]+FIRMWARE_VERSION' "$CONFIG_FILE" >&2 || true
+            exit 1
+          fi
+
+          echo "----- Diff for $CONFIG_FILE: -----"
+          git --no-pager diff -- "$CONFIG_FILE"
+
+      - name: Configure git user
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit, tag, and push
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          new_version="${{ steps.next.outputs.new_version }}"
+          new_tag="${{ steps.next.outputs.new_tag }}"
+          branch="${GITHUB_REF#refs/heads/}"
+
+          git add -- "$CONFIG_FILE"
+          git commit -m "Version: bump to ${new_version}"
+
+          git tag -a "$new_tag" -m "Release ${new_tag}"
+
+          git push origin "HEAD:${branch}"
+          git push origin "refs/tags/${new_tag}"
+
+      - name: Workflow summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          old="${{ steps.current.outputs.current_version }}"
+          new="${{ steps.next.outputs.new_version }}"
+          tag="${{ steps.next.outputs.new_tag }}"
+
+          {
+            echo "## Firmware release bump"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Bump type | \`${{ github.event.inputs.bump_type }}\` |"
+            echo "| Old version | \`${old:-unknown}\` |"
+            echo "| New version | \`${new:-unknown}\` |"
+            echo "| Tag created | \`${tag:-unknown}\` |"
+            echo ""
+            echo "The \`Build SunshineUSBProxy Firmware\` workflow is triggered by tags matching \`v*\`, so it will pick up \`${tag:-unknown}\` and publish the hex to a GitHub Release."
+          } >> "$GITHUB_STEP_SUMMARY"

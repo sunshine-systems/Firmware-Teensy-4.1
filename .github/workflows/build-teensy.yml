@@ -1,0 +1,125 @@
+name: Build SunshineUSBProxy Firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      teensy_version:
+        description: 'Teensy core version (e.g. 1.59.0, 1.60.0)'
+        required: false
+        default: '1.59.0'
+
+env:
+  TEENSY_VERSION: ${{ github.event.inputs.teensy_version || '1.59.0' }}
+  FQBN: teensy:avr:teensy41
+  SKETCH: firmware/libraries/USBHostProxy/examples/SunshineUSBProxy/SunshineUSBProxy.ino
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache arduino-cli + Teensy core
+        id: cache-arduino
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.arduino15
+            ~/bin/arduino-cli
+          key: arduino-teensy-${{ env.TEENSY_VERSION }}-${{ runner.os }}-${{ hashFiles('firmware/libraries/**/library.properties') }}
+          restore-keys: |
+            arduino-teensy-${{ env.TEENSY_VERSION }}-${{ runner.os }}-
+
+      - name: Install arduino-cli
+        if: steps.cache-arduino.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/bin
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=~/bin sh
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Ensure arduino-cli on PATH (cache hit)
+        if: steps.cache-arduino.outputs.cache-hit == 'true'
+        run: echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Configure arduino-cli + install Teensy core
+        if: steps.cache-arduino.outputs.cache-hit != 'true'
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config set board_manager.additional_urls https://www.pjrc.com/teensy/package_teensy_index.json
+          arduino-cli core update-index
+          arduino-cli core install teensy:avr@${TEENSY_VERSION}
+
+      - name: Overlay firmware/ onto installed Teensy core
+        run: |
+          CORE_DIR="$HOME/.arduino15/packages/teensy/hardware/avr/${TEENSY_VERSION}"
+          if [ ! -d "$CORE_DIR" ]; then
+            echo "Expected core dir not found: $CORE_DIR"
+            ls -la "$HOME/.arduino15/packages/teensy/hardware/avr/" || true
+            exit 1
+          fi
+          rsync -a --delete-after firmware/ "$CORE_DIR/"
+          # arduino-cli fingerprints the core via installed.json at install time; removing
+          # it after the overlay makes arduino-cli treat the core as manually-installed
+          # and skip the integrity check that would otherwise fail because rsync mutated
+          # cores/teensy4/startup.c (and other files).
+          rm -f "$CORE_DIR/installed.json"
+          echo "Overlay applied. Verifying SunBoxStartup hook is present:"
+          grep -n SunBoxStartup_begin "$CORE_DIR/cores/teensy4/startup.c"
+
+      - name: Compile sketch
+        run: |
+          mkdir -p build
+          arduino-cli compile \
+            --fqbn "$FQBN" \
+            --output-dir build \
+            --verbose \
+            "$SKETCH"
+          ls -la build/
+
+      - name: Rename hex (streamcheats scheme)
+        id: rename
+        run: |
+          set -euo pipefail
+          CONFIG=firmware/libraries/USBHostProxy/examples/SunshineUSBProxy/Config.h
+          VERSION=$(grep -E '^#define[[:space:]]+FIRMWARE_VERSION[[:space:]]+' "$CONFIG" | awk '{print $3}')
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            echo "Could not parse FIRMWARE_VERSION from $CONFIG (got: '$VERSION')"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VER="${GITHUB_REF_NAME#v}"
+            if [[ "$TAG_VER" != "$VERSION" ]]; then
+              echo "Tag $GITHUB_REF_NAME does not match FIRMWARE_VERSION $VERSION — refusing to release"
+              exit 1
+            fi
+            OUT="streamcheats_teensy-4.1_rel-${VERSION}.hex"
+          else
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            OUT="streamcheats_teensy-4.1_rel-${VERSION}-${SHORT_SHA}.hex"
+          fi
+          HEX_SRC=$(ls build/*.hex | head -n1)
+          cp "$HEX_SRC" "build/${OUT}"
+          echo "hex_path=build/${OUT}" >> "$GITHUB_OUTPUT"
+          echo "hex_name=${OUT}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.rename.outputs.hex_name }}
+          path: ${{ steps.rename.outputs.hex_path }}
+          if-no-files-found: error
+
+      - name: Attach .hex to GitHub Release (tag pushes)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{ steps.rename.outputs.hex_path }}
+          fail_on_unmatched_files: true
