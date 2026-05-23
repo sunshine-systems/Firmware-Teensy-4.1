@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 env:
   CONFIG_FILE: firmware/libraries/USBHostProxy/examples/SunshineUSBProxy/Config.h
